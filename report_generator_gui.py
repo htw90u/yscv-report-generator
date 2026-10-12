@@ -349,10 +349,14 @@ class ReportGeneratorGUI:
             # 文字框/清單自己有捲動，不要連帶捲動分頁
             if isinstance(event.widget, (tk.Text, tk.Listbox)):
                 return
-            canvas.yview_scroll(int(-event.delta / 120), "units")
+            # 只處理滑鼠位於本分頁內的事件（用 bind_all，避免 Enter/Leave 在子元件間誤觸發）
+            w = event.widget
+            while w is not None and w is not frame:
+                w = getattr(w, 'master', None)
+            if w is frame and frame.winfo_ismapped():
+                canvas.yview_scroll(int(-event.delta / 120), "units")
 
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", on_wheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind_all("<MouseWheel>", on_wheel, add="+")
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")

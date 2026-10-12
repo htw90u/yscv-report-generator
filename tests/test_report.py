@@ -98,6 +98,60 @@ class BuildReportTest(unittest.TestCase):
             self.assertTrue(any('六、登山遊客反應意見' in w for w in warns))
 
 
+class PrepareImageTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def make(self, name, size, exif_orientation=None, mode='RGB'):
+        path = os.path.join(self.tmp.name, name)
+        im = Image.effect_noise(size, 80).convert(mode)  # 雜訊圖：不易壓縮，能反映檔案大小差異
+        if exif_orientation:
+            ex = im.getexif()
+            ex[0x0112] = exif_orientation
+            im.save(path, exif=ex)
+        else:
+            im.save(path)
+        return path
+
+    def test_small_image_returned_untouched(self):
+        p = self.make('s.jpg', (800, 600))
+        self.assertEqual(g.prepare_image(p), p)
+
+    def test_large_image_downscaled_keeps_aspect(self):
+        p = self.make('l.jpg', (4000, 3000))
+        out = g.prepare_image(p)
+        with Image.open(out) as im:
+            self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
+            self.assertEqual(im.height, round(3000 * g.MAX_IMAGE_WIDTH_PX / 4000))
+        out.seek(0, 2)
+        self.assertLess(out.tell(), os.path.getsize(p))
+
+    def test_large_rotated_image_is_rotated_then_scaled(self):
+        p = self.make('r.jpg', (4000, 3000), exif_orientation=6)  # 轉正後 3000x4000（直式）
+        with Image.open(g.prepare_image(p)) as im:
+            self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
+            self.assertGreater(im.height, im.width)
+
+    def test_large_png_with_alpha_stays_png(self):
+        p = os.path.join(self.tmp.name, 'a.png')
+        Image.new('RGBA', (3000, 1000), (0, 255, 0, 128)).save(p)
+        with Image.open(g.prepare_image(p)) as im:
+            self.assertEqual(im.format, 'PNG')
+            self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
+
+    def test_docx_size_much_smaller_for_large_photos(self):
+        p = self.make('big.jpg', (4000, 3000))
+        data = {k: '' for k in g.FIELD_NAMES}
+        data.update(year='1', month='1', day='1', start_year='1', start_month='1', start_day='1',
+                    end_year='1', end_month='1', end_day='1', personnel='', location='')
+        photos = {c: [] for c in g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2}
+        photos['其他'] = [p, p]
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, photos, {}, out)
+        self.assertLess(os.path.getsize(out), os.path.getsize(p))
+
+
 class BulletTest(unittest.TestCase):
     def test_bullets(self):
         self.assertEqual(g.add_bullet_points(''), '')

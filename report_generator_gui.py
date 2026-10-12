@@ -32,6 +32,9 @@ logging.basicConfig(
     ]
 )
 
+MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
+JPEG_QUALITY = 85
+
 PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況', '環境清理及遊客宣導情形']
 PHOTO_CATEGORIES_2 = ['遊客違法情形', '其他']
 
@@ -102,17 +105,26 @@ def set_font_kai(run):
 
 
 def prepare_image(path):
-    """回傳可供 add_picture 使用的來源；有 EXIF 旋轉時先轉正。"""
+    """回傳可供 add_picture 使用的來源。
+
+    有 EXIF 旋轉時先轉正；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
+    不需要處理時直接回傳原檔路徑（不重新壓縮）。
+    """
     with Image.open(path) as img:
-        orientation = img.getexif().get(0x0112, 1)
-        if orientation in (1, 0):
+        needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1)
+        if needs_rotate:
+            img = ImageOps.exif_transpose(img)
+        needs_resize = img.width > MAX_IMAGE_WIDTH_PX
+        if not needs_rotate and not needs_resize:
             return path
-        img = ImageOps.exif_transpose(img)
+        if needs_resize:
+            new_height = max(1, round(img.height * MAX_IMAGE_WIDTH_PX / img.width))
+            img = img.resize((MAX_IMAGE_WIDTH_PX, new_height), Image.LANCZOS)
         buf = io.BytesIO()
         if img.mode in ('RGBA', 'LA', 'P'):
-            img.convert('RGBA').save(buf, 'PNG')
+            img.convert('RGBA').save(buf, 'PNG', optimize=True)
         else:
-            img.convert('RGB').save(buf, 'JPEG', quality=92)
+            img.convert('RGB').save(buf, 'JPEG', quality=JPEG_QUALITY, optimize=True)
         buf.seek(0)
         return buf
 

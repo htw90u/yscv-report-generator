@@ -8,6 +8,7 @@
 import io
 import logging
 import os
+import queue
 import sys
 import threading
 import tkinter as tk
@@ -180,8 +181,11 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
         if '照片' in _all_text(table):
             table._element.getparent().remove(table._element)
 
-    doc.add_paragraph()
-    if '九、服勤照片' not in _all_text(main_table):
+    # 模板內可能已有「九、服勤照片」標題（表格內或內文段落），有的話不重複新增
+    has_heading = ('九、服勤照片' in _all_text(main_table)
+                   or any('九、服勤照片' in p.text for p in doc.paragraphs))
+    if not has_heading:
+        doc.add_paragraph()
         heading = doc.add_paragraph('九、服勤照片')
         heading_run = heading.runs[0]
         heading_run.font.bold = True
@@ -264,7 +268,9 @@ class ReportGeneratorGUI:
         self.listboxes = {}
         self.text_fields = {}
 
+        self._ui_queue = queue.Queue()
         self.create_widgets()
+        self._drain_ui_queue()
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -596,11 +602,16 @@ class ReportGeneratorGUI:
                          args=(data, photo_files, captions, output_path), daemon=True).start()
 
     def _post(self, func):
-        """從背景執行緒安全地排程 GUI 更新（視窗已關閉時忽略）。"""
+        """背景執行緒把 GUI 更新交給主執行緒執行（tkinter 不是 thread-safe）。"""
+        self._ui_queue.put(func)
+
+    def _drain_ui_queue(self):
         try:
-            self.root.after(0, func)
-        except (RuntimeError, tk.TclError):
+            while True:
+                self._ui_queue.get_nowait()()
+        except queue.Empty:
             pass
+        self.root.after(100, self._drain_ui_queue)
 
     def _generate_report_worker(self, data, photo_files, captions, output_path):
         try:

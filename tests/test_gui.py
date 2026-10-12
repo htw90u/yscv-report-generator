@@ -86,6 +86,77 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(text.count('看到山羌'), 1)
         self.assertNotIn('• •', text)
 
+    def _add_photo(self, name='d.jpg', caption='說明X'):
+        p = os.path.join(self.tmp.name, name)
+        Image.new('RGB', (30, 20)).save(p)
+        cat = g.PHOTO_CATEGORIES_2[0]
+        self.app.photo_files[cat].append(p)
+        self.app.photo_captions[cat][p] = caption
+        self.app.listboxes[cat].insert(tk.END, self.app._photo_label(cat, p))
+        return cat, p
+
+    def _save_draft_to(self, path):
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: path):
+            self.app.save_draft()
+
+    def _load_draft_from(self, path, confirm=True):
+        with mock.patch.object(filedialog, 'askopenfilename', lambda **k: path), \
+                mock.patch.object(messagebox, 'askyesno', lambda *a, **k: confirm):
+            self.app.load_draft()
+
+    def test_draft_roundtrip(self):
+        self.fill_dates()
+        self.app.personnel.insert(0, '王小明')
+        self.app.text_fields['nature'].insert('1.0', '看到山羌\n第二行')
+        cat, p = self._add_photo()
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.assertTrue(os.path.exists(draft))
+
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
+            self.app.clear_all()
+        self.assertEqual(self.app.personnel.get(), '')
+        self._load_draft_from(draft)
+
+        self.assertEqual(self.app.personnel.get(), '王小明')
+        self.assertEqual(self.app.year.get(), '115')
+        self.assertEqual(self.app.text_fields['nature'].get('1.0', tk.END).strip(), '看到山羌\n第二行')
+        self.assertEqual(self.app.photo_files[cat], [p])
+        self.assertEqual(self.app.photo_captions[cat][p], '說明X')
+        self.assertIn('說明X', self.app.listboxes[cat].get(0))
+        self.assertEqual(self.app.template_path, TEMPLATE)
+
+    def test_draft_load_missing_photo_warns(self):
+        cat, p = self._add_photo()
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        os.remove(p)
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.photo_files[cat], [])
+        self.assertEqual(self.app.listboxes[cat].size(), 0)
+        self.assertTrue(any(k == 'info' and p in m for k, m in self.shown))
+
+    def test_draft_invalid_file_rejected_and_data_kept(self):
+        self.app.personnel.insert(0, '保留我')
+        bad = os.path.join(self.tmp.name, 'bad.json')
+        with open(bad, 'w', encoding='utf-8') as f:
+            f.write('{ not json')
+        self._load_draft_from(bad)
+        self.assertEqual(self.shown[-1][0], 'err')
+        wrong = os.path.join(self.tmp.name, 'wrong.json')
+        with open(wrong, 'w', encoding='utf-8') as f:
+            f.write('{"version": 99}')
+        self._load_draft_from(wrong)
+        self.assertEqual(self.shown[-1][0], 'err')
+        self.assertEqual(self.app.personnel.get(), '保留我')
+
+    def test_draft_load_declined_keeps_current(self):
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.app.personnel.insert(0, '現有內容')
+        self._load_draft_from(draft, confirm=False)
+        self.assertEqual(self.app.personnel.get(), '現有內容')
+
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')
         self.root.update()

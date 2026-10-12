@@ -6,6 +6,7 @@
 """
 
 import io
+import json
 import logging
 import os
 import queue
@@ -31,6 +32,12 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+DRAFT_VERSION = 1
+# 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
+ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
+                'start_year', 'start_month', 'start_day',
+                'end_year', 'end_month', 'end_day', 'location']
 
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
@@ -336,6 +343,8 @@ class ReportGeneratorGUI:
 
         self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report)
         self.generate_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="清除", command=self.clear_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="離開", command=self.root.destroy).pack(side=tk.LEFT, padx=5)
 
@@ -538,14 +547,9 @@ class ReportGeneratorGUI:
         listbox.delete(0, tk.END)
         self.status_label.config(text=f"已清除 {category} 的所有照片")
 
-    def clear_all(self):
-        if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):
-            return
-
-        for entry in (self.year, self.month, self.day, self.personnel,
-                      self.start_year, self.start_month, self.start_day,
-                      self.end_year, self.end_month, self.end_day, self.location):
-            entry.delete(0, tk.END)
+    def _clear_widgets(self):
+        for name in ENTRY_FIELDS:
+            getattr(self, name).delete(0, tk.END)
         for text_widget in self.text_fields.values():
             text_widget.delete('1.0', tk.END)
         for category, listbox in self.listboxes.items():
@@ -553,7 +557,96 @@ class ReportGeneratorGUI:
             self.photo_captions[category].clear()
             listbox.delete(0, tk.END)
 
+    def clear_all(self):
+        if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):
+            return
+        self._clear_widgets()
         self.status_label.config(text="已清除所有資料")
+
+    # ---- 草稿存檔
+    def build_draft(self):
+        """把目前畫面上的內容（原始輸入，不含 bullet 處理）整理成可存成 JSON 的 dict。"""
+        return {
+            'version': DRAFT_VERSION,
+            'saved_at': datetime.now().isoformat(timespec='seconds'),
+            'template_path': self.template_path,
+            'fields': {name: getattr(self, name).get() for name in ENTRY_FIELDS},
+            'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
+            'photos': {c: list(p) for c, p in self.photo_files.items()},
+            'captions': {c: dict(v) for c, v in self.photo_captions.items()},
+        }
+
+    def apply_draft(self, draft):
+        """把草稿內容還原到畫面，回傳警告訊息清單（例如找不到的照片）。"""
+        if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
+            raise ValueError("不是有效的草稿檔，或草稿版本不相容")
+        warnings = []
+        self._clear_widgets()
+
+        for name in ENTRY_FIELDS:
+            getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
+        for key, widget in self.text_fields.items():
+            widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
+
+        template = draft.get('template_path')
+        if template and os.path.exists(template):
+            self.template_path = template
+            self.template_label.config(text=os.path.basename(template), foreground="green")
+        elif template:
+            warnings.append(f"找不到草稿記錄的模板：{template}，請重新選擇模板")
+
+        for category, paths in draft.get('photos', {}).items():
+            if category not in self.photo_files:
+                continue
+            captions = draft.get('captions', {}).get(category, {})
+            for path in paths:
+                if not os.path.exists(path):
+                    warnings.append(f"找不到照片，已略過：{path}")
+                    continue
+                self.photo_files[category].append(path)
+                if captions.get(path):
+                    self.photo_captions[category][path] = captions[path]
+                self.listboxes[category].insert(tk.END, self._photo_label(category, path))
+        return warnings
+
+    def save_draft(self):
+        path = filedialog.asksaveasfilename(
+            title="儲存草稿",
+            defaultextension=".json",
+            initialdir=os.path.dirname(self.template_path) if self.template_path else None,
+            initialfile=f"巡查回報單草稿_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+            filetypes=[("草稿檔", "*.json")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.build_draft(), f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            messagebox.showerror("錯誤", f"草稿儲存失敗：{e}")
+            return
+        logging.info(f"儲存草稿: {path}")
+        self.status_label.config(text=f"已儲存草稿: {os.path.basename(path)}")
+
+    def load_draft(self):
+        path = filedialog.askopenfilename(title="載入草稿", filetypes=[("草稿檔", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                draft = json.load(f)
+            if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
+                raise ValueError("不是有效的草稿檔，或草稿版本不相容")
+        except (OSError, ValueError) as e:  # JSONDecodeError 是 ValueError 的子類別
+            messagebox.showerror("錯誤", f"無法載入草稿：{e}")
+            return
+        if not messagebox.askyesno("確認", "載入草稿會覆蓋目前畫面上的內容，確定嗎？"):
+            return
+        warnings = self.apply_draft(draft)
+        logging.info(f"載入草稿: {path}")
+        self.status_label.config(text=f"已載入草稿: {os.path.basename(path)}")
+        if warnings:
+            messagebox.showinfo("草稿已載入", "⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings))
 
     def collect_data(self):
         """在主執行緒讀取所有欄位。驗證失敗時回傳 (None, 錯誤訊息)。"""

@@ -34,6 +34,8 @@ logging.basicConfig(
 )
 
 DRAFT_VERSION = 1
+DEFAULT_AUTOSAVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'report_generator_autosave.json')
+AUTOSAVE_INTERVAL_MS = 60_000
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
 ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
@@ -276,8 +278,11 @@ def build_report(template_path, data, photo_files, captions, output_path):
 # ---------------------------------------------------------------- GUI
 
 class ReportGeneratorGUI:
-    def __init__(self, root):
+    def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
+                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS):
         self.root = root
+        self.autosave_path = autosave_path
+        self.autosave_interval_ms = autosave_interval_ms
         self.root.title("保育巡查回報單生成器")
         self.root.geometry("900x700")
 
@@ -290,6 +295,15 @@ class ReportGeneratorGUI:
         self._ui_queue = queue.Queue()
         self.create_widgets()
         self._drain_ui_queue()
+
+        # 草稿狀態：與「上次儲存」或「空白」比較，判斷是否有未存內容
+        self._saved_signature = self._signature()
+        self._blank_signature = self._saved_signature
+        self._last_autosave_signature = None
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(self.autosave_interval_ms, self._autosave_tick)
+        if restore_on_start:
+            self.root.after(300, self.offer_restore)
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -346,7 +360,7 @@ class ReportGeneratorGUI:
         ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="清除", command=self.clear_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="離開", command=self.root.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="離開", command=self.on_close).pack(side=tk.LEFT, padx=5)
 
         row += 1
         self.status_label = ttk.Label(main_frame, text="準備就緒", relief=tk.SUNKEN)
@@ -618,15 +632,18 @@ class ReportGeneratorGUI:
             filetypes=[("草稿檔", "*.json")]
         )
         if not path:
-            return
+            return False
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(self.build_draft(), f, ensure_ascii=False, indent=2)
         except OSError as e:
             messagebox.showerror("錯誤", f"草稿儲存失敗：{e}")
-            return
+            return False
+        self._saved_signature = self._signature()
+        self._remove_autosave()
         logging.info(f"儲存草稿: {path}")
         self.status_label.config(text=f"已儲存草稿: {os.path.basename(path)}")
+        return True
 
     def load_draft(self):
         path = filedialog.askopenfilename(title="載入草稿", filetypes=[("草稿檔", "*.json")])
@@ -643,10 +660,90 @@ class ReportGeneratorGUI:
         if not messagebox.askyesno("確認", "載入草稿會覆蓋目前畫面上的內容，確定嗎？"):
             return
         warnings = self.apply_draft(draft)
+        self._saved_signature = self._signature()
         logging.info(f"載入草稿: {path}")
         self.status_label.config(text=f"已載入草稿: {os.path.basename(path)}")
         if warnings:
             messagebox.showinfo("草稿已載入", "⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings))
+
+    # ---- 未存內容偵測、自動存檔、關閉提示
+    def _signature(self):
+        """目前內容的指紋（不含存檔時間與模板路徑），用來判斷內容是否改變。"""
+        draft = self.build_draft()
+        draft.pop('saved_at')
+        draft.pop('template_path')
+        return json.dumps(draft, ensure_ascii=False, sort_keys=True)
+
+    def is_dirty(self):
+        return self._signature() != self._saved_signature
+
+    def autosave_now(self):
+        """有未存且非空白的內容時，寫入自動存檔。回傳是否有寫入。"""
+        signature = self._signature()
+        if (signature == self._saved_signature or signature == self._blank_signature
+                or signature == self._last_autosave_signature):
+            return False
+        tmp_path = self.autosave_path + '.tmp'
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.build_draft(), f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.autosave_path)  # 原子替換，避免寫到一半當機留下壞檔
+        except OSError as e:
+            logging.error(f"自動存檔失敗: {e}")
+            return False
+        self._last_autosave_signature = signature
+        self.status_label.config(text=f"已自動存檔 {datetime.now().strftime('%H:%M:%S')}")
+        return True
+
+    def _autosave_tick(self):
+        try:
+            self.autosave_now()
+        finally:
+            self.root.after(self.autosave_interval_ms, self._autosave_tick)
+
+    def _remove_autosave(self):
+        self._last_autosave_signature = None
+        try:
+            os.remove(self.autosave_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logging.error(f"無法刪除自動存檔: {e}")
+
+    def offer_restore(self):
+        """啟動時若有上次異常結束留下的自動存檔，詢問是否還原。"""
+        if not os.path.exists(self.autosave_path):
+            return
+        try:
+            with open(self.autosave_path, encoding='utf-8') as f:
+                draft = json.load(f)
+            if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
+                raise ValueError("版本不相容")
+            saved_at = str(draft.get('saved_at', '未知時間')).replace('T', ' ')
+        except (OSError, ValueError) as e:
+            logging.error(f"自動存檔無法讀取，已刪除: {e}")
+            self._remove_autosave()
+            return
+        if messagebox.askyesno("還原上次的內容", f"發現上次未儲存的自動存檔（{saved_at}），要還原嗎？\n\n選「否」會刪除這份自動存檔。"):
+            warnings = self.apply_draft(draft)
+            self.status_label.config(text=f"已還原自動存檔（{saved_at}）")
+            logging.info(f"還原自動存檔: {saved_at}")
+            if warnings:
+                messagebox.showinfo("自動存檔已還原", "⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings))
+        else:
+            self._remove_autosave()
+
+    def on_close(self):
+        if self.is_dirty():
+            answer = messagebox.askyesnocancel(
+                "尚未儲存", "有尚未儲存的內容，要先儲存草稿再離開嗎？\n\n"
+                           "是：儲存草稿後離開\n否：不儲存直接離開\n取消：回到程式")
+            if answer is None:
+                return
+            if answer and not self.save_draft():
+                return  # 取消存檔或存檔失敗，留在程式裡
+        self._remove_autosave()
+        self.root.destroy()
 
     def collect_data(self):
         """在主執行緒讀取所有欄位。驗證失敗時回傳 (None, 錯誤訊息)。"""

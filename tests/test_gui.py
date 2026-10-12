@@ -19,7 +19,8 @@ class GuiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = tk.Tk()
-        self.app = g.ReportGeneratorGUI(self.root)
+        self.autosave = os.path.join(self.tmp.name, 'autosave.json')
+        self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
         self.app.template_path = TEMPLATE
         self.shown = []
         for p in (
@@ -156,6 +157,107 @@ class GuiTest(unittest.TestCase):
         self.app.personnel.insert(0, '現有內容')
         self._load_draft_from(draft, confirm=False)
         self.assertEqual(self.app.personnel.get(), '現有內容')
+
+    # ---- 未存內容提示 / 自動存檔
+    def _close_with(self, answer, save_ok=True):
+        """模擬按下關閉，回傳 (是否關閉視窗, 提示是否出現)。"""
+        asked = []
+        destroyed = []
+        self.app.root.destroy = lambda: destroyed.append(True)
+        self.app.save_draft = lambda: save_ok
+        def ask(*a, **k):
+            asked.append(True)
+            return answer
+        with mock.patch.object(messagebox, 'askyesnocancel', ask):
+            self.app.on_close()
+        return bool(destroyed), bool(asked)
+
+    def test_close_clean_no_prompt(self):
+        closed, asked = self._close_with(None)
+        self.assertTrue(closed)
+        self.assertFalse(asked)
+
+    def test_template_only_change_is_not_dirty(self):
+        self.app.template_path = None
+        self.assertFalse(self.app.is_dirty())
+
+    def test_close_dirty_cancel_stays(self):
+        self.app.personnel.insert(0, 'x')
+        self.assertTrue(self.app.is_dirty())
+        closed, asked = self._close_with(None)
+        self.assertTrue(asked)
+        self.assertFalse(closed)
+
+    def test_close_dirty_discard_closes_and_removes_autosave(self):
+        self.app.personnel.insert(0, 'x')
+        self.assertTrue(self.app.autosave_now())
+        self.assertTrue(os.path.exists(self.autosave))
+        closed, _ = self._close_with(False)
+        self.assertTrue(closed)
+        self.assertFalse(os.path.exists(self.autosave))
+
+    def test_close_dirty_save_ok_closes_but_save_cancelled_stays(self):
+        self.app.personnel.insert(0, 'x')
+        closed, _ = self._close_with(True, save_ok=True)
+        self.assertTrue(closed)
+        self.app.personnel.insert(0, 'y')
+        closed, _ = self._close_with(True, save_ok=False)
+        self.assertFalse(closed)
+
+    def test_save_draft_marks_clean_and_removes_autosave(self):
+        self.app.personnel.insert(0, 'x')
+        self.app.autosave_now()
+        self._save_draft_to(os.path.join(self.tmp.name, 'd.json'))
+        self.assertFalse(self.app.is_dirty())
+        self.assertFalse(os.path.exists(self.autosave))
+        self.app.personnel.insert(0, 'z')
+        self.assertTrue(self.app.is_dirty())
+
+    def test_autosave_skips_blank_clean_and_unchanged(self):
+        self.assertFalse(self.app.autosave_now())  # 空白
+        self.app.personnel.insert(0, 'x')
+        self.assertTrue(self.app.autosave_now())
+        self.assertFalse(self.app.autosave_now())  # 沒有新變動
+        self.app.personnel.insert(0, 'y')
+        self.assertTrue(self.app.autosave_now())
+        self.assertFalse(os.path.exists(self.autosave + '.tmp'))
+
+    def test_autosave_restore_roundtrip(self):
+        self.app.personnel.insert(0, '王小明')
+        self.app.text_fields['nature'].insert('1.0', '山羌')
+        self.app.autosave_now()
+        # 模擬程式當機後重開：新的 app 實例
+        self.root.destroy()
+        self.root = tk.Tk()
+        app2 = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
+            app2.offer_restore()
+        self.assertEqual(app2.personnel.get(), '王小明')
+        self.assertEqual(app2.text_fields['nature'].get('1.0', tk.END).strip(), '山羌')
+        self.assertTrue(app2.is_dirty())  # 還原後仍視為未存
+        self.app = app2
+
+    def test_autosave_restore_declined_deletes_file(self):
+        self.app.personnel.insert(0, 'x')
+        self.app.autosave_now()
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: False):
+            self.app.offer_restore()
+        self.assertFalse(os.path.exists(self.autosave))
+        self.assertEqual(self.app.personnel.get(), 'x')
+
+    def test_corrupt_autosave_is_discarded_silently(self):
+        with open(self.autosave, 'w', encoding='utf-8') as f:
+            f.write('{ broken')
+        self.app.offer_restore()
+        self.assertFalse(os.path.exists(self.autosave))
+        self.assertEqual(self.shown, [])
+
+    def test_autosave_tick_reschedules(self):
+        self.app.personnel.insert(0, 'x')
+        with mock.patch.object(self.root, 'after') as after:
+            self.app._autosave_tick()
+        self.assertTrue(os.path.exists(self.autosave))
+        after.assert_called_once()
 
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')

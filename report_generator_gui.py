@@ -5,12 +5,15 @@
 提供圖形化介面供使用者輸入資料並選擇照片
 """
 
+import copy
 import io
 import json
 import logging
 import math
 import os
 import queue
+import re
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -35,6 +38,10 @@ logging.basicConfig(
     ]
 )
 
+KAI = '標楷體'
+BODY_FONT_PT = 12   # 內容字級（與參考回報單相同，未特別指定時為 12pt）
+LINE_TWIPS = 440    # 固定行高 22pt（參考回報單）
+
 DRAFT_VERSION = 1
 DEFAULT_AUTOSAVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 60_000
@@ -52,7 +59,7 @@ HEADER_H = 0.32         # 分類標題列
 SPACER_H = 0.15         # 分類表格之間的間隔
 HEADING_H = 0.45        # 「九、服勤照片」標題
 PHOTO_ROW_PAD = 0.04
-CAPTION_LINE_H = 0.2    # 說明文字每行高度（11pt）
+CAPTION_LINE_H = 0.2    # 說明文字每行高度（12pt）
 CAPTION_PAD = 0.08
 MIN_PHOTO_SCALE = 0.8   # 為了排滿整頁，照片最多等比例縮小到 80%
 PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成多出一頁
@@ -89,20 +96,18 @@ FIELD_NAMES = {
 
 # ---------------------------------------------------------------- 文件處理（不依賴 tkinter）
 
-def add_bullet_points(text):
-    """為每一行加上bullet前綴並縮排（使用者已輸入 bullet 的行不重複加）"""
-    if not text:
-        return ""
-    result = []
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line:
-            result.append('')
-            continue
-        if line[0] in '•·':
-            line = line[1:].strip()
-        result.append(f'    • {line}')
-    return '\n'.join(result)
+LIST_MARKER_RE = re.compile(r'^(?:[◆◇■□●○★☆•·‧▲△▼▽※＊*\-–—]|\d+\s*[.、)）]|[一二三四五六七八九十]+、)')
+
+
+def content_lines(text):
+    """把使用者輸入拆成要寫入文件的行。沒有項目符號的行補上「• 」；空白行保留作為段落間隔。"""
+    lines = []
+    for raw in (text or '').split('\n'):
+        line = raw.strip()
+        if line and not LIST_MARKER_RE.match(line):
+            line = f'• {line}'
+        lines.append(line)
+    return lines
 
 
 def set_cell_border(cell):
@@ -119,11 +124,96 @@ def set_cell_border(cell):
     tcPr.append(tcBorders)
 
 
-def set_font_kai(run):
-    """設定字型為標楷體11pt"""
-    run.font.name = '標楷體'
-    run.font.size = Pt(11)
-    run._element.rPr.rFonts.set(qn('w:eastAsia'), '標楷體')
+def set_font_kai(run, size=BODY_FONT_PT):
+    """標楷體（中英文、數字都用標楷體，與參考回報單一致）。"""
+    run.font.name = KAI
+    run.font.size = Pt(size)
+    run._element.rPr.rFonts.set(qn('w:eastAsia'), KAI)
+
+
+def _kai_rpr():
+    rpr = OxmlElement('w:rPr')
+    rfonts = OxmlElement('w:rFonts')
+    for attr in ('ascii', 'hAnsi', 'eastAsia'):
+        rfonts.set(qn(f'w:{attr}'), KAI)
+    rpr.append(rfonts)
+    for tag in ('w:sz', 'w:szCs'):
+        size = OxmlElement(tag)
+        size.set(qn('w:val'), str(BODY_FONT_PT * 2))
+        rpr.append(size)
+    return rpr
+
+
+def _build_content_paragraph(text):
+    """內容段落：標楷體 12pt、固定行高 22pt、項目符號懸掛縮排（格式依參考回報單）。"""
+    p = OxmlElement('w:p')
+    ppr = OxmlElement('w:pPr')
+    spacing = OxmlElement('w:spacing')
+    spacing.set(qn('w:line'), str(LINE_TWIPS))
+    spacing.set(qn('w:lineRule'), 'exact')
+    ind = OxmlElement('w:ind')
+    if text:
+        ind.set(qn('w:left'), '720')
+        ind.set(qn('w:hanging'), '240')
+    else:
+        ind.set(qn('w:left'), '480')
+    ppr.append(spacing)
+    ppr.append(ind)
+    ppr.append(_kai_rpr())
+    p.append(ppr)
+    if text:
+        run = OxmlElement('w:r')
+        run.append(_kai_rpr())
+        t = OxmlElement('w:t')
+        t.text = text
+        t.set(qn('xml:space'), 'preserve')
+        run.append(t)
+        p.append(run)
+    return p
+
+
+def _paragraph_text(element):
+    return ''.join(t.text or '' for t in element.iter(qn('w:t')))
+
+
+def _insert_content_after(paragraph, lines, drop_text=None):
+    """在 paragraph 後面插入內容段落，並移除其後的空白佔位段落（含 drop_text 的佔位文字）。"""
+    anchor = paragraph._p
+    nxt = anchor.getnext()
+    while nxt is not None and nxt.tag == qn('w:p') and (
+            _is_empty_paragraph(nxt) or (drop_text and drop_text in _paragraph_text(nxt))):
+        anchor.getparent().remove(nxt)
+        nxt = anchor.getnext()
+    for text in lines:
+        new = _build_content_paragraph(text)
+        anchor.addnext(new)
+        anchor = new
+
+
+def _set_cell_value(cell, text):
+    """填入基本資料：沿用儲存格原有的段落設定與字型大小（對齊、14pt 等），字型改為標楷體。"""
+    paragraphs = cell.paragraphs
+    for extra in paragraphs[1:]:
+        extra._p.getparent().remove(extra._p)
+    p = paragraphs[0]
+    runs = p.runs
+    if runs:
+        run = runs[0]
+        run.text = text
+        for extra in runs[1:]:
+            extra._r.getparent().remove(extra._r)
+    else:
+        run = p.add_run(text)
+        ppr = p._p.pPr
+        mark = ppr.find(qn('w:rPr')) if ppr is not None else None
+        if mark is not None:  # 空儲存格的字型大小記錄在段落標記上
+            rpr = run._r.get_or_add_rPr()
+            for child in mark:
+                rpr.append(copy.deepcopy(child))
+    rfonts = run._r.get_or_add_rPr().get_or_add_rFonts()
+    for attr in ('ascii', 'hAnsi', 'eastAsia'):
+        rfonts.set(qn(f'w:{attr}'), KAI)
+    rfonts.attrib.pop(qn('w:hint'), None)
 
 
 def prepare_image(path):
@@ -156,16 +246,20 @@ def _all_text(table):
 
 
 def _fill_main_table(main_table, data):
-    """把文字資料填進主表格，回傳警告清單。"""
+    """把文字資料填進主表格，回傳警告清單。
+
+    以段落為單位插入內容，保留模板原有的標題（粗體/14pt）等格式；
+    插入的內容採標楷體 12pt、固定行高 22pt（參考他人填寫的回報單）。
+    """
     warnings = []
 
     try:
-        main_table.rows[0].cells[2].text = f"{data['year']}年{data['month']}月{data['day']}日"
-        main_table.rows[1].cells[1].text = data['personnel']
-        main_table.rows[2].cells[1].text = (
-            f"{data['start_year']}年{data['start_month']}月{data['start_day']}日至"
-            f"{data['end_year']}年{data['end_month']}月{data['end_day']}日")
-        main_table.rows[3].cells[1].text = data['location']
+        _set_cell_value(main_table.rows[0].cells[2], f"{data['year']}年{data['month']}月{data['day']}日")
+        _set_cell_value(main_table.rows[1].cells[1], data['personnel'])
+        _set_cell_value(main_table.rows[2].cells[1],
+                        f"{data['start_year']}年{data['start_month']}月{data['start_day']}日至"
+                        f"{data['end_year']}年{data['end_month']}月{data['end_day']}日")
+        _set_cell_value(main_table.rows[3].cells[1], data['location'])
     except IndexError:
         raise ValueError("模板格式錯誤：基本資料表格的列/欄數量與預期不符（需至少 4 列、第一列至少 3 欄）")
 
@@ -178,34 +272,28 @@ def _fill_main_table(main_table, data):
                 continue
             seen.add(cell._tc)
 
-            text = new_text = cell.text
             for marker, key in FILL_LABELS:
-                if marker in new_text and key not in filled:
-                    content = data.get(key, '')
-                    if content:
-                        new_text = new_text.replace(marker, f'{marker}\n{content}', 1)
-                    filled.add(key)
+                if key in filled:
+                    continue
+                paragraph = next((p for p in cell.paragraphs if marker in p.text), None)
+                if paragraph is None:
+                    continue
+                lines = content_lines(data.get(key, ''))
+                if data.get(key):
+                    _insert_content_after(paragraph, lines)
+                filled.add(key)
 
-            if QUESTION_MARKER in new_text and 'questions' not in filled:
-                content = data.get('questions', '')
-                if QUESTION_PLACEHOLDER in new_text:
-                    new_text = new_text.replace(QUESTION_PLACEHOLDER, content, 1)
-                elif content:
-                    new_text = new_text + '\n' + content
-                filled.add('questions')
-
-            if new_text != text:
-                cell.text = new_text
+            if 'questions' not in filled:
+                head = next((p for p in cell.paragraphs if QUESTION_MARKER in p.text), None)
+                if head is not None:
+                    if data.get('questions'):
+                        _insert_content_after(head, content_lines(data['questions']),
+                                              drop_text=QUESTION_PLACEHOLDER)
+                    filled.add('questions')
 
     for key, name in FIELD_NAMES.items():
         if data.get(key) and key not in filled:
             warnings.append(f"模板中找不到「{name}」欄位，這部分內容未填入")
-
-    for row in main_table.rows:
-        for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                for run in paragraph.runs:
-                    set_font_kai(run)
     return warnings
 
 
@@ -254,17 +342,27 @@ class _Page:
     def __init__(self, fixed=0.0):
         self.fixed = fixed
         self.img = 0.0
-        self.rows = []
+        self.rows = []       # [(分類, 列)]
+        self.last_category = None
 
-    def fits(self, row, line_chars, page_h):
-        fixed = self.fixed + PHOTO_ROW_PAD + max(caption_height(p.caption, line_chars) for p in row)
+    def _extra(self, category):
+        """換到另一個分類時要多出的分類標題列與間隔。"""
+        if category == self.last_category:
+            return 0.0
+        return HEADER_H + (SPACER_H if self.last_category is not None else 0.0)
+
+    def fits(self, category, row, line_chars, page_h):
+        fixed = (self.fixed + self._extra(category) + PHOTO_ROW_PAD
+                 + max(caption_height(p.caption, line_chars) for p in row))
         img = self.img + max(p.img_h for p in row)
         return fixed + MIN_PHOTO_SCALE * img <= page_h
 
-    def add(self, row, line_chars):
-        self.fixed += PHOTO_ROW_PAD + max(caption_height(p.caption, line_chars) for p in row)
+    def add(self, category, row, line_chars):
+        self.fixed += (self._extra(category) + PHOTO_ROW_PAD
+                       + max(caption_height(p.caption, line_chars) for p in row))
         self.img += max(p.img_h for p in row)
-        self.rows.append(row)
+        self.rows.append((category, row))
+        self.last_category = category
 
     def finish(self, page_h):
         """這頁照片放不下時，等比例縮小（不低於 MIN_PHOTO_SCALE），讓版面剛好排滿。"""
@@ -272,52 +370,61 @@ class _Page:
             return
         scale = min(1.0, (page_h - self.fixed) / self.img)
         if scale < 1.0:
-            for row in self.rows:
+            for _, row in self.rows:
                 for p in row:
                     p.img_w *= scale
                     p.img_h *= scale
 
 
-def plan_layout(categories, page_h, start_y, line_chars):
-    """安排每個分類的照片列，回傳 {分類: [[照片, 照片], ...]}。
+def build_rows(items):
+    """把一個分類的照片排成列：橫式在前、直式在後，每列 2 張。
 
-    - 橫式與直式分開，同方向的照片排在一起（橫式在前），每列 2 張。
-    - 模擬分頁：目前這一頁放不下下一列時，往後找放得下的列補進來；
-      照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）就能多放一列時，也會這樣做，讓整頁盡量排滿。
-      都放不下才換頁。
+    橫式與直式各剩一張落單時，兩張拼成一列（放在橫式與直式之間）。
+    """
+    land = [p for p in items if p.landscape]
+    port = [p for p in items if not p.landscape]
+    land_rows = [land[i:i + 2] for i in range(0, len(land), 2)]
+    port_rows = [port[i:i + 2] for i in range(0, len(port), 2)]
+    if len(land) % 2 and len(port) % 2:
+        mixed = land_rows.pop() + port_rows.pop()
+        return land_rows + [mixed] + port_rows
+    return land_rows + port_rows
+
+
+def plan_layout(categories, page_h, start_y, line_chars):
+    """安排所有照片列，回傳依序排列的 [(分類, 列)]。
+
+    - 分類內橫式排在一起、直式排在一起（見 build_rows）。
+    - 模擬分頁：優先排「尚未排完的第一個分類」；放不下時，跨分類往後找放得下的列補位
+      （換了分類會多出該分類的標題列）；照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）
+      就能多放一列時也會這樣做，讓整頁盡量排滿。都放不下才換頁。
     - page_h 為內文可用高度，start_y 為照片區開始時已用掉的高度（吋）。
     """
+    queues = {name: build_rows(items) for name, items in categories.items() if items}
+    order = list(queues)
     page = _Page(fixed=start_y)
-    plan = {}
-    for name, items in categories.items():
-        if not items:
-            continue
-        land = [p for p in items if p.landscape]
-        port = [p for p in items if not p.landscape]
-        rows = ([land[i:i + 2] for i in range(0, len(land), 2)]
-                + [port[i:i + 2] for i in range(0, len(port), 2)])
-
-        probe = _Page(fixed=page.fixed + HEADER_H)
-        probe.img = page.img
-        if not probe.fits(rows[0], line_chars, page_h):
-            page.finish(page_h)  # 標題列加第一列放不下，整個分類從新的一頁開始
-            page = _Page()
-        page.fixed += HEADER_H
-
-        ordered = []
-        while rows:
-            pick = next((i for i, r in enumerate(rows) if page.fits(r, line_chars, page_h)), None)
-            if pick is None:
+    sequence = []
+    while any(queues.values()):
+        main = next(n for n in order if queues[n])
+        pick = None
+        for name in [main] + [n for n in order if n != main and queues[n]]:
+            index = next((i for i, r in enumerate(queues[name])
+                          if page.fits(name, r, line_chars, page_h)), None)
+            if index is not None:
+                pick = (name, index)
+                break
+        if pick is None:
+            if page.rows:
                 page.finish(page_h)
-                page = _Page(fixed=HEADER_H)  # 換頁；標題列會在新頁重複出現
-                pick = 0
-            row = rows.pop(pick)
-            ordered.append(row)
-            page.add(row, line_chars)
-        plan[name] = ordered
-        page.fixed += SPACER_H
+                page = _Page()
+                continue
+            pick = (main, 0)  # 連空白頁都放不下（說明文字特別長）：硬放，讓 Word 自行處理
+        name, index = pick
+        row = queues[name].pop(index)
+        page.add(name, row, line_chars)
+        sequence.append((name, row))
     page.finish(page_h)
-    return plan
+    return sequence
 
 
 def _is_empty_paragraph(element):
@@ -390,7 +497,7 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
     col_w = usable_w / 2
     fit_width = col_w - CELL_SIDE_PAD
     max_portrait_h = (page_h - HEADER_H - 2 * (CAPTION_LINE_H + CAPTION_PAD)) / 2 - PHOTO_ROW_PAD
-    line_chars = fit_width * 72 / 11  # 11pt 全形字寬 = 11pt
+    line_chars = fit_width * 72 / BODY_FONT_PT  # 全形字寬 = 字級
 
     # 模板內可能已有「九、服勤照片」標題（內文段落或主表格內），有的話不重複新增
     heading_p = next((p for p in doc.paragraphs if '九、服勤照片' in p.text), None)
@@ -426,11 +533,19 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
         start_y = HEADING_H
 
     categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings)
-    plan = plan_layout(categories, page_h, start_y, line_chars)
+    sequence = plan_layout(categories, page_h, start_y, line_chars)
+
+    # 連續同分類的列合成一張表格（跨頁時由 tblHeader 重複標題列）
+    segments = []
+    for category, row in sequence:
+        if segments and segments[-1][0] == category:
+            segments[-1][1].append(row)
+        else:
+            segments.append((category, [row]))
 
     before = set(body)
     first_table = True
-    for category, rows in plan.items():
+    for category, rows in segments:
         table = doc.add_table(rows=1, cols=2)
         table.autofit = False
         header_row = table.rows[0]
@@ -486,6 +601,19 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
         created = [e for e in body if e not in before and e.tag != qn('w:sectPr')]
         for element in reversed(created):
             anchor.addnext(element)
+
+
+def open_file(path):
+    """用系統預設程式開啟檔案；失敗只記錄，不影響主程式。"""
+    try:
+        if hasattr(os, 'startfile'):
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except OSError as e:
+        logging.error(f"無法自動開啟 {path}: {e}")
 
 
 def build_report(template_path, data, photo_files, captions, output_path):
@@ -583,6 +711,8 @@ class ReportGeneratorGUI:
 
         self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report)
         self.generate_btn.pack(side=tk.LEFT, padx=5)
+        self.auto_open = tk.BooleanVar(value=True)
+        ttk.Checkbutton(button_frame, text="產生後自動開啟", variable=self.auto_open).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="清除", command=self.clear_all).pack(side=tk.LEFT, padx=5)
@@ -1000,7 +1130,7 @@ class ReportGeneratorGUI:
             return None, "協勤日期的起日不可晚於迄日"
 
         for key, widget in self.text_fields.items():
-            data[key] = add_bullet_points(widget.get('1.0', tk.END).strip())
+            data[key] = widget.get('1.0', tk.END).strip()
         return data, None
 
     def generate_report(self):
@@ -1037,7 +1167,8 @@ class ReportGeneratorGUI:
         self.generate_btn.config(state=tk.DISABLED)
         self.status_label.config(text="正在產生報告...")
         threading.Thread(target=self._generate_report_worker,
-                         args=(data, photo_files, captions, output_path), daemon=True).start()
+                         args=(data, photo_files, captions, output_path, self.auto_open.get()),
+                         daemon=True).start()
 
     def _post(self, func):
         """背景執行緒把 GUI 更新交給主執行緒執行（tkinter 不是 thread-safe）。"""
@@ -1051,16 +1182,20 @@ class ReportGeneratorGUI:
             pass
         self.root.after(100, self._drain_ui_queue)
 
-    def _generate_report_worker(self, data, photo_files, captions, output_path):
+    def _generate_report_worker(self, data, photo_files, captions, output_path, open_after=False):
         try:
             warnings = build_report(self.template_path, data, photo_files, captions, output_path)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
 
-            message = f"報告已產生！\n\n檔案: {output_path}\n日誌: {LOG_FILE}"
+            if open_after:
+                # 只開啟檔案，本工具維持開啟，方便修改後再次產生
+                self._post(lambda: open_file(output_path))
             if warnings:
-                message += "\n\n⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings)
+                message = f"報告已產生！\n\n檔案: {output_path}\n\n⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings)
                 logging.warning("警告: " + "; ".join(warnings))
-            self._post(lambda: messagebox.showinfo("成功", message))
+                self._post(lambda: messagebox.showinfo("成功（有警告）", message))
+            elif not open_after:
+                self._post(lambda: messagebox.showinfo("成功", f"報告已產生！\n\n檔案: {output_path}"))
             self._post(lambda: self.status_label.config(text=f"✓ SUCCESS: 已產生 {output_path}"))
         except Exception as e:
             error_msg = f"✗ FAIL: {e}"

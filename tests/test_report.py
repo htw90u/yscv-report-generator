@@ -37,7 +37,7 @@ class BuildReportTest(unittest.TestCase):
         with open(cls.p4, 'wb') as f:
             f.write(b'not an image')
 
-        data = {k: g.add_bullet_points(f'內容_{k}\n• 第二行_{k}') for k in g.FIELD_NAMES}
+        data = {k: f'內容_{k}\n• 第二行_{k}' for k in g.FIELD_NAMES}
         data.update(year='115', month='10', day='12', personnel='王小明', start_year='115',
                     start_month='10', start_day='10', end_year='115', end_month='10', end_day='11',
                     location='排雲山莊')
@@ -181,7 +181,7 @@ class LayoutTest(unittest.TestCase):
 
     def test_groups_by_orientation_two_per_row(self):
         items = [make_item(4, 3), make_item(3, 4), make_item(4, 3), make_item(3, 4), make_item(4, 3)]
-        plan = g.plan_layout({'a': items}, self.PAGE_H * 2, 0, self.LINE_CHARS)['a']
+        plan = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 2, 0, self.LINE_CHARS)]
         for row in plan:
             self.assertLessEqual(len(row), 2)
             self.assertEqual(len({p.landscape for p in row}), 1)  # 同一列同方向
@@ -189,18 +189,31 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual(kinds, sorted(kinds, reverse=True))  # 橫式在前、直式在後
         self.assertEqual(sum(len(r) for r in plan), 5)
 
-    def test_gap_fill_pulls_row_that_fits(self):
-        # 這頁剩下的空間放不下直式列，但放得下橫式列 -> 橫式列要補進來，而不是留白換頁
-        port = [make_item(3, 4) for _ in range(4)]   # 2 列直式，每列約 4.8
-        land = [make_item(4, 3) for _ in range(2)]   # 1 列橫式，約 2.8
-        plan = g.plan_layout({'a': land[:0] + port + land}, 10.4, 0, self.LINE_CHARS)['a']
-        # 橫式列排在第一列（橫式在前），其後兩列直式放不下就換頁；不應有任何一列被拆開
-        self.assertEqual([len(r) for r in plan], [2, 2, 2])
+    def test_cross_category_gap_fill(self):
+        # a：3 列直式，每列約 4.8 吋；頁高 12 吋時第 3 列放不下，剩下的空間改由 b 的橫式列補進來
+        a = [make_item(3, 4) for _ in range(6)]
+        b = [make_item(2, 1) for _ in range(2)]  # 扁的橫式列，約 2 吋
+        seq = g.plan_layout({'a': a, 'b': b}, 12.0, 0, self.LINE_CHARS)
+        self.assertEqual([c for c, _ in seq], ['a', 'a', 'b', 'a'])
+
+    def test_mixed_row_for_leftover_landscape_and_portrait(self):
+        items = ([make_item(4, 3) for _ in range(3)] + [make_item(3, 4) for _ in range(3)])
+        rows = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
+        self.assertEqual([len(r) for r in rows], [2, 2, 2])
+        mixed = [r for r in rows if len({p.landscape for p in r}) == 2]
+        self.assertEqual(len(mixed), 1)
+        self.assertTrue(mixed[0][0].landscape and not mixed[0][1].landscape)
+
+    def test_no_mixed_row_when_only_one_side_is_odd(self):
+        items = ([make_item(4, 3) for _ in range(3)] + [make_item(3, 4) for _ in range(2)])
+        rows = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
+        self.assertEqual([len(r) for r in rows], [2, 1, 2])
+        self.assertTrue(all(len({p.landscape for p in r}) == 1 for r in rows))
 
     def test_shrink_to_fill_page_not_below_min(self):
         # 4 列橫式約需 4*(2.55+0.32)+0.32 = 11.8 > 10.4，縮到 80% 可放入 -> 全部縮小且總高不超過頁高
         items = [make_item(4, 3) for _ in range(8)]
-        plan = g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)['a']
+        plan = [r for _, r in g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)]
         self.assertEqual(len(plan), 4)
         scale = items[0].img_w / 3.4
         self.assertLess(scale, 1.0)
@@ -210,7 +223,7 @@ class LayoutTest(unittest.TestCase):
 
     def test_no_shrink_when_it_cannot_help(self):
         items = [make_item(4, 3) for _ in range(10)]  # 5 列：縮 80% 也放不下第 5 列 -> 換頁
-        plan = g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)['a']
+        plan = [r for _, r in g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)]
         self.assertEqual(len(plan), 5)
         self.assertTrue(all(p.img_w >= 3.4 * g.MIN_PHOTO_SCALE - 1e-9 for p in items))
 
@@ -246,10 +259,64 @@ class DocumentStructureTest(BuildReportTest):
         self.assertIsNotNone(photo_table.rows[0]._tr.find(f'.//{w}tblHeader'))
 
 
-class BulletTest(unittest.TestCase):
-    def test_bullets(self):
-        self.assertEqual(g.add_bullet_points(''), '')
-        self.assertEqual(g.add_bullet_points('a\n\n• b'), '    • a\n\n    • b')
+class ContentLinesTest(unittest.TestCase):
+    def test_lines(self):
+        self.assertEqual(g.content_lines(''), [''])
+        self.assertEqual(g.content_lines('a\n\n• b\n◆ c\n■ d\n1. e\n2、f\n一、g'),
+                         ['• a', '', '• b', '◆ c', '■ d', '1. e', '2、f', '一、g'])
+
+
+class FormattingTest(BuildReportTest):
+    """填入內容後，模板原有格式要保留；新增內容依參考回報單格式（標楷體 12pt、固定行高 22pt）。"""
+
+    W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+
+    def _paragraphs(self, startswith):
+        for c in unique_cells(self.doc):
+            for p in c.paragraphs:
+                if p.text.startswith(startswith):
+                    return c, p
+        self.fail(startswith)
+
+    def test_template_headings_keep_bold_and_14pt(self):
+        _, heading = self._paragraphs('三、自然資源狀況')
+        self.assertTrue(all(r.font.bold for r in heading.runs))
+        self.assertEqual(heading.runs[0].font.size.pt, 14)
+
+    def test_title_and_date_alignment_kept(self):
+        _, title = self._paragraphs('玉山國家公園高山保育志工協勤回報單')
+        self.assertTrue(title.runs[0].font.bold)
+        _, date = self._paragraphs('115年10月12日')
+        self.assertIsNotNone(date._p.pPr.find(self.W + 'jc'))  # 右對齊沒有被洗掉
+
+    def test_header_values_use_kai_and_keep_template_size(self):
+        _, name = self._paragraphs('王小明')
+        run = name.runs[0]
+        rfonts = run._r.rPr.rFonts
+        for attr in ('ascii', 'hAnsi', 'eastAsia'):
+            self.assertEqual(rfonts.get(self.W + attr), '標楷體')
+        self.assertEqual(run.font.size.pt, 14)
+
+    def test_content_paragraph_format(self):
+        _, p = self._paragraphs('• 內容_road_status')
+        run = p.runs[0]
+        self.assertEqual(run.font.size.pt, 12)
+        self.assertEqual(run._r.rPr.rFonts.get(self.W + 'eastAsia'), '標楷體')
+        spacing = p._p.pPr.find(self.W + 'spacing')
+        self.assertEqual(spacing.get(self.W + 'line'), '440')
+        self.assertEqual(spacing.get(self.W + 'lineRule'), 'exact')
+        ind = p._p.pPr.find(self.W + 'ind')
+        self.assertEqual(ind.get(self.W + 'hanging'), '240')
+
+    def test_content_is_inserted_right_after_label(self):
+        _, label = self._paragraphs('1、道路、步道狀況及維護情形：')
+        nxt = label._p.getnext()
+        self.assertIn('內容_road_status', ''.join(t.text or '' for t in nxt.iter(self.W + 't')))
+
+    def test_cell_is_not_flattened(self):
+        # 舊作法用 cell.text 重組整格，標題的粗體會消失；現在標題與內容是不同段落
+        cell, _ = self._paragraphs('三、自然資源狀況')
+        self.assertGreater(len(cell.paragraphs), 3)
 
 
 if __name__ == '__main__':

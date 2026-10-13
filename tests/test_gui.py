@@ -69,20 +69,43 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(lb.size(), 0)
         self.assertFalse(self.app.photo_files[cat] or self.app.photo_captions[cat])
 
+    def _wait_until_done(self, timeout=20):
+        t0 = time.time()
+        while time.time() - t0 < timeout and str(self.app.generate_btn['state']) == 'disabled':
+            self.root.update()
+            time.sleep(0.05)
+        self.root.update()
+
+    def test_auto_open_can_be_turned_off(self):
+        self.fill_dates()
+        out = os.path.join(self.tmp.name, 'o.docx')
+        opened = []
+        self.app.auto_open.set(False)
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: opened.append(path)):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertTrue(os.path.exists(out))
+        self.assertEqual(opened, [])
+        self.assertTrue(any(k == 'info' for k, _ in self.shown))
+
+    def test_open_file_failure_does_not_raise(self):
+        with mock.patch.object(os, 'startfile', side_effect=OSError('boom'), create=True):
+            g.open_file(os.path.join(self.tmp.name, 'nope.docx'))
+
     def test_generate_in_thread(self):
         self.fill_dates()
         self.app.text_fields['nature'].insert('1.0', '看到山羌\n• 已有bullet')
         out = os.path.join(self.tmp.name, 'o.docx')
-        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out):
+        opened = []
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: opened.append(path)):
             self.app.generate_report()
-        self.assertEqual(str(self.app.generate_btn['state']), 'disabled')
-        t0 = time.time()
-        while time.time() - t0 < 15 and not any(k == 'info' for k, _ in self.shown):
-            self.root.update()
-            time.sleep(0.05)
-        self.root.update()
-        self.assertTrue(any(k == 'info' for k, _ in self.shown), self.shown)
+            self.assertEqual(str(self.app.generate_btn['state']), 'disabled')
+            self._wait_until_done()
         self.assertEqual(str(self.app.generate_btn['state']), 'normal')
+        self.assertEqual(opened, [out])  # 產生後自動開啟
+        self.assertTrue(self.root.winfo_exists())  # 工具沒有被關掉
         text = '\n'.join(c.text for c in unique_cells(Document(out)))
         self.assertEqual(text.count('看到山羌'), 1)
         self.assertNotIn('• •', text)

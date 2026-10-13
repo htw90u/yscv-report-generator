@@ -602,12 +602,14 @@ class ReportGeneratorGUI:
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 
+        # 已在本次手動選好模板時，以目前選擇為準；草稿記錄的模板只在尚未選擇時才帶入
         template = draft.get('template_path')
-        if template and os.path.exists(template):
-            self.template_path = template
-            self.template_label.config(text=os.path.basename(template), foreground="green")
-        elif template:
-            warnings.append(f"找不到草稿記錄的模板：{template}，請重新選擇模板")
+        if not self.template_path and template:
+            if os.path.exists(template):
+                self.template_path = template
+                self.template_label.config(text=os.path.basename(template), foreground="green")
+            else:
+                warnings.append(f"找不到草稿記錄的模板：{template}，請重新選擇模板")
 
         for category, paths in draft.get('photos', {}).items():
             if category not in self.photo_files:
@@ -800,6 +802,10 @@ class ReportGeneratorGUI:
             filetypes=[("Word文件", "*.docx")]
         )
         if not output_path:
+            return
+        if os.path.exists(output_path) and os.path.samefile(output_path, self.template_path):
+            messagebox.showerror("錯誤", "輸出檔案不能和模板是同一個檔案，否則會覆蓋模板，"
+                                         "下次再用它當模板時內容會重複疊加。\n請換一個檔名。")
             return
 
         self.generate_btn.config(state=tk.DISABLED)

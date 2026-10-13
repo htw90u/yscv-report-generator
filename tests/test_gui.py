@@ -259,6 +259,39 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.autosave))
         after.assert_called_once()
 
+    def test_draft_does_not_override_chosen_template(self):
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        import json
+        with open(draft, encoding='utf-8') as f:
+            data = json.load(f)
+        other = os.path.join(self.tmp.name, 'other.docx')
+        open(other, 'wb').close()
+        data['template_path'] = other
+        with open(draft, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.template_path, TEMPLATE)  # 保留手動選的模板
+
+    def test_draft_restores_template_when_none_chosen(self):
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.app.template_path = None
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.template_path, TEMPLATE)
+
+    def test_output_same_as_template_rejected(self):
+        import shutil
+        tpl = os.path.join(self.tmp.name, 'tpl.docx')
+        shutil.copy(TEMPLATE, tpl)
+        self.app.template_path = tpl
+        self.fill_dates()
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: tpl):
+            self.app.generate_report()
+        self.assertEqual(self.shown[-1][0], 'err')
+        self.assertIn('模板', self.shown[-1][1])
+        self.assertEqual(str(self.app.generate_btn['state']), 'normal')
+
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')
         self.root.update()

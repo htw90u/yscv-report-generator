@@ -8,11 +8,13 @@
 import io
 import json
 import logging
+import math
 import os
 import queue
 import sys
 import threading
 import tkinter as tk
+from dataclasses import dataclass
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 
@@ -43,6 +45,17 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
 
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
+
+# 照片版面（單位：吋）。橫式/直式照片都以填滿儲存格寬度為原則，並模擬分頁以盡量排滿整頁
+CELL_SIDE_PAD = 0.2     # 儲存格左右內距與餘裕
+HEADER_H = 0.32         # 分類標題列
+SPACER_H = 0.15         # 分類表格之間的間隔
+HEADING_H = 0.45        # 「九、服勤照片」標題
+PHOTO_ROW_PAD = 0.04
+CAPTION_LINE_H = 0.2    # 說明文字每行高度（11pt）
+CAPTION_PAD = 0.08
+MIN_PHOTO_SCALE = 0.8   # 為了排滿整頁，照片最多等比例縮小到 80%
+PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成多出一頁
 
 PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況', '環境清理及遊客宣導情形']
 PHOTO_CATEGORIES_2 = ['遊客違法情形', '其他']
@@ -114,10 +127,10 @@ def set_font_kai(run):
 
 
 def prepare_image(path):
-    """回傳可供 add_picture 使用的來源。
+    """回傳 (來源, (寬px, 高px))；來源可直接給 add_picture 使用。
 
     有 EXIF 旋轉時先轉正；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
-    不需要處理時直接回傳原檔路徑（不重新壓縮）。
+    不需要處理時來源直接是原檔路徑（不重新壓縮）。回傳的尺寸是處理後（轉正後）的尺寸。
     """
     with Image.open(path) as img:
         needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1)
@@ -125,7 +138,7 @@ def prepare_image(path):
             img = ImageOps.exif_transpose(img)
         needs_resize = img.width > MAX_IMAGE_WIDTH_PX
         if not needs_rotate and not needs_resize:
-            return path
+            return path, (img.width, img.height)
         if needs_resize:
             new_height = max(1, round(img.height * MAX_IMAGE_WIDTH_PX / img.width))
             img = img.resize((MAX_IMAGE_WIDTH_PX, new_height), Image.LANCZOS)
@@ -135,7 +148,7 @@ def prepare_image(path):
         else:
             img.convert('RGB').save(buf, 'JPEG', quality=JPEG_QUALITY, optimize=True)
         buf.seek(0)
-        return buf
+        return buf, (img.width, img.height)
 
 
 def _all_text(table):
@@ -196,70 +209,283 @@ def _fill_main_table(main_table, data):
     return warnings
 
 
+@dataclass
+class PhotoItem:
+    path: str
+    caption: str
+    source: object = None  # add_picture 可用的來源；None 表示載入失敗
+    px_w: int = 1
+    px_h: int = 1
+    img_w: float = 0.0     # 嵌入文件的尺寸（吋）
+    img_h: float = 0.0
+
+    @property
+    def landscape(self):
+        return self.px_w >= self.px_h
+
+
+def size_photo(item, fit_width, max_portrait_h):
+    """橫式照片寬度填滿儲存格；直式照片同樣以填滿寬度為原則，過高時改以高度上限縮小。"""
+    aspect = item.px_h / item.px_w
+    if item.landscape or fit_width * aspect <= max_portrait_h:
+        item.img_w, item.img_h = fit_width, fit_width * aspect
+    else:
+        item.img_h = max_portrait_h
+        item.img_w = max_portrait_h / aspect
+
+
+def caption_height(text, line_chars):
+    """估算說明文字占的高度（吋）。全形字算 1，半形字算 0.5。"""
+    lines = 0
+    for part in (text or ' ').split('\n'):
+        units = sum(1 if ord(ch) > 255 else 0.5 for ch in part)
+        lines += max(1, math.ceil(units / line_chars))
+    return lines * CAPTION_LINE_H + CAPTION_PAD
+
+
+def row_height(row, line_chars):
+    return (max(p.img_h for p in row) + PHOTO_ROW_PAD
+            + max(caption_height(p.caption, line_chars) for p in row))
+
+
+class _Page:
+    """模擬中的一頁：固定高度（標題列、說明文字等）與可縮放的照片高度分開計算。"""
+
+    def __init__(self, fixed=0.0):
+        self.fixed = fixed
+        self.img = 0.0
+        self.rows = []
+
+    def fits(self, row, line_chars, page_h):
+        fixed = self.fixed + PHOTO_ROW_PAD + max(caption_height(p.caption, line_chars) for p in row)
+        img = self.img + max(p.img_h for p in row)
+        return fixed + MIN_PHOTO_SCALE * img <= page_h
+
+    def add(self, row, line_chars):
+        self.fixed += PHOTO_ROW_PAD + max(caption_height(p.caption, line_chars) for p in row)
+        self.img += max(p.img_h for p in row)
+        self.rows.append(row)
+
+    def finish(self, page_h):
+        """這頁照片放不下時，等比例縮小（不低於 MIN_PHOTO_SCALE），讓版面剛好排滿。"""
+        if self.img <= 0:
+            return
+        scale = min(1.0, (page_h - self.fixed) / self.img)
+        if scale < 1.0:
+            for row in self.rows:
+                for p in row:
+                    p.img_w *= scale
+                    p.img_h *= scale
+
+
+def plan_layout(categories, page_h, start_y, line_chars):
+    """安排每個分類的照片列，回傳 {分類: [[照片, 照片], ...]}。
+
+    - 橫式與直式分開，同方向的照片排在一起（橫式在前），每列 2 張。
+    - 模擬分頁：目前這一頁放不下下一列時，往後找放得下的列補進來；
+      照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）就能多放一列時，也會這樣做，讓整頁盡量排滿。
+      都放不下才換頁。
+    - page_h 為內文可用高度，start_y 為照片區開始時已用掉的高度（吋）。
+    """
+    page = _Page(fixed=start_y)
+    plan = {}
+    for name, items in categories.items():
+        if not items:
+            continue
+        land = [p for p in items if p.landscape]
+        port = [p for p in items if not p.landscape]
+        rows = ([land[i:i + 2] for i in range(0, len(land), 2)]
+                + [port[i:i + 2] for i in range(0, len(port), 2)])
+
+        probe = _Page(fixed=page.fixed + HEADER_H)
+        probe.img = page.img
+        if not probe.fits(rows[0], line_chars, page_h):
+            page.finish(page_h)  # 標題列加第一列放不下，整個分類從新的一頁開始
+            page = _Page()
+        page.fixed += HEADER_H
+
+        ordered = []
+        while rows:
+            pick = next((i for i, r in enumerate(rows) if page.fits(r, line_chars, page_h)), None)
+            if pick is None:
+                page.finish(page_h)
+                page = _Page(fixed=HEADER_H)  # 換頁；標題列會在新頁重複出現
+                pick = 0
+            row = rows.pop(pick)
+            ordered.append(row)
+            page.add(row, line_chars)
+        plan[name] = ordered
+        page.fixed += SPACER_H
+    page.finish(page_h)
+    return plan
+
+
+def _is_empty_paragraph(element):
+    if element.tag != qn('w:p'):
+        return False
+    has_text = any((t.text or '').strip() for t in element.iter(qn('w:t')))
+    has_object = any(True for _ in element.iter(qn('w:drawing'))) or any(True for _ in element.iter(qn('w:br')))
+    return not has_text and not has_object
+
+
+def _tighten(paragraph, keep_with_next=False):
+    pf = paragraph.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(0)
+    pf.line_spacing = 1.0
+    pf.keep_with_next = keep_with_next
+
+
+def _add_spacer(doc):
+    """表格之間的小間隔段落（相鄰表格會被 Word 合併，所以一定要有）。"""
+    p = doc.add_paragraph()
+    _tighten(p)
+    rpr = OxmlElement('w:rPr')
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), '12')  # 6pt
+    rpr.append(sz)
+    p._p.get_or_add_pPr().append(rpr)
+    return p
+
+
+def _mark_row(row, *flags):
+    trPr = row._tr.get_or_add_trPr()
+    for flag in flags:
+        trPr.append(OxmlElement(flag))
+
+
+def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
+    """載入照片並計算尺寸。載入失敗的照片以文字佔位，不中斷整份報告。"""
+    categories = {}
+    for category, paths in photo_files.items():
+        items = []
+        for path in paths:
+            caption = captions.get(category, {}).get(path) or "[照片說明]"
+            item = PhotoItem(path=path, caption=caption)
+            name = os.path.basename(path)
+            try:
+                item.source, (item.px_w, item.px_h) = prepare_image(path)
+                size_photo(item, fit_width, max_portrait_h)
+            except Exception as e:
+                logging.error(f"無法載入照片 {name}: {e}")
+                warnings.append(f"照片「{name}」無法載入：{e}")
+                item.img_w, item.img_h = fit_width, 0.4
+            items.append(item)
+        categories[category] = items
+    return categories
+
+
 def _add_photo_section(doc, main_table, photo_files, captions, warnings):
+    body = doc.element.body
+
     # 只刪除內容含「照片」的舊照片表格，避免誤刪其他表格
     for table in list(doc.tables)[1:]:
         if '照片' in _all_text(table):
             table._element.getparent().remove(table._element)
 
-    # 模板內可能已有「九、服勤照片」標題（表格內或內文段落），有的話不重複新增
-    has_heading = ('九、服勤照片' in _all_text(main_table)
-                   or any('九、服勤照片' in p.text for p in doc.paragraphs))
-    if not has_heading:
-        doc.add_paragraph()
+    # 頁面尺寸（吋）
+    section = doc.sections[-1]
+    usable_w = (section.page_width - section.left_margin - section.right_margin) / 914400
+    page_h = (section.page_height - section.top_margin - section.bottom_margin) / 914400 - PAGE_SAFETY
+    col_w = usable_w / 2
+    fit_width = col_w - CELL_SIDE_PAD
+    max_portrait_h = (page_h - HEADER_H - 2 * (CAPTION_LINE_H + CAPTION_PAD)) / 2 - PHOTO_ROW_PAD
+    line_chars = fit_width * 72 / 11  # 11pt 全形字寬 = 11pt
+
+    # 模板內可能已有「九、服勤照片」標題（內文段落或主表格內），有的話不重複新增
+    heading_p = next((p for p in doc.paragraphs if '九、服勤照片' in p.text), None)
+    in_table = '九、服勤照片' in _all_text(main_table)
+    anchor = None
+    start_y = 0.0
+    break_on_first_table = False
+
+    if heading_p is not None:
+        # 模板用大量空白段落把標題推到下一頁，改成「標題前換頁」，並清掉標題前後的空白段落
+        prev = heading_p._p.getprevious()
+        while prev is not None and _is_empty_paragraph(prev):
+            body.remove(prev)
+            prev = heading_p._p.getprevious()
+        heading_p.paragraph_format.page_break_before = True
+        while True:
+            last = [e for e in body if e.tag != qn('w:sectPr')][-1]
+            if last is not heading_p._p and _is_empty_paragraph(last):
+                body.remove(last)
+            else:
+                break
+        anchor = heading_p._p
+        start_y = HEADING_H
+    elif in_table:
+        break_on_first_table = True
+    else:
         heading = doc.add_paragraph('九、服勤照片')
+        heading.paragraph_format.page_break_before = True
         heading_run = heading.runs[0]
         heading_run.font.bold = True
         heading_run.font.size = Pt(14)
         set_font_kai(heading_run)
+        start_y = HEADING_H
 
-    for category, photos in photo_files.items():
-        if not photos:
-            continue
+    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings)
+    plan = plan_layout(categories, page_h, start_y, line_chars)
 
+    before = set(body)
+    first_table = True
+    for category, rows in plan.items():
         table = doc.add_table(rows=1, cols=2)
-        header_cell = table.rows[0].cells[0].merge(table.rows[0].cells[1])
+        table.autofit = False
+        header_row = table.rows[0]
+        for cell in header_row.cells:
+            cell.width = Inches(col_w)
+        _mark_row(header_row, 'w:cantSplit', 'w:tblHeader')
+        header_cell = header_row.cells[0].merge(header_row.cells[1])
         header_cell.text = category
         set_cell_border(header_cell)
         for paragraph in header_cell.paragraphs:
+            _tighten(paragraph, keep_with_next=True)
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if first_table and break_on_first_table:
+                paragraph.paragraph_format.page_break_before = True
             for run in paragraph.runs:
                 set_font_kai(run)
                 run.font.bold = True
+        first_table = False
 
-        for i in range(0, len(photos), 2):
-            pair = photos[i:i + 2]
+        for row in rows:
             photo_row = table.add_row()
             caption_row = table.add_row()
-
+            _mark_row(photo_row, 'w:cantSplit')
+            _mark_row(caption_row, 'w:cantSplit')
             for col_idx in range(2):
-                set_cell_border(photo_row.cells[col_idx])
-                set_cell_border(caption_row.cells[col_idx])
+                for r in (photo_row, caption_row):
+                    r.cells[col_idx].width = Inches(col_w)
+                    set_cell_border(r.cells[col_idx])
 
-            for col_idx, photo_path in enumerate(pair):
-                cell = photo_row.cells[col_idx]
-                paragraph = cell.paragraphs[0]
+            for col_idx, item in enumerate(row):
+                paragraph = photo_row.cells[col_idx].paragraphs[0]
+                _tighten(paragraph, keep_with_next=True)  # 照片與說明不分頁
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                name = os.path.basename(photo_path)
-                try:
-                    source = prepare_image(photo_path)
-                    paragraph.add_run().add_picture(source, width=Inches(2.8))
-                    logging.info(f"✓ SUCCESS: 插入照片 {name}")
-                except Exception as e:
-                    logging.error(f"無法插入照片 {name}: {e}")
-                    warnings.append(f"照片「{name}」無法載入：{e}")
-                    run = paragraph.add_run(f"[照片無法載入：{name}]")
-                    set_font_kai(run)
+                if item.source is not None:
+                    paragraph.add_run().add_picture(item.source, width=Inches(item.img_w),
+                                                    height=Inches(item.img_h))
+                    logging.info(f"✓ SUCCESS: 插入照片 {os.path.basename(item.path)}")
+                else:
+                    set_font_kai(paragraph.add_run(f"[照片無法載入：{os.path.basename(item.path)}]"))
 
-                caption = captions.get(category, {}).get(photo_path) or f"[照片{col_idx + 1}說明]"
                 caption_cell = caption_row.cells[col_idx]
-                caption_cell.text = caption
+                caption_cell.text = item.caption
                 for p in caption_cell.paragraphs:
+                    _tighten(p)
                     for r in p.runs:
                         set_font_kai(r)
 
-        doc.add_paragraph()
+        _add_spacer(doc)
         logging.info(f"✓ SUCCESS: 處理完成 {category}")
+
+    if anchor is not None:
+        # 新增的表格/間隔段落原本接在文件最後，搬到標題後面（舊照片表格原本的位置）
+        created = [e for e in body if e not in before and e.tag != qn('w:sectPr')]
+        for element in reversed(created):
+            anchor.addnext(element)
 
 
 def build_report(template_path, data, photo_files, captions, output_path):

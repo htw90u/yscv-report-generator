@@ -68,12 +68,14 @@ class BuildReportTest(unittest.TestCase):
 
     def test_captions(self):
         self.assertIn('自訂說明A', self.text)
-        self.assertIn('[照片2說明]', self.text)
+        self.assertIn('[照片說明]', self.text)
 
     def test_images_and_exif(self):
         self.assertEqual(len(self.doc.inline_shapes), 3)
-        shp = self.doc.inline_shapes[1]
-        self.assertGreater(shp.height, shp.width)  # EXIF 轉正後為直式
+        # 3 張照片中只有 EXIF 旋轉過的 b.jpg 是直式（橫式排前、直式排後，所以是最後一張）
+        portrait = [s for s in self.doc.inline_shapes if s.height > s.width]
+        self.assertEqual(len(portrait), 1)
+        self.assertIs(portrait[0]._inline, self.doc.inline_shapes[2]._inline)
 
     def test_bad_image_warns_not_crashes(self):
         self.assertTrue(any('bad.jpg' in w for w in self.warnings))
@@ -116,11 +118,14 @@ class PrepareImageTest(unittest.TestCase):
 
     def test_small_image_returned_untouched(self):
         p = self.make('s.jpg', (800, 600))
-        self.assertEqual(g.prepare_image(p), p)
+        src, size = g.prepare_image(p)
+        self.assertEqual(src, p)
+        self.assertEqual(size, (800, 600))
 
     def test_large_image_downscaled_keeps_aspect(self):
         p = self.make('l.jpg', (4000, 3000))
-        out = g.prepare_image(p)
+        out, size = g.prepare_image(p)
+        self.assertEqual(size, (g.MAX_IMAGE_WIDTH_PX, round(3000 * g.MAX_IMAGE_WIDTH_PX / 4000)))
         with Image.open(out) as im:
             self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
             self.assertEqual(im.height, round(3000 * g.MAX_IMAGE_WIDTH_PX / 4000))
@@ -129,14 +134,14 @@ class PrepareImageTest(unittest.TestCase):
 
     def test_large_rotated_image_is_rotated_then_scaled(self):
         p = self.make('r.jpg', (4000, 3000), exif_orientation=6)  # 轉正後 3000x4000（直式）
-        with Image.open(g.prepare_image(p)) as im:
+        with Image.open(g.prepare_image(p)[0]) as im:
             self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
             self.assertGreater(im.height, im.width)
 
     def test_large_png_with_alpha_stays_png(self):
         p = os.path.join(self.tmp.name, 'a.png')
         Image.new('RGBA', (3000, 1000), (0, 255, 0, 128)).save(p)
-        with Image.open(g.prepare_image(p)) as im:
+        with Image.open(g.prepare_image(p)[0]) as im:
             self.assertEqual(im.format, 'PNG')
             self.assertEqual(im.width, g.MAX_IMAGE_WIDTH_PX)
 
@@ -150,6 +155,95 @@ class PrepareImageTest(unittest.TestCase):
         out = os.path.join(self.tmp.name, 'o.docx')
         g.build_report(TEMPLATE, data, photos, {}, out)
         self.assertLess(os.path.getsize(out), os.path.getsize(p))
+
+
+def make_item(w, h, caption='c', fit=3.4, max_h=4.7):
+    item = g.PhotoItem(path='x', caption=caption, px_w=w, px_h=h)
+    g.size_photo(item, fit, max_h)
+    return item
+
+
+class LayoutTest(unittest.TestCase):
+    LINE_CHARS = 20
+    PAGE_H = 10.4
+
+    def test_landscape_fits_cell_width(self):
+        item = make_item(4000, 3000)
+        self.assertAlmostEqual(item.img_w, 3.4)
+        self.assertAlmostEqual(item.img_h, 3.4 * 0.75)
+
+    def test_portrait_fits_width_but_is_capped_by_height(self):
+        normal = make_item(3000, 4000)  # 3:4 -> 高 4.53 < 4.7
+        self.assertAlmostEqual(normal.img_w, 3.4)
+        tall = make_item(1000, 3000)  # 1:3 -> 以高度上限縮小
+        self.assertAlmostEqual(tall.img_h, 4.7)
+        self.assertAlmostEqual(tall.img_w, 4.7 / 3)
+
+    def test_groups_by_orientation_two_per_row(self):
+        items = [make_item(4, 3), make_item(3, 4), make_item(4, 3), make_item(3, 4), make_item(4, 3)]
+        plan = g.plan_layout({'a': items}, self.PAGE_H * 2, 0, self.LINE_CHARS)['a']
+        for row in plan:
+            self.assertLessEqual(len(row), 2)
+            self.assertEqual(len({p.landscape for p in row}), 1)  # 同一列同方向
+        kinds = [row[0].landscape for row in plan]
+        self.assertEqual(kinds, sorted(kinds, reverse=True))  # 橫式在前、直式在後
+        self.assertEqual(sum(len(r) for r in plan), 5)
+
+    def test_gap_fill_pulls_row_that_fits(self):
+        # 這頁剩下的空間放不下直式列，但放得下橫式列 -> 橫式列要補進來，而不是留白換頁
+        port = [make_item(3, 4) for _ in range(4)]   # 2 列直式，每列約 4.8
+        land = [make_item(4, 3) for _ in range(2)]   # 1 列橫式，約 2.8
+        plan = g.plan_layout({'a': land[:0] + port + land}, 10.4, 0, self.LINE_CHARS)['a']
+        # 橫式列排在第一列（橫式在前），其後兩列直式放不下就換頁；不應有任何一列被拆開
+        self.assertEqual([len(r) for r in plan], [2, 2, 2])
+
+    def test_shrink_to_fill_page_not_below_min(self):
+        # 4 列橫式約需 4*(2.55+0.32)+0.32 = 11.8 > 10.4，縮到 80% 可放入 -> 全部縮小且總高不超過頁高
+        items = [make_item(4, 3) for _ in range(8)]
+        plan = g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)['a']
+        self.assertEqual(len(plan), 4)
+        scale = items[0].img_w / 3.4
+        self.assertLess(scale, 1.0)
+        self.assertGreaterEqual(scale, g.MIN_PHOTO_SCALE - 1e-9)
+        total = g.HEADER_H + sum(g.row_height(r, self.LINE_CHARS) for r in plan)
+        self.assertLessEqual(total, 10.4 + 1e-6)
+
+    def test_no_shrink_when_it_cannot_help(self):
+        items = [make_item(4, 3) for _ in range(10)]  # 5 列：縮 80% 也放不下第 5 列 -> 換頁
+        plan = g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)['a']
+        self.assertEqual(len(plan), 5)
+        self.assertTrue(all(p.img_w >= 3.4 * g.MIN_PHOTO_SCALE - 1e-9 for p in items))
+
+    def test_caption_height_grows_with_text(self):
+        self.assertLess(g.caption_height('短', 20), g.caption_height('長' * 45, 20))
+
+
+class DocumentStructureTest(BuildReportTest):
+    """沿用 BuildReportTest 產生的文件，檢查模板結構被正確整理。"""
+
+    def test_heading_page_break_and_photos_follow_heading(self):
+        body = list(self.doc.element.body)
+        heading = next(e for e in body if e.tag.endswith('}p') and '九、服勤照片' in ''.join(t.text or '' for t in e.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')))
+        idx = body.index(heading)
+        self.assertTrue(heading.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pageBreakBefore') is not None)
+        self.assertTrue(body[idx + 1].tag.endswith('}tbl'))  # 照片表格緊接在標題後
+        self.assertTrue(body[idx - 1].tag.endswith('}tbl'))  # 標題前的空白填充段落已清掉
+
+    def test_no_long_trailing_empty_paragraphs(self):
+        body = [e for e in self.doc.element.body if not e.tag.endswith('}sectPr')]
+        trailing = 0
+        for e in reversed(body):
+            if e.tag.endswith('}p') and not any((t.text or '').strip() for t in e.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')):
+                trailing += 1
+            else:
+                break
+        self.assertLessEqual(trailing, 1)
+
+    def test_rows_do_not_split_across_pages(self):
+        w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        photo_table = self.doc.tables[-1]
+        self.assertTrue(all(r._tr.find(f'.//{w}cantSplit') is not None for r in photo_table.rows))
+        self.assertIsNotNone(photo_table.rows[0]._tr.find(f'.//{w}tblHeader'))
 
 
 class BulletTest(unittest.TestCase):

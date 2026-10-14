@@ -168,7 +168,7 @@ class GuiTest(unittest.TestCase):
 
     def test_generate_in_thread(self):
         self.fill_dates()
-        self.app.text_fields['nature'].insert('1.0', '看到山羌\n• 已有bullet')
+        self.app.text_fields['nature'].insert('1.0', '看到山羌\n● 已有bullet')
         out = os.path.join(self.tmp.name, 'o.docx')
         opened = []
         with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
@@ -181,7 +181,7 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(self.root.winfo_exists())  # 工具沒有被關掉
         text = '\n'.join(c.text for c in unique_cells(Document(out)))
         self.assertEqual(text.count('看到山羌'), 1)
-        self.assertNotIn('• •', text)
+        self.assertNotIn('● ●', text)
 
     def _add_photo(self, name='d.jpg', caption='說明X'):
         p = os.path.join(self.tmp.name, name)
@@ -419,7 +419,7 @@ class GuiTest(unittest.TestCase):
         w.insert('1.0', 'a\nb\nc')
         w.tag_add(tk.SEL, '1.0', '2.end')
         self.app.apply_list(w, g.toggle_bullets)
-        self.assertEqual(w.get('1.0', 'end-1c'), '• a\n• b\nc')
+        self.assertEqual(w.get('1.0', 'end-1c'), '● a\n● b\nc')
         self.app.apply_list(w, g.toggle_numbers)
         self.assertEqual(w.get('1.0', 'end-1c'), '1. a\n2. b\nc')
         self.app.apply_list(w, g.toggle_numbers)  # 再按一次取消
@@ -430,7 +430,7 @@ class GuiTest(unittest.TestCase):
         w.insert('1.0', 'a\nb')
         w.mark_set(tk.INSERT, '2.1')
         self.app.apply_list(w, g.toggle_bullets)
-        self.assertEqual(w.get('1.0', 'end-1c'), 'a\n• b')
+        self.assertEqual(w.get('1.0', 'end-1c'), 'a\n● b')
 
     def _bullet_menu(self, widget):
         for w in self._all_widgets(self.root):
@@ -476,68 +476,6 @@ class GuiTest(unittest.TestCase):
         self.assertNotIn('1. 編號', buttons)
 
     # ---- 預設照片說明
-    def test_default_caption_is_editable_and_used_in_report(self):
-        self.fill_dates()
-        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
-        cat, lb, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
-        self.app.photo_captions[cat][a] = '有說明'
-        self.app.default_caption.set('  圖說待補  ')
-        data, err = self.app.collect_data()
-        self.assertIsNone(err)
-        self.assertEqual(data['default_caption'], '圖說待補')  # 前後空白會去掉
-        out = os.path.join(self.tmp.name, 'o.docx')
-        g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()},
-                       {c: dict(v) for c, v in self.app.photo_captions.items()}, out)
-        text = '\n'.join(c.text for c in unique_cells(Document(out)))
-        self.assertIn('有說明', text)
-        self.assertIn('圖說待補', text)
-        self.assertNotIn('[照片說明]', text)
-
-    def test_default_caption_can_be_blank(self):
-        self.fill_dates()
-        cat, lb, (a,) = self._photos(names=('a.jpg',))
-        self.app.default_caption.set('')
-        data, _ = self.app.collect_data()
-        out = os.path.join(self.tmp.name, 'o.docx')
-        g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()}, {}, out)
-        self.assertNotIn('[照片說明]', '\n'.join(c.text for c in unique_cells(Document(out))))
-
-    def test_default_caption_saved_in_draft_marks_dirty_and_resets_on_clear(self):
-        self.app._saved_signature = self.app._signature()
-        self.app.default_caption.set('自訂預設')
-        self.assertTrue(self.app.is_dirty())
-        draft = os.path.join(self.tmp.name, 'd.json')
-        self._save_draft_to(draft)
-        self.app.default_caption.set('別的')
-        self._load_draft_from(draft)
-        self.assertEqual(self.app.default_caption.get(), '自訂預設')
-        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
-            self.app.clear_all()
-        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
-
-    def test_default_caption_is_blank_by_default(self):
-        self.assertEqual(g.DEFAULT_CAPTION, '')
-        self.assertEqual(self.app.default_caption.get(), '')
-
-    def test_legacy_default_caption_in_old_draft_becomes_blank(self):
-        import json
-        draft = os.path.join(self.tmp.name, 'legacy.json')
-        self._save_draft_to(draft)
-        with open(draft, encoding='utf-8') as f:
-            data = json.load(f)
-        data['default_caption'] = '[照片說明]'
-        with open(draft, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        self._load_draft_from(draft)
-        self.assertEqual(self.app.default_caption.get(), '')
-
-    def test_caption_hint_text(self):
-        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
-        self.assertIn('（雙擊檔名輸入照片說明）', texts)
-        self.assertFalse(any('可留空' in t for t in texts))
-
-    # ---- 分頁外觀
-    # ---- 填表日期自動帶入（民國）
     def test_roc_date_parts(self):
         import datetime as dt
         self.assertEqual(g.roc_date_parts(dt.datetime(2026, 10, 14)), ('115', '10', '14'))
@@ -853,16 +791,16 @@ class GuiTest(unittest.TestCase):
         """螢幕不夠高、視窗加高也放不下時，改把照片清單縮成較少的列數，並把視窗限制在螢幕高度內。"""
         for listbox in self.app.listboxes.values():
             listbox.configure(height=g.PHOTO_LIST_ROWS)
-        self.root.geometry('1050x820')
+        self.root.geometry('1050x560')
         self.root.update()
         before = self.app._photo_tabs_extra_height()
-        with mock.patch.object(self.root, 'winfo_screenheight', lambda: 930):
+        self.assertGreater(before, 0)
+        with mock.patch.object(self.root, 'winfo_screenheight', lambda: 700):  # 可用高度約 610
             self.app._fit_window_height()
         self.root.update()
         self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS_COMPACT for lb in self.app.listboxes.values()))
-        self.assertLessEqual(self.root.winfo_height(), 930 - 90)
+        self.assertLessEqual(self.root.winfo_height(), 700 - 90)
         self.assertLess(self.app._photo_tabs_extra_height(), before)  # 比原本好（縮小清單 + 加高視窗）
-
     def test_lists_stay_normal_size_when_the_window_can_hold_everything(self):
         """視窗放得下兩個照片分頁時，不需要縮小照片清單。"""
         for lb in self.app.listboxes.values():
@@ -934,7 +872,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(style_lookup(self.root, 'TEntry', 'foreground'), p['text'])
         self.assertEqual(style_lookup(self.root, 'Hint.TLabel', 'foreground'), p['muted'])
         for w in self._all_widgets(self.root):
-            if isinstance(w, ttk.Label) and w.cget('text').startswith(('（點選預覽', '（雙擊檔名')):
+            if isinstance(w, ttk.Label) and w.cget('text') == g.PHOTO_TAB_HINT:
                 self.assertEqual(str(w.cget('style')), 'Hint.TLabel')
             if isinstance(w, (tk.Text, tk.Listbox)):
                 self.assertEqual(str(w.cget('foreground')), p['text'])
@@ -972,6 +910,60 @@ class GuiTest(unittest.TestCase):
                 self.assertEqual(menu_font.cget('family'), g.FONT_FAMILY)
                 found = True
         self.assertTrue(found)
+
+    # ---- 沒有「預設字樣」：沒填說明就是空白
+    def test_no_default_caption_setting_anymore(self):
+        self.assertFalse(hasattr(self.app, 'default_caption'))
+        self.assertFalse(hasattr(g, 'DEFAULT_CAPTION'))
+        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
+        self.assertFalse(any('預設字樣' in x for x in texts))
+        self.assertNotIn('default_caption', self.app.build_draft())
+
+    def test_photos_without_caption_have_blank_caption_cells(self):
+        self.fill_dates()
+        cat, lb, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
+        self.app.photo_captions[cat][a] = '有說明'
+        data, err = self.app.collect_data()
+        self.assertIsNone(err)
+        self.assertNotIn('default_caption', data)
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()},
+                       {c: dict(v) for c, v in self.app.photo_captions.items()}, out)
+        table = Document(out).tables[-1]
+        caption_row = table.rows[2]  # 分類標題列、照片列之後的第一個說明列
+        texts = [c.text for c in caption_row.cells]
+        self.assertEqual(texts, ['有說明', ''])  # 沒填的就是空白，沒有任何佔位字樣
+        self.assertNotIn('[照片說明]', '\n'.join(c.text for c in unique_cells(Document(out))))
+
+    def test_old_draft_with_default_caption_key_still_loads(self):
+        import json
+        draft = os.path.join(self.tmp.name, 'old.json')
+        self._save_draft_to(draft)
+        with open(draft, encoding='utf-8') as f:
+            data = json.load(f)
+        data['default_caption'] = '[照片說明]'  # 舊版草稿留下的欄位
+        with open(draft, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self._load_draft_from(draft)  # 不會出錯，也沒有任何效果
+        self.assertFalse(hasattr(self.app, 'default_caption'))
+
+    def test_single_merged_hint_on_each_photo_tab(self):
+        hints = [w for w in self._all_widgets(self.root)
+                 if isinstance(w, ttk.Label) and w.cget('text') == '（點選預覽、拖曳調整順序、雙擊檔名輸入照片說明）']
+        self.assertEqual(len(hints), 2)  # 兩個照片分頁各一句
+        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
+        self.assertNotIn('（點選預覽、拖曳調整順序）', texts)
+        self.assertNotIn('（雙擊檔名輸入照片說明）', texts)
+
+    # ---- 視窗標題列與分頁之間不要有多餘空白
+    def test_no_extra_blank_space_above_tabs(self):
+        self.root.update()
+        nb = self.app.notebook
+        selected = nb.index(nb.select())
+        x, y, w, h = nb.bbox(selected)
+        top = nb.winfo_rooty() + y - self.root.winfo_rooty()
+        self.assertLessEqual(top, 10, f'分頁上方留白 {top}px 太多')
+        self.assertGreaterEqual(top, 0)
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
@@ -1184,18 +1176,18 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ['selected']), palette['tab_active_fg'])
         self.assertGreaterEqual(int(style.lookup('TNotebook.Tab', 'borderwidth')), 2)
 
-    def test_old_draft_without_default_caption_uses_default(self):
-        import json
-        draft = os.path.join(self.tmp.name, 'old.json')
-        self._save_draft_to(draft)
-        with open(draft, encoding='utf-8') as f:
-            data = json.load(f)
-        data.pop('default_caption')
-        with open(draft, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        self.app.default_caption.set('x')
-        self._load_draft_from(draft)
-        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
+    def test_dropdown_offers_solid_circle_instead_of_small_dot(self):
+        w = self.app.text_fields['nature']
+        menu = self._bullet_menu(w)
+        labels = [menu.entrycget(i, 'label') for i in range(menu.index('end') + 1) if menu.type(i) == 'command']
+        self.assertTrue(any(lbl.startswith('●') and '實心圓形' in lbl for lbl in labels))
+        self.assertFalse(any('•' in lbl or '圓點' in lbl for lbl in labels))
+        idx = [i for i in range(menu.index('end') + 1) if menu.type(i) == 'command'
+               and menu.entrycget(i, 'label').startswith('●')][0]
+        w.insert('1.0', 'a')
+        w.tag_add(tk.SEL, '1.0', 'end-1c')
+        menu.invoke(idx)
+        self.assertEqual(w.get('1.0', 'end-1c'), '● a')
 
     def test_enter_keeps_the_chosen_symbol(self):
         w = self.app.text_fields['nature']

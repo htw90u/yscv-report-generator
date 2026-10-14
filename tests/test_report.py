@@ -37,7 +37,7 @@ class BuildReportTest(unittest.TestCase):
         with open(cls.p4, 'wb') as f:
             f.write(b'not an image')
 
-        data = {k: f'內容_{k}\n• 第二行_{k}' for k in g.FIELD_NAMES}
+        data = {k: f'內容_{k}\n● 第二行_{k}' for k in g.FIELD_NAMES}
         data.update(year='115', month='10', day='12', personnel='王小明', start_year='115',
                     start_month='10', start_day='10', end_year='115', end_month='10', end_day='11',
                     location='排雲山莊')
@@ -64,21 +64,7 @@ class BuildReportTest(unittest.TestCase):
         self.assertIn('115年10月10日至115年10月11日', self.text)
 
     def test_no_double_bullet(self):
-        self.assertNotIn('• •', self.text)
-
-    def test_default_caption_text_is_configurable(self):
-        with tempfile.TemporaryDirectory() as d:
-            photos = {c: [] for c in g.PHOTO_CATEGORIES}
-            photos['其他'] = [self.p1]
-            data = {k: '' for k in g.FIELD_NAMES}
-            data.update(year='1', month='1', day='1', start_year='1', start_month='1', start_day='1',
-                        end_year='1', end_month='1', end_day='1', personnel='', location='',
-                        default_caption='請補充說明')
-            out = os.path.join(d, 'o.docx')
-            g.build_report(TEMPLATE, data, photos, {}, out)
-            text = '\n'.join(c.text for c in unique_cells(Document(out)))
-            self.assertIn('請補充說明', text)
-            self.assertNotIn('[照片說明]', text)
+        self.assertNotIn('● ●', self.text)
 
     def test_captions(self):
         self.assertIn('自訂說明A', self.text)
@@ -322,23 +308,38 @@ class ContentLinesTest(unittest.TestCase):
     def test_lines_are_kept_as_typed(self):
         # 項目符號/編號由使用者在編輯區自己加，填表時不再自動補符號
         self.assertEqual(g.content_lines(''), [''])
-        self.assertEqual(g.content_lines(' a \n\n• b\n1. c'), ['a', '', '• b', '1. c'])
+        self.assertEqual(g.content_lines(' a \n\n● b\n1. c'), ['a', '', '● b', '1. c'])
 
 
 class ListToolsTest(unittest.TestCase):
     def test_toggle_bullets_add_and_remove(self):
         lines = ['a', '', 'b']
         added = g.toggle_bullets(lines)
-        self.assertEqual(added, ['• a', '', '• b'])
+        self.assertEqual(added, ['● a', '', '● b'])
         self.assertEqual(g.toggle_bullets(added), ['a', '', 'b'])
 
     def test_toggle_bullets_mixed_selection_adds_to_all(self):
-        self.assertEqual(g.toggle_bullets(['• a', 'b']), ['• a', '• b'])
+        self.assertEqual(g.toggle_bullets(['● a', 'b']), ['● a', '● b'])
 
     def test_toggle_numbers_sequence_skips_blank_lines(self):
         numbered = g.toggle_numbers(['a', '', 'b', 'c'])
         self.assertEqual(numbered, ['1. a', '', '2. b', '3. c'])
         self.assertEqual(g.toggle_numbers(numbered), ['a', '', 'b', 'c'])
+
+    def test_default_bullet_is_solid_circle_and_dot_is_gone_from_menu(self):
+        self.assertEqual(g.BULLET_CHOICES[0], ('●', '實心圓形'))
+        self.assertEqual([name for _, name in g.BULLET_CHOICES], ['實心圓形', '實心菱形', '實心方塊'])
+        self.assertNotIn('•', g.BULLET_SYMBOLS)
+        self.assertEqual(g.toggle_bullets(['a']), ['● a'])
+
+    def test_legacy_small_dot_is_still_recognised(self):
+        self.assertTrue(g.LIST_MARKER_RE.match('• 舊的項目'))
+        self.assertEqual(g.strip_list_marker('• 舊的項目'), '舊的項目')
+        self.assertEqual(g.toggle_bullets(['• a', 'b']), ['● a', '● b'])  # 改選實心圓形會把舊的小圓點換掉
+        self.assertEqual(g.continue_list('• 舊的項目'), ('continue', '• '))
+        ind = g._build_content_paragraph('• 舊的項目').find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pPr').find(
+            '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}ind')
+        self.assertEqual(ind.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hanging'), '240')
 
     def test_bullet_with_chosen_symbol(self):
         added = g.toggle_bullets(['a', '', 'b'], '◆')
@@ -346,7 +347,7 @@ class ListToolsTest(unittest.TestCase):
         self.assertEqual(g.toggle_bullets(added, '◆'), ['a', '', 'b'])  # 同一個符號再選一次 = 取消
 
     def test_choosing_another_symbol_replaces_the_old_one(self):
-        self.assertEqual(g.toggle_bullets(['◆ a', '• b', '1. c'], '■'), ['■ a', '■ b', '■ c'])
+        self.assertEqual(g.toggle_bullets(['◆ a', '● b', '1. c'], '■'), ['■ a', '■ b', '■ c'])
 
     def test_remove_list_markers(self):
         self.assertEqual(g.remove_list_markers(['◆ a', '', '2. b', '- c', '一般']), ['a', '', 'b', 'c', '一般'])
@@ -367,13 +368,13 @@ class ListToolsTest(unittest.TestCase):
         self.assertTrue(g.LIST_MARKER_RE.match('- 項目'))
 
     def test_switch_between_bullets_and_numbers(self):
-        self.assertEqual(g.toggle_numbers(['• a', '• b']), ['1. a', '2. b'])
-        self.assertEqual(g.toggle_bullets(['1. a', '2. b']), ['• a', '• b'])
+        self.assertEqual(g.toggle_numbers(['● a', '● b']), ['1. a', '2. b'])
+        self.assertEqual(g.toggle_bullets(['1. a', '2. b']), ['● a', '● b'])
 
     def test_continue_list(self):
-        self.assertEqual(g.continue_list('• 山屋正常'), ('continue', '• '))
+        self.assertEqual(g.continue_list('● 山屋正常'), ('continue', '● '))
         self.assertEqual(g.continue_list('2. 水塔滿水'), ('continue', '3. '))
-        self.assertEqual(g.continue_list('• '), ('end', ''))
+        self.assertEqual(g.continue_list('● '), ('end', ''))
         self.assertEqual(g.continue_list('3. '), ('end', ''))
         self.assertEqual(g.continue_list('一般文字'), (None, ''))
 
@@ -447,7 +448,7 @@ class FormattingTest(BuildReportTest):
         self.assertEqual(run.font.size.pt, 14)
 
     def test_content_paragraph_format(self):
-        _, p = self._paragraphs('• 第二行_road_status')  # 使用者自己加的項目符號
+        _, p = self._paragraphs('● 第二行_road_status')  # 使用者自己加的項目符號
         run = p.runs[0]
         self.assertEqual(run.font.size.pt, 12)
         self.assertEqual(run._r.rPr.rFonts.get(self.W + 'eastAsia'), '標楷體')
@@ -458,8 +459,8 @@ class FormattingTest(BuildReportTest):
         self.assertEqual(ind.get(self.W + 'hanging'), '240')
 
     def test_plain_line_has_no_hanging_indent_and_no_auto_bullet(self):
-        _, p = self._paragraphs('內容_road_status')  # 使用者沒加符號 -> 不會被自動加上「• 」
-        self.assertFalse(p.text.startswith('•'))
+        _, p = self._paragraphs('內容_road_status')  # 使用者沒加符號 -> 不會被自動加上「● 」
+        self.assertFalse(p.text.startswith('●'))
         ind = p._p.pPr.find(self.W + 'ind')
         self.assertEqual(ind.get(self.W + 'left'), '480')
         self.assertIsNone(ind.get(self.W + 'hanging'))

@@ -67,8 +67,6 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
 
-DEFAULT_CAPTION = ''  # 照片沒有填說明時，文件中顯示的預設字樣（預設空白，可在照片分頁修改）
-LEGACY_DEFAULT_CAPTION = '[照片說明]'  # 舊版預設值；載入舊草稿時視為「沒改過」，改成空白
 # 外觀主題。每個主題：表單背景、分頁（閒置/目前/滑過）、主要按鈕（產生報告）、危險按鈕（清除）。
 # 主要與危險按鈕都是「淺底深字」，文字與底色的對比度都達到 WCAG AA（4.5:1 以上）。
 THEMES = {
@@ -132,6 +130,7 @@ FIELD_TAB = {
     'nature': TAB_NATURE, 'environment': TAB_NATURE, 'violation': TAB_NATURE,
     'feedback': TAB_FEEDBACK, 'reflection': TAB_FEEDBACK, 'questions': TAB_FEEDBACK,
 }
+PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序、雙擊檔名輸入照片說明）"
 PHOTO_TAB_TITLES = ("服勤照片(上)", "服勤照片(下)")
 PHOTO_LIST_ROWS = 5          # 照片清單預設顯示的列數
 PHOTO_LIST_ROWS_COMPACT = 3  # 螢幕高度不夠時改用的列數
@@ -166,14 +165,15 @@ FIELD_NAMES = {
 # ---------------------------------------------------------------- 文件處理（不依賴 tkinter）
 
 # 下拉選單提供的項目符號：(符號, 名稱)
-BULLET_CHOICES = [('•', '圓點'), ('◆', '實心菱形'), ('■', '實心方塊')]
+BULLET_CHOICES = [('●', '實心圓形'), ('◆', '實心菱形'), ('■', '實心方塊')]
+LEGACY_BULLET_SYMBOLS = ['•']  # 舊版的小圓點：仍視為項目符號（按 Enter 會接續同一個符號），但選單不再提供
 BULLET_SYMBOLS = [sym for sym, _ in BULLET_CHOICES]
 # 其他常見符號（使用者自己貼上的）也當成項目符號處理；連字號類必須後面接空白，避免把「-3度」「—」誤判
 _SYMBOL_CHARS = '•·‧◆◇■□●○★☆▲△▼▽※＊*'
 _MARKER_PATTERN = rf'(?:[{_SYMBOL_CHARS}]|[-–—](?=\s))'
 LIST_MARKER_RE = re.compile(rf'^(?:{_MARKER_PATTERN}|\d+\s*[.、)）]|[一二三四五六七八九十]+、)')
 NUMBER_MARKER_RE = re.compile(r'^\d+\s*[.、)）]')
-BULLET = '• '
+BULLET = BULLET_SYMBOLS[0] + ' '
 
 
 def content_lines(text):
@@ -219,7 +219,7 @@ def toggle_numbers(lines):
 def continue_list(text_before_cursor):
     """在項目符號/編號的行按 Enter：回傳 ('continue', 下一行前綴)、('end', '')（空項目，結束清單）或 (None, '')。"""
     line = text_before_cursor.lstrip()
-    symbol = next((sym for sym in BULLET_SYMBOLS if line.startswith(sym)), None)
+    symbol = next((sym for sym in BULLET_SYMBOLS + LEGACY_BULLET_SYMBOLS if line.startswith(sym)), None)
     if symbol and (symbol != '-' or line[1:2].isspace()):
         rest, prefix = line[len(symbol):].strip(), f'{symbol} '
     else:
@@ -611,13 +611,13 @@ def _mark_row(row, *flags):
         trPr.append(OxmlElement(flag))
 
 
-def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, default_caption=DEFAULT_CAPTION):
+def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
     """載入照片並計算尺寸。載入失敗的照片以文字佔位，不中斷整份報告。"""
     categories = {}
     for category, paths in photo_files.items():
         items = []
         for path in paths:
-            caption = captions.get(category, {}).get(path) or default_caption
+            caption = captions.get(category, {}).get(path, '')  # 沒填說明就是空白
             item = PhotoItem(path=path, caption=caption)
             name = os.path.basename(path)
             try:
@@ -632,7 +632,7 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, def
     return categories
 
 
-def _add_photo_section(doc, main_table, photo_files, captions, warnings, default_caption=DEFAULT_CAPTION):
+def _add_photo_section(doc, main_table, photo_files, captions, warnings):
     body = doc.element.body
 
     # 只刪除內容含「照片」的舊照片表格，避免誤刪其他表格
@@ -682,7 +682,7 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings, default
         set_font_kai(heading_run)
         start_y = HEADING_H
 
-    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, default_caption)
+    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings)
     sequence = plan_layout(categories, page_h, start_y, line_chars)
 
     # 連續同分類的列合成一張表格（跨頁時由 tblHeader 重複標題列）
@@ -843,8 +843,7 @@ def build_report(template_path, data, photo_files, captions, output_path):
     main_table = doc.tables[0]
 
     warnings = _fill_main_table(main_table, data)
-    _add_photo_section(doc, main_table, photo_files, captions, warnings,
-                       data.get('default_caption', DEFAULT_CAPTION))
+    _add_photo_section(doc, main_table, photo_files, captions, warnings)
     doc.save(output_path)
     return warnings
 
@@ -964,7 +963,6 @@ class ReportGeneratorGUI:
         self._setup_style()
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
-        self.default_caption = tk.StringVar(master=root, value=DEFAULT_CAPTION)
         self.root.title(APP_TITLE)
         self.root.geometry("1050x820")
 
@@ -1072,7 +1070,7 @@ class ReportGeneratorGUI:
         style.configure('Hint.TLabel', foreground=p['muted'])
         style.configure('List.TMenubutton', foreground=p['text'], font=(self.font_family, self._list_menu_pt()))
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
-                        darkcolor=p['border'], borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
+                        darkcolor=p['border'], borderwidth=2, tabmargins=(4, 4, 4, 0), tabposition='nw')
         style.configure('TNotebook.Tab', padding=TAB_PADDING, background=p['tab_idle'], foreground=p['tab_idle_fg'],
                         bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'], borderwidth=2)
         style.map('TNotebook.Tab',
@@ -1121,7 +1119,7 @@ class ReportGeneratorGUI:
             self._recolor(child)
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(self.root, padding=(10, 2, 10, 10))
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         self.root.columnconfigure(0, weight=1)
@@ -1130,7 +1128,7 @@ class ReportGeneratorGUI:
 
         row = 0
         notebook = ttk.Notebook(main_frame)
-        notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         main_frame.rowconfigure(row, weight=1)
 
         self.create_basic_info_tab(notebook)
@@ -1352,20 +1350,14 @@ class ReportGeneratorGUI:
         inner = self.make_scrollable_tab(notebook, title)
         ttk.Label(inner, text=heading, style='Heading.TLabel').grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
-        ttk.Label(inner, text="（點選預覽、拖曳調整順序）", style='Hint.TLabel').grid(
+        ttk.Label(inner, text=PHOTO_TAB_HINT, style='Hint.TLabel').grid(
             row=0, column=0, sticky=tk.E)
 
-        caption_row = ttk.Frame(inner)
-        caption_row.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
-        ttk.Label(caption_row, text="未填說明時的預設字樣：").pack(side=tk.LEFT)
-        ttk.Entry(caption_row, textvariable=self.default_caption, width=24).pack(side=tk.LEFT, padx=5)
-        ttk.Label(caption_row, text="（雙擊檔名輸入照片說明）", style='Hint.TLabel').pack(side=tk.LEFT)
-
         preview = PhotoPreview(inner, self.font_family)
-        preview.grid(row=2, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
+        preview.grid(row=1, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
 
         for idx, category in enumerate(categories):
-            row = idx * 2 + 2
+            row = idx * 2 + 1
             ttk.Label(inner, text=category, style='Field.TLabel').grid(
                 row=row, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -1519,7 +1511,6 @@ class ReportGeneratorGUI:
             listbox.delete(0, tk.END)
         for preview in set(self.previews.values()):
             preview.clear()
-        self.default_caption.set(DEFAULT_CAPTION)
 
     def clear_all(self):
         if self.is_dirty():
@@ -1544,7 +1535,6 @@ class ReportGeneratorGUI:
             'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
             'photos': {c: list(p) for c, p in self.photo_files.items()},
             'captions': {c: dict(v) for c, v in self.photo_captions.items()},
-            'default_caption': self.default_caption.get(),
         }
 
     def apply_draft(self, draft):
@@ -1556,8 +1546,6 @@ class ReportGeneratorGUI:
 
         for name in ENTRY_FIELDS:
             getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
-        default_caption = str(draft.get('default_caption', DEFAULT_CAPTION))
-        self.default_caption.set(DEFAULT_CAPTION if default_caption == LEGACY_DEFAULT_CAPTION else default_caption)
         self._fill_report_date()  # 草稿裡有日期就沿用（第一次填表的日期）；沒有才補上今天
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
@@ -1746,7 +1734,6 @@ class ReportGeneratorGUI:
 
         for key, widget in self.text_fields.items():
             data[key] = widget.get('1.0', tk.END).strip()
-        data['default_caption'] = self.default_caption.get().strip()
         return data, None
 
     def find_blank_fields(self, data):

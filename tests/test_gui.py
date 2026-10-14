@@ -1014,6 +1014,20 @@ class GuiTest(unittest.TestCase):
         self.assertLessEqual(gap, 16, f'分頁框與按鈕列之間有 {gap}px 空白')
         self.assertGreaterEqual(gap, 0)
 
+    def test_add_photos_button_label(self):
+        labels = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Button)]
+        self.assertEqual(labels.count('加入照片'), len(g.PHOTO_CATEGORIES))  # 每個分類一個
+        self.assertNotIn('選擇照片', labels)
+        self.assertEqual(labels.count('移除選取'), len(g.PHOTO_CATEGORIES))
+        self.assertEqual(labels.count('清除全部'), len(g.PHOTO_CATEGORIES))
+
+    def test_add_photos_dialog_title(self):
+        titles = []
+        cat = g.PHOTO_CATEGORIES_1[0]
+        with mock.patch.object(filedialog, 'askopenfilenames', lambda **k: titles.append(k['title']) or ()):
+            self.app.select_photos(cat, self.app.listboxes[cat])
+        self.assertEqual(titles, [f'加入照片 - {cat}'])
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -1093,7 +1107,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(blanks, {
             '基本資料': ['協勤地點'],
             '道路/步道': ['2、道路、步道雜草情形'],
-            '服勤照片(下)': ['其他（尚未選擇照片）'],
+            '服勤照片(下)': ['其他（尚未加入照片）'],
         })
 
     def test_whitespace_only_counts_as_blank(self):

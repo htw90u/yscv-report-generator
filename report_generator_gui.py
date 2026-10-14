@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 玉山保育巡查回報單生成器 - GUI版本
-提供圖形化介面供使用者輸入資料並選擇照片
+提供圖形化介面供使用者輸入資料並加入照片
 """
 
 import base64
@@ -1385,7 +1385,7 @@ class ReportGeneratorGUI:
 
             btn_frame = ttk.Frame(list_frame)
             btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
-            ttk.Button(btn_frame, text="選擇照片",
+            ttk.Button(btn_frame, text="加入照片",
                        command=lambda c=category, lb=listbox: self.select_photos(c, lb)).pack(side=tk.LEFT, padx=2)
             ttk.Button(btn_frame, text="移除選取",
                        command=lambda c=category, lb=listbox: self.remove_photos(c, lb)).pack(side=tk.LEFT, padx=2)
@@ -1451,7 +1451,7 @@ class ReportGeneratorGUI:
 
     def select_photos(self, category, listbox):
         filepaths = filedialog.askopenfilenames(
-            title=f"選擇照片 - {category}",
+            title=f"加入照片 - {category}",
             filetypes=[
                 ("圖片檔案", "*.jpg *.jpeg *.png *.gif *.bmp"),
                 ("所有檔案", "*.*")
@@ -1761,7 +1761,7 @@ class ReportGeneratorGUI:
         for tab_title, categories in zip(PHOTO_TAB_TITLES, (PHOTO_CATEGORIES_1, PHOTO_CATEGORIES_2)):
             for category in categories:
                 if not self.photo_files[category]:
-                    add(tab_title, f"{category}（尚未選擇照片）")
+                    add(tab_title, f"{category}（尚未加入照片）")
         order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, *PHOTO_TAB_TITLES]
         return {tab: blanks[tab] for tab in order if tab in blanks}
 

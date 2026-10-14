@@ -877,6 +877,46 @@ class GuiTest(unittest.TestCase):
             with self.subTest(tab=title):
                 self.assertLessEqual(inner.winfo_reqwidth(), canvas.winfo_width())
 
+    def _linespace(self, widget):
+        import tkinter.font as tkfont
+        return tkfont.Font(root=self.root, font=widget.cget('font')).metrics('linespace')
+
+    def test_long_section_titles_stay_on_one_line(self):
+        """三、四、五、八 這些很長的標題，在預設視窗寬度下要一行顯示（不能被固定寬度截斷換行）。"""
+        nb = self.app.notebook
+        long_titles = ('三、', '四、', '五、', '八、')
+        found = []
+        for tab_index in (3, 4):  # 自然資源與遊客、意見與心得建議
+            nb.select(tab_index)
+            self.root.update()
+            tab = nb.nametowidget(nb.tabs()[tab_index])
+            for w in self._all_widgets(tab):
+                if isinstance(w, ttk.Label) and w.cget('text').startswith(long_titles):
+                    found.append(w)
+                    with self.subTest(title=w.cget('text')[:8]):
+                        self.assertLessEqual(w.winfo_reqheight(), self._linespace(w) + 6,
+                                             '標題被換成兩行了：' + w.cget('text')[:12])
+        self.assertEqual(len(found), 4)
+
+    def test_section_title_wraps_only_when_window_is_too_narrow_and_dropdown_stays_visible(self):
+        nb = self.app.notebook
+        nb.select(3)
+        self.root.update()
+        tab = nb.nametowidget(nb.tabs()[3])
+        title = next(w for w in self._all_widgets(tab)
+                     if isinstance(w, ttk.Label) and w.cget('text').startswith('三、'))
+        button = next(w for w in title.master.winfo_children() if isinstance(w, ttk.Menubutton))
+        original = self.root.winfo_height()
+        try:
+            self.root.geometry(f'620x{original}')
+            self.root.update()
+            self.assertGreater(title.winfo_reqheight(), self._linespace(title) + 6)  # 太窄時才換行
+            header = title.master
+            self.assertLessEqual(button.winfo_x() + button.winfo_width(), header.winfo_width())  # 下拉按鈕沒被擠出去
+        finally:
+            self.root.geometry(f'1050x{original}')
+            self.root.update()
+
     def test_font_is_chocolate_classical_sans(self):
         self.assertEqual(g.FONT_FAMILY, 'Chocolate Classical Sans')
         self.assertEqual(g.FONT_FILES, ('ChocolateClassicalSans-Regular.ttf',))

@@ -987,7 +987,7 @@ class ReportGeneratorGUI:
         for title in PHOTO_TAB_TITLES:
             canvas, inner, _ = self._scroll_tabs[title]
             self.notebook.select(self._tab_by_title(title))
-            self.root.update_idletasks()
+            self.root.update()
             extra = max(extra, inner.winfo_reqheight() - canvas.winfo_height())
         self.notebook.select(current)
         return max(0, extra)
@@ -1001,7 +1001,7 @@ class ReportGeneratorGUI:
             height = root.winfo_height() + grow
             top = max(0, min(root.winfo_y(), root.winfo_screenheight() - height - 90))
             root.geometry(f"{root.winfo_width()}x{height}+{root.winfo_x()}+{top}")
-            root.update_idletasks()
+            root.update()
         return max(0, extra - grow)
 
     def _fit_window_height(self):
@@ -1014,7 +1014,7 @@ class ReportGeneratorGUI:
         if extra > 0:  # 螢幕高度不夠：縮小每個照片清單的列數，省下空間
             for listbox in self.listboxes.values():
                 listbox.configure(height=PHOTO_LIST_ROWS_COMPACT)
-            self.root.update_idletasks()
+            self.root.update()
             extra = self._photo_tabs_extra_height()
             if extra > 0:
                 self._grow_window(extra)
@@ -1239,17 +1239,22 @@ class ReportGeneratorGUI:
         row_idx = 0
         for label, key in fields:
             if key is None:
-                ttk.Label(inner, text=label, font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'), wraplength=880).grid(
-                    row=row_idx, column=0, sticky=tk.W, pady=(15, 5))
+                heading = ttk.Label(inner, text=label, font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'))
+                heading.grid(row=row_idx, column=0, sticky=tk.W, pady=(15, 5))
+                inner.bind('<Configure>', lambda e, lbl=heading: lbl.configure(wraplength=max(300, e.width - 30)), add='+')
                 row_idx += 1
                 continue
             header = ttk.Frame(inner)
             header.grid(row=row_idx, column=0, sticky=(tk.W, tk.E), pady=(10, 2))
             header.columnconfigure(0, weight=1)
-            ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
-                row=0, column=0, sticky=tk.W)
+            title_label = ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'))
+            title_label.grid(row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
-            self._make_list_menu(header, text_widget).grid(row=0, column=1, padx=2)
+            menu_button = self._make_list_menu(header, text_widget)
+            menu_button.grid(row=0, column=1, padx=2)
+            # 標題先給它整行的寬度（扣掉右邊的下拉按鈕）；放得下就一行，視窗太窄才自動換行
+            header.bind('<Configure>', lambda e, lbl=title_label, btn=menu_button: lbl.configure(
+                wraplength=max(240, e.width - btn.winfo_reqwidth() - 24)))
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget

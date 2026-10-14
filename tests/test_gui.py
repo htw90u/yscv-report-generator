@@ -58,7 +58,7 @@ class GuiTest(unittest.TestCase):
         self.assertIn('日期', self.shown[-1][1])
         self.fill_dates(month='2', day='30')
         self.app.generate_report()
-        self.assertIn('年月日', self.shown[-1][1])
+        self.assertIn('填表日期', self.shown[-1][1])
         self.fill_dates(start_day='5', end_day='1')
         self.app.generate_report()
         self.assertIn('起日', self.shown[-1][1])
@@ -508,7 +508,7 @@ class GuiTest(unittest.TestCase):
         self.assertFalse(any('可留空' in t for t in texts))
 
     # ---- 分頁外觀
-    # ---- 年月日自動帶入（民國）
+    # ---- 填表日期自動帶入（民國）
     def test_roc_date_parts(self):
         import datetime as dt
         self.assertEqual(g.roc_date_parts(dt.datetime(2026, 10, 14)), ('115', '10', '14'))
@@ -522,8 +522,9 @@ class GuiTest(unittest.TestCase):
         with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14, 9, 30)):
             self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
         self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '10', '14'))
-        self.assertIn('自動', [w.cget('text') for w in self._all_widgets(self.root)
-                             if isinstance(w, ttk.Label) and '年月日' in w.cget('text')][0])
+        labels = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
+        self.assertIn('1. 填表日期:', labels)
+        self.assertFalse(any('年月日' in t for t in labels))
 
     def test_auto_date_alone_is_not_unsaved_content(self):
         self.assertTrue(self.app.year.get())

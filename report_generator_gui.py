@@ -58,7 +58,7 @@ DRAFT_VERSION = 1
 DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 30_000  # 每 30 秒檢查一次，有變動才寫檔
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
-REPORT_DATE_FIELDS = ('year', 'month', 'day')  # 「年月日」：自動帶入第一次填表的日期
+REPORT_DATE_FIELDS = ('year', 'month', 'day')  # 「填表日期」：自動帶入第一次填表的日期
 ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
@@ -1055,7 +1055,7 @@ class ReportGeneratorGUI:
             setattr(self, f'{prefix}day', d)
 
         row = 0
-        ttk.Label(frame, text="1. 年月日（自動）:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="1. 填表日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_frame, '', "日")
@@ -1413,7 +1413,7 @@ class ReportGeneratorGUI:
 
     # ---- 未存內容偵測、自動存檔、關閉提示
     def _fill_report_date(self):
-        """「年月日」自動帶入第一次填表的日期（今天，民國格式）。已經有日期（例如載入草稿）就不動。"""
+        """「填表日期」自動帶入第一次填表的日期（今天，民國格式）。已經有日期（例如載入草稿）就不動。"""
         if any(getattr(self, name).get().strip() for name in REPORT_DATE_FIELDS):
             return
         for name, value in zip(REPORT_DATE_FIELDS, roc_date_parts()):
@@ -1422,7 +1422,7 @@ class ReportGeneratorGUI:
     def _signature(self, with_report_date=True):
         """目前內容的指紋（不含存檔時間），用來判斷內容是否改變。
 
-        with_report_date=False 時不含自動帶入的「年月日」，用來判斷畫面是不是空白。
+        with_report_date=False 時不含自動帶入的「填表日期」，用來判斷畫面是不是空白。
         """
         draft = self.build_draft()
         draft.pop('saved_at')
@@ -1527,7 +1527,7 @@ class ReportGeneratorGUI:
         }
 
         dates = {}
-        for label, prefix in [("年月日", ''), ("協勤日期（起）", 'start_'), ("協勤日期（迄）", 'end_')]:
+        for label, prefix in [("填表日期", ''), ("協勤日期（起）", 'start_'), ("協勤日期（迄）", 'end_')]:
             try:
                 dates[prefix] = datetime(int(data[prefix + 'year']), int(data[prefix + 'month']),
                                          int(data[prefix + 'day']))

@@ -58,6 +58,7 @@ DRAFT_VERSION = 1
 DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 30_000  # 每 30 秒檢查一次，有變動才寫檔
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
+REPORT_DATE_FIELDS = ('year', 'month', 'day')  # 「年月日」：自動帶入第一次填表的日期
 ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
@@ -716,6 +717,17 @@ def open_file(path):
         logging.error(f"無法自動開啟 {path}: {e}")
 
 
+def current_date():
+    """今天的日期（獨立成函式，方便測試時替換）。"""
+    return datetime.now()
+
+
+def roc_date_parts(day=None):
+    """回傳 (民國年, 月, 日) 的字串，例如 2026-10-14 -> ('115', '10', '14')。"""
+    day = day or current_date()
+    return str(day.year - 1911), str(day.month), str(day.day)
+
+
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
 
@@ -901,11 +913,12 @@ class ReportGeneratorGUI:
 
         self._ui_queue = queue.Queue()
         self.create_widgets()
+        self._fill_report_date()
         self._drain_ui_queue()
 
         # 草稿狀態：與「上次儲存」或「空白」比較，判斷是否有未存內容
         self._saved_signature = self._signature()
-        self._blank_signature = self._saved_signature
+        self._blank_signature = self._signature(with_report_date=False)
         self._last_autosave_signature = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
@@ -1042,7 +1055,7 @@ class ReportGeneratorGUI:
             setattr(self, f'{prefix}day', d)
 
         row = 0
-        ttk.Label(frame, text="1. 年月日:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="1. 年月日（自動）:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_frame, '', "日")
@@ -1310,6 +1323,7 @@ class ReportGeneratorGUI:
         if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):
             return
         self._clear_widgets()
+        self._fill_report_date()
         self.status_label.config(text="已清除所有資料")
 
     # ---- 草稿存檔
@@ -1336,6 +1350,7 @@ class ReportGeneratorGUI:
             getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
         default_caption = str(draft.get('default_caption', DEFAULT_CAPTION))
         self.default_caption.set(DEFAULT_CAPTION if default_caption == LEGACY_DEFAULT_CAPTION else default_caption)
+        self._fill_report_date()  # 草稿裡有日期就沿用（第一次填表的日期）；沒有才補上今天
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 
@@ -1397,10 +1412,23 @@ class ReportGeneratorGUI:
             messagebox.showinfo("草稿已載入", "⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings))
 
     # ---- 未存內容偵測、自動存檔、關閉提示
-    def _signature(self):
-        """目前內容的指紋（不含存檔時間與模板路徑），用來判斷內容是否改變。"""
+    def _fill_report_date(self):
+        """「年月日」自動帶入第一次填表的日期（今天，民國格式）。已經有日期（例如載入草稿）就不動。"""
+        if any(getattr(self, name).get().strip() for name in REPORT_DATE_FIELDS):
+            return
+        for name, value in zip(REPORT_DATE_FIELDS, roc_date_parts()):
+            getattr(self, name).insert(0, value)
+
+    def _signature(self, with_report_date=True):
+        """目前內容的指紋（不含存檔時間），用來判斷內容是否改變。
+
+        with_report_date=False 時不含自動帶入的「年月日」，用來判斷畫面是不是空白。
+        """
         draft = self.build_draft()
         draft.pop('saved_at')
+        if not with_report_date:
+            for name in REPORT_DATE_FIELDS:
+                draft['fields'].pop(name, None)
         return json.dumps(draft, ensure_ascii=False, sort_keys=True)
 
     def is_dirty(self):
@@ -1409,7 +1437,7 @@ class ReportGeneratorGUI:
     def autosave_now(self):
         """有未存且非空白的內容時，寫入自動存檔。回傳是否有寫入。"""
         signature = self._signature()
-        if (signature == self._saved_signature or signature == self._blank_signature
+        if (signature == self._saved_signature or self._signature(with_report_date=False) == self._blank_signature
                 or signature == self._last_autosave_signature):
             return False
         tmp_path = self.autosave_path + '.tmp'
@@ -1471,7 +1499,7 @@ class ReportGeneratorGUI:
                 return
             if answer is False:
                 # 不存草稿離開：保留自動存檔（先補存最新內容；畫面已是空白就不留舊內容）
-                if self._signature() == self._blank_signature:
+                if self._signature(with_report_date=False) == self._blank_signature:
                     self._remove_autosave()
                 else:
                     self.autosave_now()

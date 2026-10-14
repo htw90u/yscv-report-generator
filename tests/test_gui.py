@@ -508,6 +508,87 @@ class GuiTest(unittest.TestCase):
         self.assertFalse(any('可留空' in t for t in texts))
 
     # ---- 分頁外觀
+    # ---- 年月日自動帶入（民國）
+    def test_roc_date_parts(self):
+        import datetime as dt
+        self.assertEqual(g.roc_date_parts(dt.datetime(2026, 10, 14)), ('115', '10', '14'))
+        self.assertEqual(g.roc_date_parts(dt.datetime(2027, 1, 5)), ('116', '1', '5'))
+        self.assertEqual(g.roc_date_parts(dt.datetime(2012, 12, 31)), ('101', '12', '31'))
+
+    def test_new_form_gets_todays_roc_date(self):
+        import datetime as dt
+        self.root.destroy()
+        self.root = tk.Tk()
+        with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14, 9, 30)):
+            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+        self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '10', '14'))
+        self.assertIn('自動', [w.cget('text') for w in self._all_widgets(self.root)
+                             if isinstance(w, ttk.Label) and '年月日' in w.cget('text')][0])
+
+    def test_auto_date_alone_is_not_unsaved_content(self):
+        self.assertTrue(self.app.year.get())
+        self.assertFalse(self.app.is_dirty())
+        self.assertFalse(self.app.autosave_now())  # 只有自動日期不算內容，不產生自動存檔
+        closed, asked = self._close_with(None)
+        self.assertTrue(closed)
+        self.assertFalse(asked)
+
+    def test_autosave_starts_once_real_content_is_entered(self):
+        self.app.personnel.insert(0, 'x')
+        self.assertTrue(self.app.is_dirty())
+        self.assertTrue(self.app.autosave_now())
+
+    def test_clear_all_regenerates_date(self):
+        import datetime as dt
+        for name in g.REPORT_DATE_FIELDS:
+            getattr(self.app, name).delete(0, tk.END)
+        self.app.year.insert(0, '100')
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True), \
+                mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 20)):
+            self.app.clear_all()
+        self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '10', '20'))
+
+    def test_loading_draft_keeps_its_original_fill_date(self):
+        import datetime as dt
+        draft = os.path.join(self.tmp.name, 'd.json')
+        for name, value in zip(g.REPORT_DATE_FIELDS, ('115', '9', '30')):  # 第一次填表是 9/30
+            getattr(self.app, name).delete(0, tk.END)
+            getattr(self.app, name).insert(0, value)
+        self._save_draft_to(draft)
+        with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14)):  # 今天已經是 10/14
+            self._load_draft_from(draft)
+        self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '9', '30'))
+
+    def test_draft_without_date_gets_todays_date(self):
+        import json, datetime as dt
+        draft = os.path.join(self.tmp.name, 'nodate.json')
+        self._save_draft_to(draft)
+        with open(draft, encoding='utf-8') as f:
+            data = json.load(f)
+        for name in g.REPORT_DATE_FIELDS:
+            data['fields'][name] = ''
+        with open(draft, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 11, 2)):
+            self._load_draft_from(draft)
+        self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '11', '2'))
+
+    def test_auto_date_flows_into_report(self):
+        import datetime as dt
+        self.root.destroy()
+        self.root = tk.Tk()
+        with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14)):
+            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+        for e, v in [(self.app.start_year, '115'), (self.app.start_month, '10'), (self.app.start_day, '8'),
+                     (self.app.end_year, '115'), (self.app.end_month, '10'), (self.app.end_day, '11')]:
+            e.insert(0, v)
+        data, err = self.app.collect_data()
+        self.assertIsNone(err)
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, {c: [] for c in self.app.photo_files}, {}, out)
+        text = '\n'.join(c.text for c in unique_cells(Document(out)))
+        self.assertIn('115年10月14日', text)
+
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')
         self.assertEqual(self.root.title(), '玉山保育巡查回報單生成器')

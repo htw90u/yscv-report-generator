@@ -74,6 +74,7 @@ THEMES = {
         bg='#f6f8fb', border='#b5c0d0', heading_fg='#1e3a8a', field_fg='#111827', text='#0b0f19', muted='#374151',
         tab_idle='#e6ecf4', tab_idle_fg='#475569', tab_hover='#d9e3f1',
         tab_active='#cfe0fb', tab_active_fg='#1e3a8a',
+        missing_bg='#fff0d4', missing_fg='#7a4300',
         primary='#cdeedd', primary_fg='#14532d', primary_active='#b4e3c9', primary_border='#6fbf96',
         danger='#fde2e2', danger_fg='#991b1b', danger_active='#fbc9c9', danger_border='#e89a9a'),
     # 色弱友善：避開紅綠搭配，改用藍色（主要）與橘色（危險），取自 Okabe-Ito 色盲友善色盤
@@ -81,12 +82,14 @@ THEMES = {
         bg='#f7f7f5', border='#a8a29e', heading_fg='#003a5c', field_fg='#0c0a09', text='#0c0a09', muted='#44403c',
         tab_idle='#ececea', tab_idle_fg='#44403c', tab_hover='#e0e0dd',
         tab_active='#cfe6f5', tab_active_fg='#003a5c',
+        missing_bg='#fbdcc0', missing_fg='#6b2d00',
         primary='#b8dcf2', primary_fg='#00314d', primary_active='#9fd0ee', primary_border='#0072B2',
         danger='#fbdcc0', danger_fg='#6b2d00', danger_active='#f6c79d', danger_border='#D55E00'),
     '高對比': dict(
         bg='#ffffff', border='#000000', heading_fg='#000000', field_fg='#000000', text='#000000', muted='#000000',
         tab_idle='#ffffff', tab_idle_fg='#000000', tab_hover='#e5e5e5',
         tab_active='#000000', tab_active_fg='#ffffff',
+        missing_bg='#ffd699', missing_fg='#000000',
         primary='#0b3d91', primary_fg='#ffffff', primary_active='#082a66', primary_border='#000000',
         danger='#b34700', danger_fg='#ffffff', danger_active='#8a3700', danger_border='#000000'),
 }
@@ -96,7 +99,7 @@ DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
 DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
 TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
-PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
+PREVIEW_SIZE = (480, 400)  # 照片預覽區大小（像素）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
 
@@ -114,10 +117,13 @@ PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成
 # 產生 Word 時照片章節的順序（與畫面上放在哪個分頁無關）
 PHOTO_CATEGORIES = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況',
                     '環境清理及遊客宣導情形', '遊客違法情形', '其他']
-# 畫面上的分頁分組（只影響介面的排列，不影響 Word 順序）
-PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '環境清理及遊客宣導情形']  # 服勤照片(上)
-PHOTO_CATEGORIES_2 = ['自然資源狀況', '遊客違法情形', '其他']  # 服勤照片(下)
+# 服勤照片分頁裡各分類的小分頁名稱（完整名稱顯示在表格上方）
+PHOTO_SHORT_NAMES = {
+    '道路、步道狀況及維護情形': '道路/步道', '設施狀況及維護情形': '設施', '自然資源狀況': '自然資源',
+    '環境清理及遊客宣導情形': '環境清理', '遊客違法情形': '遊客違法', '其他': '其他',
+}
 TAB_BASIC = "基本資料"
+TAB_PHOTOS = "服勤照片"
 TAB_ROAD = "道路/步道"
 TAB_FACILITY = "設施"
 TAB_NATURE = "自然資源/環境維護/遊客管理"
@@ -130,10 +136,13 @@ FIELD_TAB = {
     'nature': TAB_NATURE, 'environment': TAB_NATURE, 'violation': TAB_NATURE,
     'feedback': TAB_FEEDBACK, 'reflection': TAB_FEEDBACK, 'questions': TAB_FEEDBACK,
 }
-PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序、雙擊檔名輸入照片說明）"
-PHOTO_TAB_TITLES = ("服勤照片(上)", "服勤照片(下)")
-PHOTO_LIST_ROWS = 5          # 照片清單預設顯示的列數
-PHOTO_LIST_ROWS_COMPACT = 3  # 螢幕高度不夠時改用的列數
+MARK_DONE = '✓'      # 已填說明／已填完的記號
+MARK_MISSING = '⚠'   # 還沒填的記號（同時搭配淡橘底與文字，不單靠顏色）
+PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張）"
+PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
+PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
+PHOTO_NAME_COL_PX = 290       # 照片表格「檔名」欄的寬度
+WINDOW_WIDTH = 1340           # 視窗預設寬度（螢幕比較窄時會自動縮小）
 
 # 模板中「標籤後面接內容」的欄位：(標籤文字, 資料 key)
 FILL_LABELS = [
@@ -866,10 +875,58 @@ def move_item(seq, src, dst):
 
 # ---------------------------------------------------------------- GUI
 
-class PhotoPreview(ttk.Frame):
-    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名、尺寸與說明。"""
+class PhotoTable(ttk.Treeview):
+    """照片表格：兩欄「檔名｜說明」。沒填說明的列用淡橘底（tag 'missing'）。
 
-    PLACEHOLDER = "點選左邊的照片\n即可預覽"
+    列的 iid 就是它在清單中的位置（'0'、'1'…），方便和 photo_files 的順序對應。
+    """
+
+    def __init__(self, master, rows):
+        super().__init__(master, columns=('name', 'caption'), show='headings', height=rows,
+                         selectmode='extended', style='Photo.Treeview')
+        self.heading('name', text='檔名')
+        self.heading('caption', text='說明')
+        self.column('name', width=PHOTO_NAME_COL_PX, minwidth=140, stretch=False, anchor='w')
+        self.column('caption', width=300, minwidth=140, stretch=True, anchor='w')
+
+    def set_rows(self, rows):
+        """rows: [(檔名欄文字, 說明欄文字, 是否未填說明), ...]"""
+        self.delete(*self.get_children())
+        for i, (name, caption, missing) in enumerate(rows):
+            self.insert('', tk.END, iid=str(i), values=(name, caption), tags=('missing' if missing else 'done',))
+
+    def restyle(self, palette):
+        self.tag_configure('missing', background=palette['missing_bg'], foreground=palette['missing_fg'])
+        self.tag_configure('done', background='#ffffff', foreground=palette['text'])
+
+    def count(self):
+        return len(self.get_children())
+
+    def selected_indexes(self):
+        return tuple(sorted(int(i) for i in self.selection()))
+
+    def set_selection(self, indexes):
+        self.selection_set([str(i) for i in indexes if 0 <= i < self.count()])
+
+    def clear_selection(self):
+        self.selection_set(())
+
+    def row_at(self, y):
+        """座標 y 所在的列；在表格下方空白處則回傳最後一列。"""
+        iid = self.identify_row(y)
+        return int(iid) if iid else self.count() - 1
+
+    def show_index(self, index):
+        self.see(str(index))
+
+    def row_text(self, index):
+        return self.item(str(index), 'values')[0]
+
+
+class PhotoPreview(ttk.Frame):
+    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名與尺寸。說明在它下方的輸入框輸入。"""
+
+    PLACEHOLDER = "點選左邊表格中的照片\n即可預覽"
 
     def __init__(self, master, font_family):
         super().__init__(master, padding=6, relief=tk.GROOVE)
@@ -909,7 +966,7 @@ class PhotoPreview(ttk.Frame):
         self.current = (category, path)
         self.picture.config(image=photo, text='')
         orient = '橫式' if width >= height else '直式'
-        self.info.config(text=f"{name}\n{width}×{height}（{orient}）\n說明：{caption or '（無）'}")
+        self.info.config(text=f"{name}  {width}×{height}（{orient}）")
 
 
 def load_private_fonts():
@@ -964,7 +1021,8 @@ class ReportGeneratorGUI:
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.root.title(APP_TITLE)
-        self.root.geometry("1050x820")
+        width = min(WINDOW_WIDTH, max(900, self.root.winfo_screenwidth() - 40))
+        self.root.geometry(f"{width}x820")
 
         self.template_path = template_path
         self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
@@ -972,7 +1030,12 @@ class ReportGeneratorGUI:
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
         self._scroll_tabs = {}  # 分頁標題 -> (canvas, 內容框)
-        self.previews = {}   # category -> PhotoPreview（同一個分頁的分類共用）
+        self._tab_frames = {}   # 分頁標題 -> 分頁的框架（分頁名稱後面會加 ⚠，不能靠名稱找）
+        self._tab_refits = {}   # 分頁標題 -> 重新量測內容高度、調整捲動範圍的函式
+        self.category_labels = {}  # 照片分類 -> 表格上方的標題（帶張數與未填數量）
+        self.previews = {}   # category -> PhotoPreview（所有分類共用同一個預覽區）
+        self.jump_buttons = {}   # category -> 「跳到下一張未填說明」按鈕
+        self._caption_target = None  # 說明輸入框目前對應的 (分類, 路徑)
         self._drag = None    # 拖曳排序中：[分類, 目前索引]
         self.text_fields = {}
 
@@ -1039,7 +1102,8 @@ class ReportGeneratorGUI:
             extra = self._tabs_extra_height()
         if extra > 0:  # 螢幕高度不夠：縮小每個照片清單的列數，省下空間
             for listbox in self.listboxes.values():
-                listbox.configure(height=PHOTO_LIST_ROWS_COMPACT)
+                listbox.configure(height=PHOTO_TABLE_ROWS_COMPACT)
+            self._refit_scroll_tabs()
             self.root.update()
             extra = self._tabs_extra_height()
             if extra > 0:
@@ -1054,8 +1118,9 @@ class ReportGeneratorGUI:
                 self._grow_window(extra)
 
     def _bind_shortcuts(self):
-        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告、Ctrl+E 離開（大小寫都可以）。"""
-        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate, 'e': self.on_close}
+        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告、Ctrl+E 離開、Ctrl+N 跳到下一張未填說明（大小寫都可以）。"""
+        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate, 'e': self.on_close,
+                   'n': self._shortcut_jump}
         for key, action in actions.items():
             for k in (key, key.upper()):
                 self.root.bind_all(f'<Control-{k}>', lambda e, f=action: self._run_shortcut(f))
@@ -1070,6 +1135,9 @@ class ReportGeneratorGUI:
         self.generate_report()
 
     def _tab_by_title(self, title):
+        """用分頁的原始名稱找到分頁（分頁上顯示的文字可能多了「⚠」標記）。"""
+        if title in self._tab_frames:
+            return str(self._tab_frames[title])
         for tab in self.notebook.tabs():
             if self.notebook.tab(tab, 'text') == title:
                 return tab
@@ -1105,6 +1173,16 @@ class ReportGeneratorGUI:
         style.configure('TMenubutton', foreground=p['text'])
         style.configure('TButton', foreground=p['text'])
         style.configure('Hint.TLabel', foreground=p['muted'])
+        style.configure('Sub.TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
+                        darkcolor=p['border'], borderwidth=1, tabmargins=(2, 4, 2, 0))
+        style.configure('Sub.TNotebook.Tab', padding=(16, 6), background=p['tab_idle'], foreground=p['tab_idle_fg'],
+                        bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'])
+        style.map('Sub.TNotebook.Tab', background=[('selected', '#ffffff'), ('active', p['tab_hover'])],
+                  foreground=[('selected', p['heading_fg'])], padding=[('selected', (16, 9))])
+        style.configure('Photo.Treeview', rowheight=34, font=(self.font_family, 9 + GUI_FONT_DELTA),
+                        foreground=p['text'], fieldbackground='#ffffff', background='#ffffff')
+        style.configure('Photo.Treeview.Heading', font=(self.font_family, 9 + GUI_FONT_DELTA),
+                        background=p['tab_idle'], foreground=p['field_fg'])
         style.configure('List.TMenubutton', foreground=p['text'], font=(self.font_family, self._list_menu_pt()))
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=2, tabmargins=(4, 4, 4, 0), tabposition='nw')
@@ -1133,6 +1211,9 @@ class ReportGeneratorGUI:
         self.palette = THEMES[name]
         self._setup_style()
         self._recolor(self.root)
+        for category in self.listboxes:
+            self._render_list(category)
+        self._refit_scroll_tabs()
         self._save_theme_setting()
         if hasattr(self, 'theme_var'):
             self.theme_var.set(name)
@@ -1192,9 +1273,9 @@ class ReportGeneratorGUI:
             ("七、協勤心得與建議：", "reflection"),
             ("八、相關疑問與解答：（將服勤期間相關疑問，以及透過職員或其他志工尋得之答案記錄下來）", "questions"),
         ], height=6)
-        self.create_photo_tab(notebook, PHOTO_TAB_TITLES[0], "九、服勤照片", PHOTO_CATEGORIES_1)
-        self.create_photo_tab(notebook, PHOTO_TAB_TITLES[1], "九、服勤照片（續）", PHOTO_CATEGORIES_2)
+        self.create_photo_tab(notebook, TAB_PHOTOS)
         self.notebook = notebook
+        notebook.bind('<<NotebookTabChanged>>', lambda e: self._refit_scroll_tabs())
 
         row += 1
         button_frame = ttk.Frame(main_frame)
@@ -1223,6 +1304,11 @@ class ReportGeneratorGUI:
         self.theme_box = theme_box
         self._center_theme_dropdown()
         self._recolor(self.root)
+        for name in ENTRY_FIELDS:
+            self._watch(getattr(self, name))
+        for widget in self.text_fields.values():
+            self._watch(widget)
+        self._update_marks()
 
     # ---- 共用：可捲動分頁
     @staticmethod
@@ -1245,8 +1331,15 @@ class ReportGeneratorGUI:
 
         window = canvas.create_window((0, 0), window=inner, anchor="nw")
         self._scroll_tabs[title] = (canvas, inner, scrollbar)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        self._tab_frames[title] = frame
+        def refit(_event=None):
+            canvas.itemconfigure(window, width=max(1, canvas.winfo_width()),
+                                 height=max(canvas.winfo_height(), inner.winfo_reqheight()))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        inner.bind("<Configure>", refit)
+        canvas.bind("<Configure>", refit)
+        self._tab_refits[title] = refit
         canvas.configure(yscrollcommand=lambda lo, hi: self._update_scrollbar(canvas, scrollbar, lo, hi))
 
         def on_wheel(event):
@@ -1270,6 +1363,7 @@ class ReportGeneratorGUI:
     def create_basic_info_tab(self, notebook):
         frame = ttk.Frame(notebook, padding="10")
         notebook.add(frame, text=TAB_BASIC)
+        self._tab_frames[TAB_BASIC] = frame
         frame.columnconfigure(1, weight=1)
 
         def date_entries(parent, prefix):
@@ -1370,6 +1464,7 @@ class ReportGeneratorGUI:
         widget.tag_add(tk.SEL, f'{first}.0', f'{end_line}.end')
         widget.mark_set(tk.INSERT, f'{end_line}.end')
         widget.focus_set()
+        self._refresh_tab_marks()
 
     def _on_return(self, widget):
         """在項目符號/編號的行按 Enter：自動接上下一個符號；空項目再按 Enter 則結束清單。"""
@@ -1383,103 +1478,278 @@ class ReportGeneratorGUI:
             widget.insert('insert', '\n' + prefix)
         return 'break'
 
-    def create_photo_tab(self, notebook, title, heading, categories):
+    def create_photo_tab(self, notebook, title):
+        """服勤照片：六個分類用小分頁切換；左邊是兩欄表格（檔名｜說明），右邊是預覽與說明輸入框。"""
         inner = self.make_scrollable_tab(notebook, title)
-        ttk.Label(inner, text=heading, style='Heading.TLabel').grid(
-            row=0, column=0, sticky=tk.W, pady=(0, 10))
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(1, weight=1)
+        ttk.Label(inner, text="九、服勤照片", style='Heading.TLabel').grid(
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
         ttk.Label(inner, text=PHOTO_TAB_HINT, style='Hint.TLabel').grid(
-            row=0, column=0, sticky=tk.E)
+            row=0, column=0, columnspan=2, sticky=tk.E)
 
-        preview = PhotoPreview(inner, self.font_family)
-        preview.grid(row=1, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
+        sub = ttk.Notebook(inner, style='Sub.TNotebook')
+        sub.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+        self.photo_notebook = sub
+        self.photo_pages = {}
+        for category in PHOTO_CATEGORIES:
+            page = ttk.Frame(sub, padding=8)
+            sub.add(page, text=PHOTO_SHORT_NAMES[category])
+            page.columnconfigure(0, weight=1)
+            page.rowconfigure(1, weight=1)
+            header = ttk.Label(page, text=category, style='Field.TLabel')
+            header.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
 
-        for idx, category in enumerate(categories):
-            row = idx * 2 + 1
-            ttk.Label(inner, text=category, style='Field.TLabel').grid(
-                row=row, column=0, sticky=tk.W, pady=(10, 5))
+            table = PhotoTable(page, PHOTO_TABLE_ROWS)
+            table.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+            scrollbar = ttk.Scrollbar(page, orient="vertical", command=table.yview)
+            scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+            table.configure(yscrollcommand=scrollbar.set)
+            table.bind("<Double-Button-1>", lambda e, c=category, t=table: self._focus_caption(c, t))
+            table.bind("<<TreeviewSelect>>", lambda e, c=category, t=table: self._on_photo_select(c, t))
+            table.bind("<Button-1>", lambda e, c=category, t=table: self._drag_start(c, t, e))
+            table.bind("<B1-Motion>", lambda e, c=category, t=table: self._drag_motion(c, t, e))
+            table.bind("<ButtonRelease-1>", lambda e: self._drag_end())
 
-            list_frame = ttk.Frame(inner)
-            list_frame.grid(row=row + 1, column=0, sticky=(tk.W, tk.E), padx=20)
-            list_frame.columnconfigure(0, weight=1)
+            bar = ttk.Frame(page)
+            bar.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=8)
+            ttk.Button(bar, text="加入照片",
+                       command=lambda c=category, t=table: self.select_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(bar, text="移除選取",
+                       command=lambda c=category, t=table: self.remove_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(bar, text="清除全部",
+                       command=lambda c=category, t=table: self.clear_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
+            jump = ttk.Button(bar, text="", command=lambda c=category: self._jump_next_missing(c))
+            jump.pack(side=tk.LEFT, padx=(14, 0))
 
-            listbox = tk.Listbox(list_frame, height=PHOTO_LIST_ROWS, selectmode=tk.EXTENDED, exportselection=False)
-            listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
-            scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
-            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-            listbox.configure(yscrollcommand=scrollbar.set)
-            listbox.bind("<Double-Button-1>", lambda e, c=category, lb=listbox: self.edit_caption(c, lb))
-            listbox.bind("<<ListboxSelect>>", lambda e, c=category, lb=listbox: self._on_photo_select(c, lb))
-            listbox.bind("<Button-1>", lambda e, c=category, lb=listbox: self._drag_start(c, lb, e))
-            listbox.bind("<B1-Motion>", lambda e, c=category, lb=listbox: self._drag_motion(c, lb, e))
-            listbox.bind("<ButtonRelease-1>", lambda e: self._drag_end())
+            self.listboxes[category] = table
+            self.category_labels[category] = header
+            self.jump_buttons[category] = jump
+            self.photo_pages[category] = page
+        sub.bind('<<NotebookTabChanged>>', lambda e: self._on_photo_subtab_changed())
 
-            btn_frame = ttk.Frame(list_frame)
-            btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
-            ttk.Button(btn_frame, text="加入照片",
-                       command=lambda c=category, lb=listbox: self.select_photos(c, lb)).pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_frame, text="移除選取",
-                       command=lambda c=category, lb=listbox: self.remove_photos(c, lb)).pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_frame, text="清除全部",
-                       command=lambda c=category, lb=listbox: self.clear_photos(c, lb)).pack(side=tk.LEFT, padx=2)
-
-            self.listboxes[category] = listbox
+        right = ttk.Frame(inner)
+        right.grid(row=1, column=1, sticky=tk.N, padx=(18, 0), pady=(34, 0))
+        preview = PhotoPreview(right, self.font_family)
+        preview.pack()
+        ttk.Label(right, text="說明：", style='Field.TLabel').pack(anchor=tk.W, pady=(8, 2))
+        self.caption_var = tk.StringVar(master=self.root)
+        entry = ttk.Entry(right, textvariable=self.caption_var, state='disabled')
+        entry.pack(fill=tk.X)
+        ttk.Label(right, text="Enter：儲存並跳到下一張", style='Hint.TLabel').pack(anchor=tk.W, pady=(2, 0))
+        entry.bind('<Return>', self._caption_return)
+        entry.bind('<FocusOut>', lambda e: self._commit_caption())
+        self.photo_preview = preview
+        self.caption_entry = entry
+        for category in PHOTO_CATEGORIES:
             self.previews[category] = preview
 
     # ---- 事件處理
     def _photo_label(self, category, filepath):
-        caption = self.photo_captions[category].get(filepath)
-        name = os.path.basename(filepath)
-        return f"{name} — {caption}" if caption else name
+        """表格「檔名」欄的文字：已填說明「✓ 檔名」，沒填「⚠ 檔名」。"""
+        mark = MARK_DONE if self.photo_captions[category].get(filepath) else MARK_MISSING
+        return f"{mark} {os.path.basename(filepath)}"
 
-    # ---- 預覽與拖曳排序
-    def _on_photo_select(self, category, listbox):
-        selected = listbox.curselection()
-        preview = self.previews[category]
+    def missing_caption_count(self, category):
+        return sum(1 for p in self.photo_files[category] if not self.photo_captions[category].get(p))
+
+    def _render_list(self, category):
+        """依目前的照片與說明重畫某個分類的表格（記號、淡橘底），並更新各處的標記。保留選取與捲動位置。"""
+        table = self.listboxes[category]
+        selection = table.selected_indexes()
+        top = table.yview()[0]
+        rows = []
+        for path in self.photo_files[category]:
+            caption = self.photo_captions[category].get(path, '')
+            rows.append((self._photo_label(category, path), caption or "（未填說明）", not caption))
+        table.set_rows(rows)
+        table.restyle(self.palette)
+        table.set_selection(selection)
+        table.yview_moveto(top)
+        self._update_marks()
+
+    def _category_needs_attention(self, category):
+        return not self.photo_files[category] or self.missing_caption_count(category) > 0
+
+    def _refit_scroll_tabs(self):
+        """內容大小改變（例如表格列數、標題換行）後，重新量測每個分頁，必要時顯示/隱藏捲動軸。"""
+        self.root.update_idletasks()  # 先讓 Tk 算出各元件最新的需求大小，再量測
+        for refit in self._tab_refits.values():
+            refit()
+
+    def _update_marks(self):
+        """分類標題帶張數、小分頁與「服勤照片」分頁標 ⚠ 或 ✓、跳到下一張的按鈕帶剩餘數量。"""
+        for category, label in self.category_labels.items():
+            total = len(self.photo_files[category])
+            missing = self.missing_caption_count(category)
+            if not total:
+                label.config(text=f"{category}（尚未加入照片）")
+            elif missing:
+                label.config(text=f"{category}（{total} 張，{missing} 張未填說明）")
+            else:
+                label.config(text=f"{category}（{total} 張，全部已填 {MARK_DONE}）")
+            button = self.jump_buttons[category]
+            if missing:
+                button.config(text=f"跳到下一張未填說明（{missing}）(N)", state=tk.NORMAL)
+            else:
+                button.config(text=f"全部都已填寫 {MARK_DONE}" if total else "尚無照片", state=tk.DISABLED)
+            mark = MARK_MISSING if self._category_needs_attention(category) else MARK_DONE
+            self.photo_notebook.tab(self.photo_pages[category], text=f"{PHOTO_SHORT_NAMES[category]}  {mark}")
+        self._refresh_tab_marks()
+        self._refit_scroll_tabs()
+
+    def _tabs_with_blanks(self):
+        """哪些分頁還有沒填的欄位（含沒有加入照片的分類、沒填說明的照片）。"""
+        blank = set()
+        if any(not getattr(self, name).get().strip() for name in ENTRY_FIELDS):
+            blank.add(TAB_BASIC)
+        for key, widget in self.text_fields.items():
+            if not widget.get('1.0', tk.END).strip():
+                blank.add(FIELD_TAB[key])
+        if any(self._category_needs_attention(c) for c in PHOTO_CATEGORIES):
+            blank.add(TAB_PHOTOS)
+        return blank
+
+    def _refresh_tab_marks(self):
+        """有沒填的欄位，分頁名稱後面就加 ⚠（不顯示數量）；填完就恢復原本名稱。"""
+        if not hasattr(self, 'notebook'):
+            return
+        blank = self._tabs_with_blanks()
+        for title, frame in self._tab_frames.items():
+            self.notebook.tab(frame, text=f"{title} {MARK_MISSING}" if title in blank else title)
+
+    def _watch(self, widget):
+        """欄位內容一改變就更新分頁上的 ⚠。"""
+        for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
+            widget.bind(sequence, lambda e: self._refresh_tab_marks(), add='+')
+
+    # ---- 預覽、說明輸入
+    def _current_photo_category(self):
+        return PHOTO_CATEGORIES[self.photo_notebook.index(self.photo_notebook.select())]
+
+    def _on_photo_subtab_changed(self):
+        category = self._current_photo_category()
+        table = self.listboxes[category]
+        if table.selected_indexes():
+            self._on_photo_select(category, table)
+        else:
+            self._commit_caption()
+            self._reset_caption_panel()
+
+    def _reset_caption_panel(self):
+        self._caption_target = None
+        self.caption_var.set('')
+        self.caption_entry.config(state='disabled')
+        self.photo_preview.clear()
+
+    def _on_photo_select(self, category, table):
+        self._commit_caption()
+        selected = table.selected_indexes()
         if not selected:
             return
         path = self.photo_files[category][selected[0]]
-        preview.show(category, path, self.photo_captions[category].get(path))
+        self.photo_preview.show(category, path)
+        self._caption_target = (category, path)
+        self.caption_entry.config(state='normal')
+        self.caption_var.set(self.photo_captions[category].get(path, ''))
+
+    def _commit_caption(self):
+        """把說明輸入框目前的文字存到對應的照片（沒有變動就什麼都不做）。"""
+        if not self._caption_target:
+            return
+        category, path = self._caption_target
+        if path not in self.photo_files[category]:
+            self._caption_target = None
+            return
+        text = self.caption_var.get().strip()
+        if text != self.photo_captions[category].get(path, ''):
+            if text:
+                self.photo_captions[category][path] = text
+            else:
+                self.photo_captions[category].pop(path, None)
+            self._render_list(category)
+
+    def _caption_return(self, event=None):
+        """說明輸入框按 Enter：儲存，並跳到同一分類的下一張。"""
+        self._commit_caption()
+        if self._caption_target:
+            category, path = self._caption_target
+            index = self.photo_files[category].index(path)
+            if index + 1 < len(self.photo_files[category]):
+                self._select_photo(category, index + 1)
+        return 'break'
+
+    def _select_photo(self, category, index, focus_caption=True):
+        table = self.listboxes[category]
+        table.set_selection([index])
+        table.show_index(index)
+        self._on_photo_select(category, table)
+        if focus_caption:
+            self.caption_entry.focus_set()
+            self.caption_entry.select_range(0, tk.END)
+
+    def _focus_caption(self, category, table):
+        """雙擊檔名：直接到預覽下方的說明輸入框輸入。"""
+        selected = table.selected_indexes()
+        if selected:
+            self._select_photo(category, selected[0])
+
+    def _jump_next_missing(self, category):
+        """選到這個分類下一張還沒填說明的照片（從目前選取的下一張開始找，找不到就從頭）。"""
+        files = self.photo_files[category]
+        table = self.listboxes[category]
+        selected = table.selected_indexes()
+        start = selected[0] + 1 if selected else 0
+        for i in list(range(start, len(files))) + list(range(0, start)):
+            if not self.photo_captions[category].get(files[i]):
+                self._select_photo(category, i)
+                return True
+        self.status_label.config(text="這個分類的照片都已填寫說明")
+        return False
+
+    def _shortcut_jump(self):
+        if self.notebook.index(self.notebook.select()) != self.notebook.index(self._tab_by_title(TAB_PHOTOS)):
+            return
+        self._jump_next_missing(self._current_photo_category())
 
     def _refresh_previews(self):
-        """照片被移除/清除後，若預覽的照片已不在清單中就清掉預覽。"""
-        for preview in set(self.previews.values()):
-            if preview.current and preview.current[1] not in self.photo_files[preview.current[0]]:
-                preview.clear()
+        """照片被移除/清除後，若預覽的照片已不在清單中就清掉預覽與說明輸入框。"""
+        current = self.photo_preview.current
+        if current and current[1] not in self.photo_files[current[0]]:
+            self._reset_caption_panel()
 
-    def _move_photo(self, category, listbox, src, dst):
+    # ---- 預覽與拖曳排序
+
+
+    def _move_photo(self, category, table, src, dst):
         move_item(self.photo_files[category], src, dst)
-        label = listbox.get(src)
-        listbox.delete(src)
-        listbox.insert(dst, label)
-        listbox.selection_clear(0, tk.END)
-        listbox.selection_set(dst)
-        listbox.activate(dst)
+        self._render_list(category)
+        table.set_selection([dst])
 
-    def _drag_start(self, category, listbox, event):
-        """按下滑鼠：記錄要拖曳的項目（按在清單空白處不算）。不攔截事件，讓一般的選取照常運作。"""
+    def _drag_start(self, category, table, event):
+        """按下滑鼠：記錄要拖曳的列（按在表格空白處不算）。不攔截事件，讓一般的選取照常運作。"""
         self._drag = None
-        if listbox.size() == 0:
+        if table.count() == 0:
             return None
-        index = listbox.nearest(event.y)
-        box = listbox.bbox(index)
-        if box and box[1] <= event.y < box[1] + box[3]:
-            self._drag = [category, index]
+        iid = table.identify_row(event.y)
+        if iid:
+            self._drag = [category, int(iid)]
         return None
 
-    def _drag_motion(self, category, listbox, event):
+    def _drag_motion(self, category, table, event):
         if not self._drag or self._drag[0] != category:
             return None
-        target = max(0, min(listbox.nearest(event.y), listbox.size() - 1))
+        target = max(0, min(table.row_at(event.y), table.count() - 1))
         if target != self._drag[1]:
-            self._move_photo(category, listbox, self._drag[1], target)
+            self._move_photo(category, table, self._drag[1], target)
             self._drag[1] = target
-            listbox.see(target)
-        return 'break'  # 拖曳時不要讓清單把它當成「擴大選取」
+            table.show_index(target)
+        return 'break'  # 拖曳時不要讓表格把它當成「擴大選取」
 
     def _drag_end(self):
         self._drag = None
 
-    def select_photos(self, category, listbox):
+    def select_photos(self, category, table):
         filepaths = filedialog.askopenfilenames(
             title=f"加入照片 - {category}",
             filetypes=[
@@ -1493,47 +1763,26 @@ class ReportGeneratorGUI:
         for filepath in filepaths:
             if filepath not in self.photo_files[category]:
                 self.photo_files[category].append(filepath)
-                listbox.insert(tk.END, self._photo_label(category, filepath))
                 added += 1
+        self._render_list(category)
         self.status_label.config(text=f"已新增 {added} 張照片到 {category}")
         logging.info(f"新增 {added} 張照片到 {category}")
 
-    def edit_caption(self, category, listbox):
-        selected = listbox.curselection()
-        if not selected:
-            return
-        idx = selected[0]
-        filepath = self.photo_files[category][idx]
-        caption = simpledialog.askstring(
-            "照片說明", f"請輸入「{os.path.basename(filepath)}」的說明：",
-            initialvalue=self.photo_captions[category].get(filepath, ""), parent=self.root)
-        if caption is None:
-            return
-        caption = caption.strip()
-        if caption:
-            self.photo_captions[category][filepath] = caption
-        else:
-            self.photo_captions[category].pop(filepath, None)
-        listbox.delete(idx)
-        listbox.insert(idx, self._photo_label(category, filepath))
-        listbox.selection_set(idx)
-        self._on_photo_select(category, listbox)
-
-    def remove_photos(self, category, listbox):
-        selected = listbox.curselection()
+    def remove_photos(self, category, table):
+        selected = table.selected_indexes()
         if not selected:
             return
         for idx in reversed(selected):
             filepath = self.photo_files[category].pop(idx)
             self.photo_captions[category].pop(filepath, None)
-            listbox.delete(idx)
+        self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已移除 {len(selected)} 張照片")
 
-    def clear_photos(self, category, listbox):
+    def clear_photos(self, category, table):
         self.photo_files[category].clear()
         self.photo_captions[category].clear()
-        listbox.delete(0, tk.END)
+        self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已清除 {category} 的所有照片")
 
@@ -1542,12 +1791,12 @@ class ReportGeneratorGUI:
             getattr(self, name).delete(0, tk.END)
         for text_widget in self.text_fields.values():
             text_widget.delete('1.0', tk.END)
-        for category, listbox in self.listboxes.items():
+        for category in self.listboxes:
             self.photo_files[category].clear()
             self.photo_captions[category].clear()
-            listbox.delete(0, tk.END)
-        for preview in set(self.previews.values()):
-            preview.clear()
+            self._render_list(category)
+        self._reset_caption_panel()
+        self._refresh_tab_marks()
 
     def clear_all(self):
         if self.is_dirty():
@@ -1565,6 +1814,7 @@ class ReportGeneratorGUI:
     # ---- 草稿存檔
     def build_draft(self):
         """把目前畫面上的內容（原始輸入，不含 bullet 處理）整理成可存成 JSON 的 dict。"""
+        self._commit_caption()  # 說明輸入框裡還沒按 Enter 的文字也要算進去
         return {
             'version': DRAFT_VERSION,
             'saved_at': datetime.now().isoformat(timespec='seconds'),
@@ -1598,7 +1848,8 @@ class ReportGeneratorGUI:
                 self.photo_files[category].append(path)
                 if captions.get(path):
                     self.photo_captions[category][path] = captions[path]
-                self.listboxes[category].insert(tk.END, self._photo_label(category, path))
+            self._render_list(category)
+        self._refresh_tab_marks()
         return warnings
 
     def save_draft(self):
@@ -1651,6 +1902,7 @@ class ReportGeneratorGUI:
             return
         for name, value in zip(REPORT_DATE_FIELDS, roc_date_parts()):
             getattr(self, name).insert(0, value)
+        self._refresh_tab_marks()
 
     def _signature(self, with_report_date=True):
         """目前內容的指紋（不含存檔時間），用來判斷內容是否改變。
@@ -1745,6 +1997,7 @@ class ReportGeneratorGUI:
 
     def collect_data(self):
         """在主執行緒讀取所有欄位。驗證失敗時回傳 (None, 錯誤訊息)。"""
+        self._commit_caption()
         data = {
             'year': self.year.get().strip(),
             'month': self.month.get().strip(),
@@ -1773,6 +2026,28 @@ class ReportGeneratorGUI:
             data[key] = widget.get('1.0', tk.END).strip()
         return data, None
 
+    def find_missing_captions(self):
+        """還沒填說明的照片數量，依 Word 的章節順序：{分類: 張數}（沒有的不列出）。"""
+        return {c: self.missing_caption_count(c) for c in PHOTO_CATEGORIES if self.missing_caption_count(c)}
+
+    def _show_first_problem(self, blanks, missing_captions):
+        """選「否」之後：回到第一個有問題的分頁；若在服勤照片，直接選到第一個有問題的分類（和第一張沒填說明的照片）。"""
+        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
+        candidates = list(blanks) + ([TAB_PHOTOS] if missing_captions else [])
+        target = min(candidates, key=order.index)
+        self.notebook.select(self._tab_by_title(target))
+        if target != TAB_PHOTOS:
+            return
+        for category in PHOTO_CATEGORIES:
+            if self._category_needs_attention(category):
+                self.photo_notebook.select(self.photo_pages[category])
+                files = self.photo_files[category]
+                for i, path in enumerate(files):
+                    if not self.photo_captions[category].get(path):
+                        self._select_photo(category, i, focus_caption=False)
+                        break
+                return
+
     def find_blank_fields(self, data):
         """檢查各分頁有哪些欄位還是空白，回傳 {分頁名稱: [欄位名稱, ...]}（依分頁順序，沒有空白的分頁不列出）。"""
         blanks = {}
@@ -1788,19 +2063,26 @@ class ReportGeneratorGUI:
             for key, name in FIELD_NAMES.items():
                 if FIELD_TAB.get(key) == tab and not data.get(key):
                     add(tab, name)
-        for tab_title, categories in zip(PHOTO_TAB_TITLES, (PHOTO_CATEGORIES_1, PHOTO_CATEGORIES_2)):
-            for category in categories:
-                if not self.photo_files[category]:
-                    add(tab_title, f"{category}（尚未加入照片）")
-        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, *PHOTO_TAB_TITLES]
+        for category in PHOTO_CATEGORIES:
+            if not self.photo_files[category]:
+                add(TAB_PHOTOS, f"{category}（尚未加入照片）")
+        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
         return {tab: blanks[tab] for tab in order if tab in blanks}
 
     @staticmethod
-    def blank_fields_message(blanks):
-        lines = ["以下欄位尚未填寫：", ""]
-        for tab, labels in blanks.items():
-            lines.append(f"【{tab}】")
-            lines.extend(f"    • {label}" for label in labels)
+    def blank_fields_message(blanks, missing_captions=None):
+        lines = []
+        if blanks:
+            lines += ["以下欄位尚未填寫：", ""]
+            for tab, labels in blanks.items():
+                lines.append(f"【{tab}】")
+                lines.extend(f"    • {label}" for label in labels)
+        if missing_captions:
+            if lines:
+                lines.append("")
+            total = sum(missing_captions.values())
+            lines.append(f"{'另外有' if blanks else '有'} {total} 張照片沒有填寫說明：")
+            lines.extend(f"    • {category}：{count} 張" for category, count in missing_captions.items())
         lines += ["", "仍要產生報告嗎？"]
         return "\n".join(lines)
 
@@ -1822,12 +2104,13 @@ class ReportGeneratorGUI:
             return
 
         blanks = self.find_blank_fields(data)
-        if blanks:
-            # 預設「是」：按 Enter 就繼續產生；選「否」會回到第一個有空白欄位的分頁
-            if not messagebox.askyesno("有欄位尚未填寫", self.blank_fields_message(blanks),
+        missing_captions = self.find_missing_captions()
+        if blanks or missing_captions:
+            # 預設「是」：按 Enter 就繼續產生；選「否」會回到第一個有問題的分頁
+            if not messagebox.askyesno("有欄位尚未填寫", self.blank_fields_message(blanks, missing_captions),
                                        icon='warning', default='yes'):
-                self.notebook.select(self._tab_by_title(next(iter(blanks))))
-                self.status_label.config(text="已取消產生報告，請補齊未填欄位")
+                self._show_first_problem(blanks, missing_captions)
+                self.status_label.config(text="已取消產生報告，請補齊未填欄位或照片說明")
                 return
 
         output_path = filedialog.asksaveasfilename(

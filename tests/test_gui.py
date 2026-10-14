@@ -79,19 +79,21 @@ class GuiTest(unittest.TestCase):
     def test_photo_list_and_caption(self):
         p = os.path.join(self.tmp.name, 'x.jpg')
         Image.new('RGB', (30, 20)).save(p)
-        cat = g.PHOTO_CATEGORIES_1[0]
-        lb = self.app.listboxes[cat]
+        cat = g.PHOTO_CATEGORIES[0]
+        table = self.app.listboxes[cat]
         with mock.patch.object(filedialog, 'askopenfilenames', lambda **k: (p,)):
-            self.app.select_photos(cat, lb)
-            self.app.select_photos(cat, lb)
-        self.assertEqual(lb.size(), 1)
-        lb.selection_set(0)
-        with mock.patch.object(simpledialog, 'askstring', lambda *a, **k: '測試說明'):
-            self.app.edit_caption(cat, lb)
-        self.assertIn('測試說明', lb.get(0))
+            self.app.select_photos(cat, table)
+            self.app.select_photos(cat, table)
+        self.assertEqual(table.count(), 1)  # 重複加入同一張不會變兩張
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('測試說明')
+        self.app._caption_return()
+        self.assertEqual(self.app.photo_captions[cat][p], '測試說明')
+        self.assertEqual(table.item('0', 'values')[1], '測試說明')
         with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
             self.app.clear_all()
-        self.assertEqual(lb.size(), 0)
+        self.assertEqual(table.count(), 0)
         self.assertFalse(self.app.photo_files[cat] or self.app.photo_captions[cat])
 
     def _wait_until_done(self, timeout=20):
@@ -186,10 +188,10 @@ class GuiTest(unittest.TestCase):
     def _add_photo(self, name='d.jpg', caption='說明X'):
         p = os.path.join(self.tmp.name, name)
         Image.new('RGB', (30, 20)).save(p)
-        cat = g.PHOTO_CATEGORIES_2[0]
+        cat = g.PHOTO_CATEGORIES[2]  # 自然資源狀況
         self.app.photo_files[cat].append(p)
         self.app.photo_captions[cat][p] = caption
-        self.app.listboxes[cat].insert(tk.END, self.app._photo_label(cat, p))
+        self.app._render_list(cat)
         return cat, p
 
     def _save_draft_to(self, path):
@@ -220,7 +222,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.text_fields['nature'].get('1.0', tk.END).strip(), '看到山羌\n第二行')
         self.assertEqual(self.app.photo_files[cat], [p])
         self.assertEqual(self.app.photo_captions[cat][p], '說明X')
-        self.assertIn('說明X', self.app.listboxes[cat].get(0))
+        self.assertEqual(self.app.listboxes[cat].item('0', 'values')[1], '說明X')
 
     def test_draft_load_missing_photo_warns(self):
         cat, p = self._add_photo()
@@ -229,7 +231,7 @@ class GuiTest(unittest.TestCase):
         os.remove(p)
         self._load_draft_from(draft)
         self.assertEqual(self.app.photo_files[cat], [])
-        self.assertEqual(self.app.listboxes[cat].size(), 0)
+        self.assertEqual(self.app.listboxes[cat].count(), 0)
         self.assertTrue(any(k == 'info' and p in m for k, m in self.shown))
 
     def test_draft_invalid_file_rejected_and_data_kept(self):
@@ -585,7 +587,7 @@ class GuiTest(unittest.TestCase):
         cat, lb, _ = self._photos()
         self._clear_with_answer(True)
         self.assertEqual(self.app.personnel.get(), '')
-        self.assertEqual(lb.size(), 0)
+        self.assertEqual(lb.count(), 0)
 
     def test_clear_warning_mentions_scope_and_irreversibility(self):
         _, message, _ = self._clear_with_answer(False)[0]
@@ -710,23 +712,23 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(texts, ['年', '月', '日', '至', '年', '月', '日'])  # 「至」是獨立的一個字，不再和「日」黏在一起
 
     # ---- 照片分頁分組與視窗高度
-    def test_natural_resources_moved_to_second_photo_tab(self):
-        nature = '自然資源狀況'
-        self.assertNotIn(nature, g.PHOTO_CATEGORIES_1)
-        self.assertIn(nature, g.PHOTO_CATEGORIES_2)
-        first = self.app.previews[g.PHOTO_CATEGORIES_1[0]]
-        self.assertIsNot(self.app.previews[nature], first)
-        # 實際畫面：「自然資源狀況」的清單在「服勤照片(下)」分頁裡
-        tab = self.app._tab_by_title('服勤照片(下)')
-        self.assertTrue(str(self.app.listboxes[nature]).startswith(tab))
-        tab_up = self.app._tab_by_title('服勤照片(上)')
-        self.assertFalse(str(self.app.listboxes[nature]).startswith(tab_up))
+    def test_all_photo_categories_are_in_one_tab_as_sub_tabs_in_word_order(self):
+        names = [self.app.photo_notebook.tab(tab, 'text') for tab in self.app.photo_notebook.tabs()]
+        expected = [g.PHOTO_SHORT_NAMES[c] for c in g.PHOTO_CATEGORIES]
+        self.assertEqual(len(names), 6)
+        for name, short in zip(names, expected):
+            self.assertTrue(name.startswith(short), (name, short))
+        main = [self.app.notebook.tab(tab, 'text') for tab in self.app.notebook.tabs()]
+        self.assertEqual(sum(t.startswith('服勤照片') for t in main), 1)  # 只剩一個「服勤照片」分頁
+        for category in g.PHOTO_CATEGORIES:  # 每個分類的表格都在這一個分頁裡
+            self.assertTrue(str(self.app.listboxes[category]).startswith(self.app._tab_by_title(g.TAB_PHOTOS)))
 
-    def test_word_order_does_not_depend_on_tab_grouping(self):
+    def test_word_order_matches_sub_tab_order(self):
         self.assertEqual(list(self.app.photo_files), g.PHOTO_CATEGORIES)
         self.assertEqual(g.PHOTO_CATEGORIES.index('自然資源狀況'), 2)  # 仍在「設施」之後、「環境清理」之前
-        self.assertEqual(sorted(g.PHOTO_CATEGORIES), sorted(g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2))
-        self.assertEqual(len(set(g.PHOTO_CATEGORIES_1) & set(g.PHOTO_CATEGORIES_2)), 0)
+        self.assertEqual(set(g.PHOTO_SHORT_NAMES), set(g.PHOTO_CATEGORIES))
+        self.assertFalse(hasattr(g, 'PHOTO_CATEGORIES_1'))
+        self.assertFalse(hasattr(g, 'PHOTO_TAB_TITLES'))
 
     def test_report_keeps_original_chapter_order(self):
         import glob
@@ -749,73 +751,71 @@ class GuiTest(unittest.TestCase):
                     heads.append(text)
         self.assertEqual(heads, g.PHOTO_CATEGORIES)
 
-    def test_draft_roundtrip_with_moved_category(self):
+    def test_draft_roundtrip_with_nature_category(self):
         cat = '自然資源狀況'
-        lb = self.app.listboxes[cat]
+        table = self.app.listboxes[cat]
         p = os.path.join(self.tmp.name, 'n.jpg')
         Image.new('RGB', (30, 20)).save(p)
         self.app.photo_files[cat].append(p)
-        lb.insert(tk.END, 'n.jpg')
+        self.app._render_list(cat)
         draft = os.path.join(self.tmp.name, 'd.json')
         self._save_draft_to(draft)
-        self.app.clear_photos(cat, lb)
+        self.app.clear_photos(cat, table)
         self._load_draft_from(draft)
         self.assertEqual(self.app.photo_files[cat], [p])
-        self.assertEqual(lb.size(), 1)
-
+        self.assertEqual(table.count(), 1)
 
     def test_scrollbar_appears_only_when_content_does_not_fit(self):
         nb = self.app.notebook
-        title = '服勤照片(上)'
-        canvas, inner, scrollbar = self.app._scroll_tabs[title]
-        nb.select(self.app._tab_by_title(title))
-        listboxes = [lb for c, lb in self.app.listboxes.items() if c in g.PHOTO_CATEGORIES_1]
-        original = [int(lb.cget('height')) for lb in listboxes]
+        canvas, inner, scrollbar = self.app._scroll_tabs[g.TAB_PHOTOS]
+        nb.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        tables = list(self.app.listboxes.values())
+        original = [int(t.cget('height')) for t in tables]
         try:
-            for lb in listboxes:  # 內容變少 -> 放得下 -> 隱藏
-                lb.configure(height=1)
-            self.root.geometry(f'{self.root.winfo_width()}x{self.root.winfo_height()}')
+            for table in tables:  # 內容變少 -> 放得下 -> 隱藏
+                table.configure(height=3)
+            self.app._refit_scroll_tabs()
             self.root.update()
             self.assertLessEqual(inner.winfo_reqheight(), canvas.winfo_height())
             self.assertEqual(scrollbar.winfo_manager(), '', '內容放得下時要隱藏捲動軸')
-            for lb in listboxes:  # 內容變多 -> 放不下 -> 顯示
-                lb.configure(height=40)
+            for table in tables:  # 內容變多 -> 放不下 -> 顯示
+                table.configure(height=60)
+            self.app._refit_scroll_tabs()
             self.root.update()
             self.assertGreater(inner.winfo_reqheight(), canvas.winfo_height())
             self.assertNotEqual(scrollbar.winfo_manager(), '', '內容放不下時要顯示捲動軸')
         finally:
-            for lb, rows in zip(listboxes, original):
-                lb.configure(height=rows)
+            for table, rows in zip(tables, original):
+                table.configure(height=rows)
 
     def test_short_screen_falls_back_to_compact_photo_lists(self):
-        """螢幕不夠高、視窗加高也放不下時，改把照片清單縮成較少的列數，並把視窗限制在螢幕高度內。"""
-        for listbox in self.app.listboxes.values():
-            listbox.configure(height=g.PHOTO_LIST_ROWS)
-        self.root.geometry('1050x560')
+        """螢幕不夠高、視窗加高也放不下時，改把照片表格縮成較少的列數，並把視窗限制在螢幕高度內。"""
+        for table in self.app.listboxes.values():
+            table.configure(height=g.PHOTO_TABLE_ROWS)
+        self.root.geometry(f'{self.root.winfo_width()}x560')
         self.root.update()
         before = self.app._tabs_extra_height()
         self.assertGreater(before, 0)
         with mock.patch.object(self.root, 'winfo_screenheight', lambda: 700):  # 可用高度約 610
             self.app._fit_window_height()
         self.root.update()
-        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS_COMPACT for lb in self.app.listboxes.values()))
+        self.assertTrue(all(int(t.cget('height')) == g.PHOTO_TABLE_ROWS_COMPACT for t in self.app.listboxes.values()))
         self.assertLessEqual(self.root.winfo_height(), 700 - 90)
-        self.assertLess(self.app._tabs_extra_height(), before)  # 比原本好（縮小清單 + 加高視窗）
+        self.assertLess(self.app._tabs_extra_height(), before)  # 比原本好（縮小表格 + 加高視窗）
+
     def test_lists_stay_normal_size_when_the_window_can_hold_everything(self):
-        """視窗放得下兩個照片分頁時，不需要縮小照片清單。"""
-        for lb in self.app.listboxes.values():
-            lb.configure(height=g.PHOTO_LIST_ROWS)
+        """視窗放得下所有分頁時，不需要縮小照片表格。"""
+        for t in self.app.listboxes.values():
+            t.configure(height=g.PHOTO_TABLE_ROWS)
         with mock.patch.object(self.app, '_tabs_extra_height', lambda: 0):
             self.app._fit_window_height()
-        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS for lb in self.app.listboxes.values()))
+        self.assertTrue(all(int(t.cget('height')) == g.PHOTO_TABLE_ROWS for t in self.app.listboxes.values()))
 
-    def test_photo_tabs_need_no_horizontal_room_beyond_window(self):
-        for title in g.PHOTO_TAB_TITLES:
-            canvas, inner, _ = self.app._scroll_tabs[title]
-            self.app.notebook.select(self.app._tab_by_title(title))
-            self.root.update()
-            with self.subTest(tab=title):
-                self.assertLessEqual(inner.winfo_reqwidth(), canvas.winfo_width())
+    def test_photo_tab_needs_no_horizontal_room_beyond_window(self):
+        canvas, inner, _ = self.app._scroll_tabs[g.TAB_PHOTOS]
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        self.root.update()
+        self.assertLessEqual(inner.winfo_reqwidth(), canvas.winfo_width())
 
     def _linespace(self, widget):
         import tkinter.font as tkfont
@@ -947,13 +947,12 @@ class GuiTest(unittest.TestCase):
         self._load_draft_from(draft)  # 不會出錯，也沒有任何效果
         self.assertFalse(hasattr(self.app, 'default_caption'))
 
-    def test_single_merged_hint_on_each_photo_tab(self):
+    def test_photo_tab_has_one_hint_line(self):
         hints = [w for w in self._all_widgets(self.root)
-                 if isinstance(w, ttk.Label) and w.cget('text') == '（點選預覽、拖曳調整順序、雙擊檔名輸入照片說明）']
-        self.assertEqual(len(hints), 2)  # 兩個照片分頁各一句
-        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
-        self.assertNotIn('（點選預覽、拖曳調整順序）', texts)
-        self.assertNotIn('（雙擊檔名輸入照片說明）', texts)
+                 if isinstance(w, ttk.Label) and w.cget('text') == g.PHOTO_TAB_HINT]
+        self.assertEqual(len(hints), 1)
+        self.assertIn('在預覽下方輸入說明', g.PHOTO_TAB_HINT)
+        self.assertIn('Enter', g.PHOTO_TAB_HINT)
 
     # ---- 視窗標題列與分頁之間不要有多餘空白
     def test_no_extra_blank_space_above_tabs(self):
@@ -967,11 +966,11 @@ class GuiTest(unittest.TestCase):
 
     # ---- 分頁改名
     def test_tab_names(self):
-        titles = [self.app.notebook.tab(tab, 'text') for tab in self.app.notebook.tabs()]
+        titles = [self.app.notebook.tab(tab, 'text').replace(' ⚠', '') for tab in self.app.notebook.tabs()]
         self.assertEqual(titles, ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客管理',
-                                  '遊客意見/心得建議/疑問解答', '服勤照片(上)', '服勤照片(下)'])
-        self.assertEqual((g.TAB_ROAD, g.TAB_NATURE, g.TAB_FEEDBACK),
-                         ('道路/步道', '自然資源/環境維護/遊客管理', '遊客意見/心得建議/疑問解答'))
+                                  '遊客意見/心得建議/疑問解答', '服勤照片'])
+        self.assertEqual((g.TAB_ROAD, g.TAB_NATURE, g.TAB_FEEDBACK, g.TAB_PHOTOS),
+                         ('道路/步道', '自然資源/環境維護/遊客管理', '遊客意見/心得建議/疑問解答', '服勤照片'))
 
     def test_all_tabs_fit_in_the_window_width(self):
         self.root.update()
@@ -1023,7 +1022,7 @@ class GuiTest(unittest.TestCase):
 
     def test_add_photos_dialog_title(self):
         titles = []
-        cat = g.PHOTO_CATEGORIES_1[0]
+        cat = g.PHOTO_CATEGORIES[0]
         with mock.patch.object(filedialog, 'askopenfilenames', lambda **k: titles.append(k['title']) or ()):
             self.app.select_photos(cat, self.app.listboxes[cat])
         self.assertEqual(titles, [f'加入照片 - {cat}'])
@@ -1126,6 +1125,307 @@ class GuiTest(unittest.TestCase):
             self._press(self.app.personnel, 's')
         self.assertTrue(os.path.exists(out))
 
+    # ================= 合併後的服勤照片分頁：表格、⚠ 標記、說明輸入、跳到下一張 =================
+    def _tab_text(self, title):
+        return self.app.notebook.tab(self.app._tab_by_title(title), 'text')
+
+    def _all_main_titles(self):
+        return [g.TAB_BASIC, g.TAB_ROAD, g.TAB_FACILITY, g.TAB_NATURE, g.TAB_FEEDBACK, g.TAB_PHOTOS]
+
+    def test_empty_form_shows_warning_mark_on_every_tab(self):
+        for title in self._all_main_titles():
+            with self.subTest(tab=title):
+                self.assertEqual(self._tab_text(title), f'{title} ⚠')
+
+    def test_tab_marks_never_show_counts(self):
+        import re
+        for tab in self.app.notebook.tabs():
+            self.assertIsNone(re.search(r'⚠\s*\d', self.app.notebook.tab(tab, 'text')))
+        for tab in self.app.photo_notebook.tabs():
+            self.assertIsNone(re.search(r'\d', self.app.photo_notebook.tab(tab, 'text')))
+
+    def test_text_tab_mark_disappears_when_all_fields_filled_and_returns_when_one_is_emptied(self):
+        keys = ['road_status', 'road_grass', 'road_other']
+        for key in keys[:2]:
+            self.app.text_fields[key].insert('1.0', '內容')
+        self.app._refresh_tab_marks()
+        self.assertEqual(self._tab_text(g.TAB_ROAD), f'{g.TAB_ROAD} ⚠')  # 還有一個沒填
+        self.app.text_fields[keys[2]].insert('1.0', '內容')
+        self.app._refresh_tab_marks()
+        self.assertEqual(self._tab_text(g.TAB_ROAD), g.TAB_ROAD)           # 全部填完：⚠ 消失
+        self.app.text_fields[keys[1]].delete('1.0', tk.END)
+        self.app._refresh_tab_marks()
+        self.assertEqual(self._tab_text(g.TAB_ROAD), f'{g.TAB_ROAD} ⚠')    # 又清空一個：⚠ 回來
+
+    def test_tab_mark_updates_live_while_typing(self):
+        nb = self.app.notebook
+        nb.select(self.app._tab_by_title(g.TAB_ROAD))
+        self.root.update()
+        for key in ('road_status', 'road_grass', 'road_other'):
+            widget = self.app.text_fields[key]
+            widget.focus_force()
+            self.root.update()
+            widget.insert('1.0', 'x')
+            widget.event_generate('<KeyRelease>', keysym='x')
+            self.root.update()
+        self.assertEqual(self._tab_text(g.TAB_ROAD), g.TAB_ROAD)
+
+    def test_basic_tab_mark_needs_person_location_and_service_dates(self):
+        self.assertTrue(self._tab_text(g.TAB_BASIC).endswith('⚠'))
+        self.fill_dates()
+        self.app.personnel.insert(0, '王小明')
+        self.app._refresh_tab_marks()
+        self.assertTrue(self._tab_text(g.TAB_BASIC).endswith('⚠'))  # 還缺協勤地點
+        self.app.location.insert(0, '排雲山莊')
+        self.app._refresh_tab_marks()
+        self.assertEqual(self._tab_text(g.TAB_BASIC), g.TAB_BASIC)
+
+    def test_photo_tab_mark_covers_empty_categories_and_missing_captions(self):
+        self._fill_everything()
+        self.app._refresh_tab_marks()
+        self.assertEqual(self._tab_text(g.TAB_PHOTOS), g.TAB_PHOTOS)  # 六個分類都有照片、都有說明
+        cat = g.PHOTO_CATEGORIES[3]
+        path = self.app.photo_files[cat][0]
+        self.app.photo_captions[cat].pop(path)
+        self.app._render_list(cat)
+        self.assertEqual(self._tab_text(g.TAB_PHOTOS), f'{g.TAB_PHOTOS} ⚠')  # 一張沒說明
+        self.app.photo_captions[cat][path] = '補上'
+        self.app._render_list(cat)
+        self.assertEqual(self._tab_text(g.TAB_PHOTOS), g.TAB_PHOTOS)
+        self.app.clear_photos(g.PHOTO_CATEGORIES[5], self.app.listboxes[g.PHOTO_CATEGORIES[5]])
+        self.assertEqual(self._tab_text(g.TAB_PHOTOS), f'{g.TAB_PHOTOS} ⚠')  # 有分類沒加入照片
+
+    def test_marks_follow_clear_and_draft_load(self):
+        self._fill_everything()
+        self.app._refresh_tab_marks()
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.assertTrue(all(self._tab_text(t) == t for t in self._all_main_titles()))
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
+            self.app.clear_all()
+        self.assertTrue(all(self._tab_text(t) == f'{t} ⚠' for t in self._all_main_titles()))
+        self._load_draft_from(draft)
+        self.assertTrue(all(self._tab_text(t) == t for t in self._all_main_titles()))
+
+    def test_sub_tab_marks_and_category_headers(self):
+        cat, other = g.PHOTO_CATEGORIES[0], g.PHOTO_CATEGORIES[1]
+        short = g.PHOTO_SHORT_NAMES[cat]
+        sub = lambda c: self.app.photo_notebook.tab(self.app.photo_pages[c], 'text')
+        self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（尚未加入照片）')
+        self.assertEqual(sub(cat), f'{short}  ⚠')
+        _, table, (a, b, c) = self._photos()
+        self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，3 張未填說明）')
+        self.app.photo_captions[cat][a] = '一'
+        self.app._render_list(cat)
+        self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，2 張未填說明）')
+        self.assertEqual(sub(cat), f'{short}  ⚠')
+        self.app.photo_captions[cat][b] = '二'
+        self.app.photo_captions[cat][c] = '三'
+        self.app._render_list(cat)
+        self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，全部已填 ✓）')
+        self.assertEqual(sub(cat), f'{short}  ✓')
+        self.assertEqual(sub(other), f'{g.PHOTO_SHORT_NAMES[other]}  ⚠')  # 其他分類不受影響
+
+    def test_table_rows_show_markers_missing_style_and_captions(self):
+        cat, table, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
+        self.app.photo_captions[cat][a] = '山屋'
+        self.app._render_list(cat)
+        self.assertEqual(tuple(table.item('0', 'values')), ('✓ a.jpg', '山屋'))
+        self.assertEqual(tuple(table.item('0', 'tags')), ('done',))
+        self.assertEqual(tuple(table.item('1', 'values')), ('⚠ b.jpg', '（未填說明）'))
+        self.assertEqual(tuple(table.item('1', 'tags')), ('missing',))
+        palette = g.THEMES[g.DEFAULT_THEME]
+        self.assertEqual(str(table.tag_configure('missing', 'background')), palette['missing_bg'])
+        self.assertEqual(str(table.tag_configure('missing', 'foreground')), palette['missing_fg'])
+
+    def test_missing_row_colors_follow_the_theme(self):
+        cat, table, _ = self._photos(names=('a.jpg',))
+        self.app.apply_theme('色弱友善')
+        self.assertEqual(str(table.tag_configure('missing', 'background')), g.THEMES['色弱友善']['missing_bg'])
+
+    def test_missing_row_colors_are_readable_in_every_theme(self):
+        for name, p in g.THEMES.items():
+            with self.subTest(theme=name):
+                self.assertGreaterEqual(self._contrast(p['missing_fg'], p['missing_bg']), 4.5)
+
+    def test_table_has_two_columns_with_narrow_filename_column_and_fills_height(self):
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        self.root.update()
+        table = self.app.listboxes[g.PHOTO_CATEGORIES[0]]
+        self.assertEqual(tuple(table.cget('columns')), ('name', 'caption'))
+        self.assertEqual([table.heading(c, 'text') for c in ('name', 'caption')], ['檔名', '說明'])
+        self.assertLess(int(table.column('name', 'width')), int(table.column('caption', 'width')))  # 檔名欄比較窄
+        self.assertGreater(table.winfo_height(), g.PHOTO_TABLE_ROWS * 34, '表格沒有撐滿畫面高度')
+        canvas, inner, _ = self.app._scroll_tabs[g.TAB_PHOTOS]
+        self.assertGreater(table.winfo_height(), canvas.winfo_height() * 0.5)  # 至少占可視高度的一半以上
+
+    def test_window_is_wide_and_has_no_listbox_left(self):
+        expected = min(g.WINDOW_WIDTH, max(900, self.root.winfo_screenwidth() - 40))
+        self.assertEqual(self.root.winfo_width(), expected)
+        self.assertEqual([w for w in self._all_widgets(self.root) if isinstance(w, tk.Listbox)], [])
+
+    def test_jump_to_next_missing_caption(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.photo_captions[cat][a] = '一'
+        self.app._render_list(cat)
+        jump = self.app.jump_buttons[cat]
+        self.assertEqual(jump.cget('text'), '跳到下一張未填說明（2）(N)')
+        self.assertTrue(self.app._jump_next_missing(cat))
+        self.assertEqual(table.selected_indexes(), (1,))
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        self.assertEqual(self.app.caption_var.get(), '')
+        self.assertTrue(self.app._jump_next_missing(cat))
+        self.assertEqual(table.selected_indexes(), (2,))
+        self.app.photo_captions[cat][b] = '二'
+        self.app._render_list(cat)
+        self.assertTrue(self.app._jump_next_missing(cat))   # 從最後一張再找：回頭找到沒填的（只剩 c 自己）
+        self.assertEqual(table.selected_indexes(), (2,))
+        self.app.photo_captions[cat][c] = '三'
+        self.app._render_list(cat)
+        self.assertFalse(self.app._jump_next_missing(cat))
+        self.assertEqual(jump.cget('text'), '全部都已填寫 ✓')
+        self.assertEqual(str(jump.cget('state')), 'disabled')
+        self.assertIn('都已填寫', self.app.status_label.cget('text'))
+
+    def test_jump_button_states_for_empty_category(self):
+        cat = g.PHOTO_CATEGORIES[4]
+        self.assertEqual(self.app.jump_buttons[cat].cget('text'), '尚無照片')
+        self.assertEqual(str(self.app.jump_buttons[cat].cget('state')), 'disabled')
+
+    def test_ctrl_n_jumps_only_on_the_photo_tab(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_ROAD))
+        self.app._shortcut_jump()
+        self.assertEqual(table.selected_indexes(), ())  # 不在服勤照片分頁：不做事
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        self.root.update()
+        self.app._shortcut_jump()
+        self.assertEqual(table.selected_indexes(), (0,))
+        calls = []
+        with mock.patch.object(self.app, '_shortcut_jump', lambda: calls.append('n')):
+            self.app._bind_shortcuts()
+            self._press(self.app.personnel, 'n')
+        self.assertEqual(calls, ['n'])
+
+    def test_unsaved_caption_text_is_included_in_draft_and_data(self):
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([1])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('還沒按 Enter')
+        self.assertEqual(self.app.build_draft()['captions'][cat][b], '還沒按 Enter')
+        self.assertEqual(table.item('1', 'values')[1], '還沒按 Enter')
+
+    def test_caption_is_saved_when_selection_changes_or_focus_leaves(self):
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('切換前輸入')
+        table.set_selection([2])
+        self.app._on_photo_select(cat, table)  # 換選別張：前一張的輸入要先存起來
+        self.assertEqual(self.app.photo_captions[cat][a], '切換前輸入')
+        self.app.caption_var.set('離開輸入框')
+        self.app.caption_entry.event_generate('<FocusOut>')
+        self.assertEqual(self.app.photo_captions[cat][c], '離開輸入框')
+
+    def test_emptying_the_caption_box_removes_the_caption(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.photo_captions[cat][a] = '有'
+        self.app._render_list(cat)
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('   ')
+        self.app._commit_caption()
+        self.assertNotIn(a, self.app.photo_captions[cat])
+        self.assertEqual(tuple(table.item('0', 'tags')), ('missing',))
+
+    def test_double_click_row_moves_to_caption_box(self):
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([1])
+        self.app._focus_caption(cat, table)
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        self.assertEqual(str(self.app.caption_entry.cget('state')), 'normal')
+
+    def test_switching_sub_tab_shows_that_categorys_selected_photo_or_clears(self):
+        cat0, table0, (a, b, c) = self._photos()
+        table0.set_selection([2])
+        self.app._on_photo_select(cat0, table0)
+        self.app.photo_notebook.select(self.app.photo_pages[g.PHOTO_CATEGORIES[1]])  # 設施：沒有照片
+        self.root.update()
+        self.assertIsNone(self.app.previews[cat0].current)
+        self.assertEqual(str(self.app.caption_entry.cget('state')), 'disabled')
+        self.app.photo_notebook.select(self.app.photo_pages[cat0])
+        self.root.update()
+        self.assertEqual(self.app.previews[cat0].current, (cat0, c))
+
+    # ---- 產生前：也檢查沒填說明的照片
+    def test_find_missing_captions_in_word_order(self):
+        self._fill_everything()
+        for i in (4, 1):
+            cat = g.PHOTO_CATEGORIES[i]
+            self.app.photo_captions[cat].clear()
+            self.app._render_list(cat)
+        self.assertEqual(self.app.find_missing_captions(),
+                         {g.PHOTO_CATEGORIES[1]: 1, g.PHOTO_CATEGORIES[4]: 1})
+        self.assertEqual(list(self.app.find_missing_captions()), [g.PHOTO_CATEGORIES[1], g.PHOTO_CATEGORIES[4]])
+
+    def test_message_lists_missing_captions_after_blank_fields(self):
+        message = g.ReportGeneratorGUI.blank_fields_message({'基本資料': ['協勤地點']}, {'其他': 2, '設施狀況及維護情形': 1})
+        self.assertIn('以下欄位尚未填寫：', message)
+        self.assertIn('另外有 3 張照片沒有填寫說明：', message)
+        self.assertIn('    • 其他：2 張', message)
+        self.assertTrue(message.endswith('仍要產生報告嗎？'))
+        only = g.ReportGeneratorGUI.blank_fields_message({}, {'其他': 2})
+        self.assertTrue(only.startswith('有 2 張照片沒有填寫說明：'))
+        self.assertNotIn('以下欄位尚未填寫', only)
+
+    def test_generate_warns_when_only_captions_are_missing(self):
+        self._fill_everything()
+        cat = g.PHOTO_CATEGORIES[0]
+        self.app.photo_captions[cat].clear()
+        self.app._render_list(cat)
+        out = os.path.join(self.tmp.name, 'o.docx')
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertEqual(len(self.confirm_calls), 1)
+        _, message, kwargs = self.confirm_calls[0]
+        self.assertEqual(kwargs.get('default'), 'yes')
+        self.assertIn('有 1 張照片沒有填寫說明：', message)
+        self.assertIn(f'    • {cat}：1 張', message)
+        self.assertNotIn('以下欄位尚未填寫', message)
+        self.assertTrue(os.path.exists(out))
+
+    def test_answering_no_for_missing_captions_selects_the_first_missing_photo(self):
+        self._fill_everything()
+        cat = g.PHOTO_CATEGORIES[1]  # 設施
+        self.app.photo_captions[cat].clear()
+        self.app._render_list(cat)
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: False):
+            self.app.generate_report()
+        self.assertEqual(self.app.notebook.select(), self.app._tab_by_title(g.TAB_PHOTOS))
+        self.assertEqual(self.app.photo_notebook.select(), str(self.app.photo_pages[cat]))
+        self.assertEqual(self.app.listboxes[cat].selected_indexes(), (0,))
+        self.assertEqual(self.app.previews[cat].current[0], cat)
+        self.assertEqual(self.pdf_calls, [])
+
+    def test_unsaved_caption_text_counts_for_the_pre_generation_check(self):
+        self._fill_everything()
+        cat = g.PHOTO_CATEGORIES[2]
+        path = self.app.photo_files[cat][0]
+        self.app.photo_captions[cat].pop(path)
+        self.app._render_list(cat)
+        table = self.app.listboxes[cat]
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('剛打的，還沒按 Enter')
+        out = os.path.join(self.tmp.name, 'o.docx')
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertEqual(self.confirm_calls, [])  # 輸入框裡的文字會先存起來，不會誤報「沒填說明」
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -1180,20 +1480,21 @@ class GuiTest(unittest.TestCase):
             p = os.path.join(self.tmp.name, f'p{i}.jpg')
             Image.new('RGB', (40, 30)).save(p)
             self.app.photo_files[cat].append(p)
+            self.app.photo_captions[cat][p] = '說明'
+            self.app._render_list(cat)
 
     def test_blank_fields_listed_per_tab(self):
         self.fill_dates()
         data, _ = self.app.collect_data()
         blanks = self.app.find_blank_fields(data)
-        self.assertEqual(list(blanks), ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客管理', '遊客意見/心得建議/疑問解答',
-                                        '服勤照片(上)', '服勤照片(下)'])
+        self.assertEqual(list(blanks), ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客管理',
+                                        '遊客意見/心得建議/疑問解答', '服勤照片'])
         self.assertEqual(blanks['基本資料'], ['協勤人員姓名', '協勤地點'])
         self.assertEqual(len(blanks['道路/步道']), 3)
         self.assertEqual(len(blanks['設施']), 4)
         self.assertEqual(len(blanks['自然資源/環境維護/遊客管理']), 3)
         self.assertEqual(len(blanks['遊客意見/心得建議/疑問解答']), 3)
-        self.assertEqual(len(blanks['服勤照片(上)']), 3)
-        self.assertEqual(len(blanks['服勤照片(下)']), 3)
+        self.assertEqual(len(blanks['服勤照片']), 6)  # 六個分類都還沒加入照片
 
     def test_partially_filled_form_lists_only_the_blank_ones(self):
         self._fill_everything()
@@ -1205,7 +1506,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(blanks, {
             '基本資料': ['協勤地點'],
             '道路/步道': ['2、道路、步道雜草情形'],
-            '服勤照片(下)': ['其他（尚未加入照片）'],
+            '服勤照片': ['其他（尚未加入照片）'],
         })
 
     def test_whitespace_only_counts_as_blank(self):
@@ -1231,7 +1532,7 @@ class GuiTest(unittest.TestCase):
         self.assertIn('【基本資料】', message)
         self.assertIn('協勤地點', message)
         self.assertNotIn('協勤人員姓名', message)         # 已填的不會列出
-        self.assertIn('【服勤照片(下)】', message)
+        self.assertIn('【服勤照片】', message)
         self.assertIn('仍要產生報告嗎？', message)
         self.assertTrue(os.path.exists(out))             # 回答「是」就照常產生
 
@@ -1242,7 +1543,7 @@ class GuiTest(unittest.TestCase):
                 mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: saved.append(1) or ''):
             self.app.generate_report()
         self.assertEqual(saved, [])  # 沒有進到存檔步驟
-        self.assertEqual(self.app.notebook.tab(self.app.notebook.select(), 'text'), '基本資料')
+        self.assertEqual(self.app.notebook.select(), self.app._tab_by_title('基本資料'))
         self.assertEqual(str(self.app.generate_btn['state']), 'normal')
         self.assertEqual(self.pdf_calls, [])
 
@@ -1427,8 +1728,8 @@ class GuiTest(unittest.TestCase):
             self.y = y
 
     def _photos(self, names=('a.jpg', 'b.jpg', 'c.jpg'), cat=None, size=(400, 200), exif=None):
-        cat = cat or g.PHOTO_CATEGORIES_1[0]
-        lb = self.app.listboxes[cat]
+        cat = cat or g.PHOTO_CATEGORIES[0]
+        table = self.app.listboxes[cat]
         paths = []
         for n in names:
             p = os.path.join(self.tmp.name, n)
@@ -1440,44 +1741,44 @@ class GuiTest(unittest.TestCase):
             else:
                 im.save(p)
             self.app.photo_files[cat].append(p)
-            lb.insert(tk.END, self.app._photo_label(cat, p))
             paths.append(p)
-        return cat, lb, paths
+        self.app._render_list(cat)
+        return cat, table, paths
 
-    def _drag(self, cat, lb, start, *targets):
-        """模擬從 start 位置按下，依序拖到 targets，最後放開。"""
-        full = (0, 0, 100, 1000)
-        with mock.patch.object(lb, 'bbox', lambda i: full), mock.patch.object(lb, 'nearest') as nearest:
-            nearest.return_value = start
-            self.app._drag_start(cat, lb, self._Ev(5))
-            for t in targets:
-                nearest.return_value = t
-                self.app._drag_motion(cat, lb, self._Ev(5))
+    def _drag(self, cat, table, start, *targets):
+        """模擬從 start 列按下，依序拖到 targets 列，最後放開。"""
+        row = {'i': start}
+        with mock.patch.object(table, 'identify_row', lambda y: str(row['i']) if row['i'] is not None else ''):
+            self.app._drag_start(cat, table, self._Ev(5))
+            for target in targets:
+                row['i'] = target
+                self.app._drag_motion(cat, table, self._Ev(5))
             self.app._drag_end()
 
     def test_drag_reorders_photos_and_listbox(self):
-        cat, lb, (a, b, c) = self._photos()
-        lb.selection_set(0)
-        self._drag(cat, lb, 0, 1, 2)
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([0])
+        self._drag(cat, table, 0, 1, 2)
         self.assertEqual(self.app.photo_files[cat], [b, c, a])
-        self.assertEqual([lb.get(i) for i in range(3)], ['b.jpg', 'c.jpg', 'a.jpg'])
-        self.assertEqual(lb.curselection(), (2,))
-        self._drag(cat, lb, 2, 0)
+        self.assertEqual([table.row_text(i) for i in range(3)], ['⚠ b.jpg', '⚠ c.jpg', '⚠ a.jpg'])
+        self.assertEqual(table.selected_indexes(), (2,))
+        self._drag(cat, table, 2, 0)
         self.assertEqual(self.app.photo_files[cat], [a, b, c])
 
     def test_drag_order_persists_in_draft_and_marks_dirty(self):
-        cat, lb, (a, b, c) = self._photos()
+        cat, table, (a, b, c) = self._photos()
         self.app._saved_signature = self.app._signature()
-        self._drag(cat, lb, 2, 0)
+        self._drag(cat, table, 2, 0)
         self.assertEqual(self.app.build_draft()['photos'][cat], [c, a, b])
         self.assertTrue(self.app.is_dirty())
 
     def test_drag_in_blank_area_does_nothing(self):
-        cat, lb, (a, b, c) = self._photos()
-        with mock.patch.object(lb, 'bbox', lambda i: (0, 0, 100, 20)), mock.patch.object(lb, 'nearest', lambda y: 2):
-            self.app._drag_start(cat, lb, self._Ev(500))  # 按在清單最後一項下方的空白處
+        cat, table, (a, b, c) = self._photos()
+        row = {'i': None}  # 按在表格最後一列下方的空白處：identify_row 回傳空字串
+        with mock.patch.object(table, 'identify_row', lambda y: ''):
+            self.app._drag_start(cat, table, self._Ev(500))
             self.assertIsNone(self.app._drag)
-            self.assertIsNone(self.app._drag_motion(cat, lb, self._Ev(500)))
+            self.assertIsNone(self.app._drag_motion(cat, table, self._Ev(500)))
         self.assertEqual(self.app.photo_files[cat], [a, b, c])
 
     def test_drag_target_is_clamped(self):
@@ -1486,13 +1787,14 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.photo_files[cat], [b, c, a])
 
     def test_select_shows_preview_with_info(self):
-        cat, lb, (a, b, c) = self._photos(size=(400, 200))
+        cat, table, (a, b, c) = self._photos(size=(400, 200))
         self.app.photo_captions[cat][a] = '山屋外觀'
-        lb.selection_set(0)
-        nb = next(w for w in self.root.winfo_children()[0].winfo_children() if isinstance(w, ttk.Notebook))
-        nb.select(5)  # 沒顯示出來的元件收不到事件，要先切到照片分頁
+        self.app._render_list(cat)
+        table.set_selection([0])
+        nb = self.app.notebook
+        nb.select(self.app._tab_by_title(g.TAB_PHOTOS))  # 沒顯示出來的元件收不到事件，要先切到照片分頁
         self.root.update()
-        lb.event_generate('<<ListboxSelect>>')  # 確認事件有綁到預覽
+        table.event_generate('<<TreeviewSelect>>')  # 確認事件有綁到預覽
         self.root.update()
         preview = self.app.previews[cat]
         self.assertEqual(preview.current, (cat, a))
@@ -1502,61 +1804,71 @@ class GuiTest(unittest.TestCase):
         text = preview.info.cget('text')
         self.assertIn('a.jpg', text)
         self.assertIn('400×200（橫式）', text)
-        self.assertIn('山屋外觀', text)
+        self.assertEqual(self.app.caption_var.get(), '山屋外觀')  # 說明顯示在預覽下方的輸入框
+        self.assertEqual(str(self.app.caption_entry.cget('state')), 'normal')
 
     def test_preview_applies_exif_rotation(self):
-        cat, lb, (a,) = self._photos(names=('r.jpg',), size=(400, 200), exif=6)
-        lb.selection_set(0)
-        self.app._on_photo_select(cat, lb)
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200), exif=6)
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
         preview = self.app.previews[cat]
         self.assertGreater(preview.image.height(), preview.image.width())  # 轉正後為直式
         self.assertIn('200×400（直式）', preview.info.cget('text'))
 
     def test_preview_of_unreadable_file_does_not_crash(self):
-        cat = g.PHOTO_CATEGORIES_1[0]
-        lb = self.app.listboxes[cat]
+        cat = g.PHOTO_CATEGORIES[0]
+        table = self.app.listboxes[cat]
         bad = os.path.join(self.tmp.name, 'bad.jpg')
         with open(bad, 'wb') as f:
             f.write(b'not an image')
         self.app.photo_files[cat].append(bad)
-        lb.insert(tk.END, 'bad.jpg')
-        lb.selection_set(0)
-        self.app._on_photo_select(cat, lb)
+        self.app._render_list(cat)
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
         preview = self.app.previews[cat]
         self.assertIsNone(preview.image)
         self.assertIn('bad.jpg', preview.info.cget('text'))
 
     def test_preview_cleared_when_photo_removed_or_cleared(self):
-        cat, lb, (a, b, c) = self._photos()
-        lb.selection_set(1)
-        self.app._on_photo_select(cat, lb)
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([1])
+        self.app._on_photo_select(cat, table)
         self.assertEqual(self.app.previews[cat].current, (cat, b))
-        lb.selection_clear(0, tk.END)
-        lb.selection_set(0)
-        self.app.remove_photos(cat, lb)  # 移除 a：預覽的是 b，不受影響
+        table.set_selection([0])
+        self.app.remove_photos(cat, table)  # 移除 a：預覽的是 b，不受影響
         self.assertEqual(self.app.previews[cat].current, (cat, b))
-        lb.selection_clear(0, tk.END)
-        lb.selection_set(0)
-        self.app.remove_photos(cat, lb)  # 移除 b：預覽要清掉
+        table.set_selection([0])
+        self.app.remove_photos(cat, table)  # 移除 b：預覽與說明輸入框都要清掉
         self.assertIsNone(self.app.previews[cat].current)
         self.assertIsNone(self.app.previews[cat].image)
-        lb.selection_set(0)
-        self.app._on_photo_select(cat, lb)
+        self.assertEqual(str(self.app.caption_entry.cget('state')), 'disabled')
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
         self.assertEqual(self.app.previews[cat].current, (cat, c))
-        self.app.clear_photos(cat, lb)
+        self.app.clear_photos(cat, table)
         self.assertIsNone(self.app.previews[cat].current)
 
-    def test_preview_refreshed_after_caption_edit(self):
-        cat, lb, (a, b, c) = self._photos()
-        lb.selection_set(0)
-        with mock.patch.object(simpledialog, 'askstring', lambda *a, **k: '新說明'):
-            self.app.edit_caption(cat, lb)
-        self.assertIn('新說明', self.app.previews[cat].info.cget('text'))
-        self.assertEqual(lb.curselection(), (0,))
+    def test_enter_in_caption_box_saves_and_jumps_to_next_photo(self):
+        cat, table, (a, b, c) = self._photos()
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_var.set('  新說明  ')
+        self.assertEqual(self.app._caption_return(), 'break')
+        self.assertEqual(self.app.photo_captions[cat][a], '新說明')       # 前後空白去掉
+        self.assertEqual(table.item('0', 'values')[1], '新說明')
+        self.assertEqual(table.selected_indexes(), (1,))                  # 跳到下一張
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        self.assertEqual(self.app.caption_var.get(), '')                  # b 還沒有說明
+        self.app.caption_var.set('第二張')
+        self.app._caption_return()
+        self.app.caption_var.set('第三張')
+        self.app._caption_return()                                        # 最後一張：存起來，停在原地
+        self.assertEqual(self.app.photo_captions[cat][c], '第三張')
+        self.assertEqual(table.selected_indexes(), (2,))
 
-    def test_tab_shares_one_preview_between_its_categories(self):
-        self.assertIs(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_1[2]])
-        self.assertIsNot(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_2[0]])
+    def test_all_categories_share_one_preview_and_caption_box(self):
+        previews = {id(self.app.previews[c]) for c in g.PHOTO_CATEGORIES}
+        self.assertEqual(len(previews), 1)
 
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')

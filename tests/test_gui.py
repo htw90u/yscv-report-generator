@@ -1878,13 +1878,16 @@ class GuiTest(unittest.TestCase):
         ctypes.memmove(ptr + header, data, len(data))
         kernel32.GlobalUnlock(handle)
         user32.GetParent.restype = wintypes.HWND
-        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        user32.SendMessageW.restype = ctypes.c_ssize_t
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         self.root.update()
         hwnd = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
-        user32.SendMessageW(hwnd, 0x0233, handle, 0)
-        for _ in range(5):
+        # 用 PostMessage（非同步）：訊息是在主迴圈裡被派送的，和檔案總管實際拖曳時一樣。
+        # 以前用 SendMessage（直接呼叫）測不出「在訊息處理中碰 tkinter 會讓程式當掉」的問題。
+        user32.PostMessageW(hwnd, 0x0233, handle, 0)
+        deadline = time.time() + 5
+        while time.time() < deadline and not any(self.app.photo_files[c] for c in g.PHOTO_CATEGORIES):
             self.root.update()
+            time.sleep(0.05)
         added = [f for cat in g.PHOTO_CATEGORIES for f in self.app.photo_files[cat]]
         self.assertEqual(sorted(added), sorted(files))
 

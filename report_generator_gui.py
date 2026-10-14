@@ -1850,7 +1850,9 @@ class ReportGeneratorGUI:
     def _enable_file_drop(self):
         """讓視窗接受從檔案總管拖進來的檔案（只有 Windows；失敗就維持用按鈕加入）。"""
         def on_drop(paths, x, y):
-            self.root.after(0, lambda: self.handle_dropped_files(paths, x, y))
+            # 這個函式是在 Windows 的視窗訊息處理中被呼叫：不能在這裡碰 tkinter（會讓程式直接當掉），
+            # 只把工作放進佇列，交給主迴圈每 100 毫秒檢查一次的 _drain_ui_queue 去處理。
+            self._post(lambda: self.handle_dropped_files(paths, x, y))
         self._file_drop = enable_file_drop(self.root, on_drop)
 
     # ---- 預覽、說明輸入
@@ -2520,6 +2522,7 @@ def enable_file_drop(root, callback):
         user32.GetParent.argtypes = [wintypes.HWND]
         user32.SetWindowLongPtrW.restype = ctypes.c_void_p
         user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
         user32.CallWindowProcW.restype = LRESULT
         user32.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         shell32.DragQueryFileW.restype = wintypes.UINT

@@ -99,7 +99,8 @@ DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
 DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
 TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
-PREVIEW_SIZE = (480, 400)  # 照片預覽區大小（像素）
+PREVIEW_SIZE = (360, 300)       # 照片預覽區的最小大小（像素）；實際會隨視窗放大，盡量占滿右側
+PREVIEW_SOURCE_MAX = (1800, 1400)  # 預覽用的照片快取大小上限（放大視窗時才不會糊）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
 
@@ -138,10 +139,10 @@ FIELD_TAB = {
 }
 MARK_DONE = '✓'      # 已填說明／已填完的記號
 MARK_MISSING = '⚠'   # 還沒填的記號（同時搭配淡橘底與文字，不單靠顏色）
-PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張）"
+PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明）"
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
 PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
-PHOTO_NAME_COL_PX = 290       # 照片表格「檔名」欄的寬度
+PHOTO_NAME_COL_PX = 240       # 照片表格「檔名」「說明」兩欄的初始寬度（之後會隨表格寬度對半分）
 WINDOW_WIDTH = 1340           # 視窗預設寬度（螢幕比較窄時會自動縮小）
 
 # 模板中「標籤後面接內容」的欄位：(標籤文字, 資料 key)
@@ -868,6 +869,26 @@ def mix_color(color, other, ratio):
     return '#' + ''.join(f'{round(x + (y - x) * ratio):02x}' for x, y in zip(a, b))
 
 
+def tab_geometry(notebook, index, probe_y=16):
+    """回傳分頁 index 在 notebook 內的 (左, 右, 上, 下)（像素）；還沒顯示出來則回傳 None。
+
+    ttk.Notebook 沒有提供分頁的 bbox（tkinter 的 bbox 是 grid 的，永遠回傳 0），所以用 index('@x,y') 掃描量出來。
+    """
+    def hit(x, y):
+        try:
+            return notebook.index(f'@{x},{y}') == index
+        except tk.TclError:
+            return False
+
+    xs = [x for x in range(notebook.winfo_width()) if hit(x, probe_y)]
+    if not xs:
+        return None
+    left, right = xs[0], xs[-1] + 1
+    center = (left + right) // 2
+    ys = [y for y in range(90) if hit(center, y)]
+    return left, right, ys[0], ys[-1] + 1
+
+
 def move_item(seq, src, dst):
     """把 seq[src] 移到 dst 的位置（原地修改），其餘順序不變。"""
     seq.insert(dst, seq.pop(src))
@@ -887,7 +908,15 @@ class PhotoTable(ttk.Treeview):
         self.heading('name', text='檔名')
         self.heading('caption', text='說明')
         self.column('name', width=PHOTO_NAME_COL_PX, minwidth=140, stretch=False, anchor='w')
-        self.column('caption', width=300, minwidth=140, stretch=True, anchor='w')
+        self.column('caption', width=PHOTO_NAME_COL_PX, minwidth=140, stretch=False, anchor='w')
+        self.bind('<Configure>', lambda e: self._split_columns(e.width), add='+')
+
+    def _split_columns(self, total_width):
+        """表格寬度改變時，「檔名」與「說明」兩欄各占一半。"""
+        each = max(140, (int(total_width) - 2) // 2)
+        for column in ('name', 'caption'):
+            if int(self.column(column, 'width')) != each:
+                self.column(column, width=each)
 
     def set_rows(self, rows):
         """rows: [(檔名欄文字, 說明欄文字, 是否未填說明), ...]"""
@@ -924,28 +953,50 @@ class PhotoTable(ttk.Treeview):
 
 
 class PhotoPreview(ttk.Frame):
-    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名與尺寸。說明在它下方的輸入框輸入。"""
+    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名與尺寸。框會隨視窗放大，圖片跟著縮放到剛好放得下。"""
 
     PLACEHOLDER = "點選左邊表格中的照片\n即可預覽"
 
     def __init__(self, master, font_family):
         super().__init__(master, padding=6, relief=tk.GROOVE)
-        box = tk.Frame(self, width=PREVIEW_SIZE[0], height=PREVIEW_SIZE[1])
-        box.pack_propagate(False)
-        box.pack()
-        self.picture = tk.Label(box, text=self.PLACEHOLDER, fg='gray', justify=tk.CENTER)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.box = tk.Frame(self, width=PREVIEW_SIZE[0], height=PREVIEW_SIZE[1])  # 最小大小；其餘空間會撐滿
+        self.box.pack_propagate(False)
+        self.box.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+        self.picture = tk.Label(self.box, text=self.PLACEHOLDER, fg='gray', justify=tk.CENTER)
         self.picture.pack(fill=tk.BOTH, expand=True)
-        self.info = ttk.Label(self, text='', wraplength=PREVIEW_SIZE[0], justify=tk.LEFT,
-                              font=(font_family, 9 + GUI_FONT_DELTA))
-        self.info.pack(anchor=tk.W, pady=(6, 0))
+        self.info = ttk.Label(self, text='', justify=tk.LEFT, font=(font_family, 9 + GUI_FONT_DELTA))
+        self.info.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
         self.image = None      # 要保留參照，否則 PhotoImage 會被回收而不顯示
         self.current = None    # (分類, 路徑)
+        self._source = None    # 已轉正的原圖（縮小到快取上限），框改變大小時用它重新縮放
+        self._rendered_size = None
+        self.box.bind('<Configure>', lambda e: self._render())
+
+    def box_size(self):
+        """目前可用來放圖的大小（像素）。"""
+        return max(60, self.box.winfo_width() - 8), max(60, self.box.winfo_height() - 8)
 
     def clear(self, message=None):
         self.image = None
         self.current = None
+        self._source = None
+        self._rendered_size = None
         self.picture.config(image='', text=message or self.PLACEHOLDER)
         self.info.config(text='')
+
+    def _render(self, force=False):
+        if self._source is None:
+            return
+        size = self.box_size()
+        if not force and size == self._rendered_size:
+            return
+        thumb = self._source.copy()
+        thumb.thumbnail(size, Image.LANCZOS)
+        self.image = ImageTk.PhotoImage(thumb)
+        self._rendered_size = size
+        self.picture.config(image=self.image, text='')
 
     def show(self, category, path, caption=None):
         name = os.path.basename(path)
@@ -954,17 +1005,17 @@ class PhotoPreview(ttk.Frame):
                 width, height = img.size
                 if img.getexif().get(0x0112, 1) in (5, 6, 7, 8):  # EXIF 旋轉後寬高互換
                     width, height = height, width
-                img.draft('RGB', (PREVIEW_SIZE[0] * 2, PREVIEW_SIZE[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
-                thumb = ImageOps.exif_transpose(img)
-                thumb.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
-                photo = ImageTk.PhotoImage(thumb.copy())
+                img.draft('RGB', (PREVIEW_SOURCE_MAX[0] * 2, PREVIEW_SOURCE_MAX[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
+                source = ImageOps.exif_transpose(img)
+                source.thumbnail(PREVIEW_SOURCE_MAX, Image.LANCZOS)
+                source = source.copy()
         except Exception as e:
             self.clear(f"無法預覽\n{e}")
             self.info.config(text=name)
             return
-        self.image = photo
+        self._source = source
         self.current = (category, path)
-        self.picture.config(image=photo, text='')
+        self._render(force=True)
         orient = '橫式' if width >= height else '直式'
         self.info.config(text=f"{name}  {width}×{height}（{orient}）")
 
@@ -1118,9 +1169,8 @@ class ReportGeneratorGUI:
                 self._grow_window(extra)
 
     def _bind_shortcuts(self):
-        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告、Ctrl+E 離開、Ctrl+N 跳到下一張未填說明（大小寫都可以）。"""
-        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate, 'e': self.on_close,
-                   'n': self._shortcut_jump}
+        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告、Ctrl+E 離開（大小寫都可以）。"""
+        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate, 'e': self.on_close}
         for key, action in actions.items():
             for k in (key, key.upper()):
                 self.root.bind_all(f'<Control-{k}>', lambda e, f=action: self._run_shortcut(f))
@@ -1286,7 +1336,7 @@ class ReportGeneratorGUI:
         self.generate_btn = ttk.Button(button_frame, text="產生報告(G)", command=self.generate_report,
                                        style='Primary.TButton')
         self.generate_btn.pack(side=tk.LEFT, padx=5)
-        self.clear_btn = ttk.Button(button_frame, text="清除", command=self.clear_all, style='Danger.TButton')
+        self.clear_btn = ttk.Button(button_frame, text="清除所有資料", command=self.clear_all, style='Danger.TButton')
         self.clear_btn.pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="離開(E)", command=self.on_close).pack(side=tk.LEFT, padx=5)
 
@@ -1481,7 +1531,8 @@ class ReportGeneratorGUI:
     def create_photo_tab(self, notebook, title):
         """服勤照片：六個分類用小分頁切換；左邊是兩欄表格（檔名｜說明），右邊是預覽與說明輸入框。"""
         inner = self.make_scrollable_tab(notebook, title)
-        inner.columnconfigure(0, weight=1)
+        inner.columnconfigure(0, weight=0)  # 左邊寬度由小分頁列決定
+        inner.columnconfigure(1, weight=1)  # 右邊預覽吃掉剩下的寬度
         inner.rowconfigure(1, weight=1)
         ttk.Label(inner, text="九、服勤照片", style='Heading.TLabel').grid(
             row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
@@ -1489,7 +1540,7 @@ class ReportGeneratorGUI:
             row=0, column=0, columnspan=2, sticky=tk.E)
 
         sub = ttk.Notebook(inner, style='Sub.TNotebook')
-        sub.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+        sub.grid(row=1, column=0, sticky=(tk.N, tk.S))
         self.photo_notebook = sub
         self.photo_pages = {}
         for category in PHOTO_CATEGORIES:
@@ -1510,14 +1561,16 @@ class ReportGeneratorGUI:
             table.bind("<Button-1>", lambda e, c=category, t=table: self._drag_start(c, t, e))
             table.bind("<B1-Motion>", lambda e, c=category, t=table: self._drag_motion(c, t, e))
             table.bind("<ButtonRelease-1>", lambda e: self._drag_end())
+            for key in ("n", "N"):  # 在表格中按 N：跳到下一張未填說明（Ctrl+N 不處理）
+                table.bind(f"<KeyPress-{key}>", lambda e, c=category: self._on_n_key(e, c))
 
             bar = ttk.Frame(page)
             bar.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=8)
             ttk.Button(bar, text="加入照片",
                        command=lambda c=category, t=table: self.select_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
-            ttk.Button(bar, text="移除選取",
+            ttk.Button(bar, text="移除所選照片",
                        command=lambda c=category, t=table: self.remove_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
-            ttk.Button(bar, text="清除全部",
+            ttk.Button(bar, text="移除全部照片",
                        command=lambda c=category, t=table: self.clear_photos(c, t)).pack(side=tk.LEFT, padx=(0, 6))
             jump = ttk.Button(bar, text="", command=lambda c=category: self._jump_next_missing(c))
             jump.pack(side=tk.LEFT, padx=(14, 0))
@@ -1527,16 +1580,20 @@ class ReportGeneratorGUI:
             self.jump_buttons[category] = jump
             self.photo_pages[category] = page
         sub.bind('<<NotebookTabChanged>>', lambda e: self._on_photo_subtab_changed())
+        sub.bind('<Map>', lambda e: self.root.after_idle(self._align_photo_notebook))
 
         right = ttk.Frame(inner)
-        right.grid(row=1, column=1, sticky=tk.N, padx=(18, 0), pady=(34, 0))
+        right.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.W, tk.E), padx=(18, 0), pady=(34, 0))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+        self.photo_right_panel = right
         preview = PhotoPreview(right, self.font_family)
-        preview.pack()
-        ttk.Label(right, text="說明：", style='Field.TLabel').pack(anchor=tk.W, pady=(8, 2))
+        preview.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+        ttk.Label(right, text="說明：", style='Field.TLabel').grid(row=1, column=0, sticky=tk.W, pady=(8, 2))
         self.caption_var = tk.StringVar(master=self.root)
         entry = ttk.Entry(right, textvariable=self.caption_var, state='disabled')
-        entry.pack(fill=tk.X)
-        ttk.Label(right, text="Enter：儲存並跳到下一張", style='Hint.TLabel').pack(anchor=tk.W, pady=(2, 0))
+        entry.grid(row=2, column=0, sticky=(tk.W, tk.E))
+        ttk.Label(right, text="Enter：儲存並跳到下一張", style='Hint.TLabel').grid(row=3, column=0, sticky=tk.W, pady=(2, 0))
         entry.bind('<Return>', self._caption_return)
         entry.bind('<FocusOut>', lambda e: self._commit_caption())
         self.photo_preview = preview
@@ -1571,9 +1628,27 @@ class ReportGeneratorGUI:
     def _category_needs_attention(self, category):
         return not self.photo_files[category] or self.missing_caption_count(category) > 0
 
+    def _align_photo_notebook(self):
+        """讓左邊的表格區（小分頁框）的右邊界，切齊最後一個小分頁的右側。"""
+        sub = getattr(self, 'photo_notebook', None)
+        if sub is None or not sub.winfo_ismapped():
+            return
+        self.root.update_idletasks()
+        geometry = tab_geometry(sub, len(sub.tabs()) - 1)
+        if not geometry:
+            return
+        target = geometry[1] + 1
+        for _ in range(3):  # 框的需求寬度含邊框內距，逐步逼近目標
+            actual = sub.winfo_reqwidth()
+            if abs(actual - target) <= 1:
+                break
+            sub.configure(width=max(300, int(float(sub.cget('width') or 0)) + target - actual))
+            self.root.update_idletasks()
+
     def _refit_scroll_tabs(self):
         """內容大小改變（例如表格列數、標題換行）後，重新量測每個分頁，必要時顯示/隱藏捲動軸。"""
         self.root.update_idletasks()  # 先讓 Tk 算出各元件最新的需求大小，再量測
+        self._align_photo_notebook()
         for refit in self._tab_refits.values():
             refit()
 
@@ -1707,10 +1782,12 @@ class ReportGeneratorGUI:
         self.status_label.config(text="這個分類的照片都已填寫說明")
         return False
 
-    def _shortcut_jump(self):
-        if self.notebook.index(self.notebook.select()) != self.notebook.index(self._tab_by_title(TAB_PHOTOS)):
-            return
-        self._jump_next_missing(self._current_photo_category())
+    def _on_n_key(self, event, category):
+        """在照片表格中按 N（不含 Ctrl）：跳到這個分類下一張還沒填說明的照片。在說明輸入框裡打 n 不受影響。"""
+        if event.state & 0x4:  # Ctrl 有按住：不處理
+            return None
+        self._jump_next_missing(category)
+        return 'break'
 
     def _refresh_previews(self):
         """照片被移除/清除後，若預覽的照片已不在清單中就清掉預覽與說明輸入框。"""

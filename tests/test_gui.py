@@ -152,7 +152,7 @@ class GuiTest(unittest.TestCase):
     def test_button_order_and_styles(self):
         frame = self.app.generate_btn.master
         labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
-        self.assertEqual(labels, ['載入草稿(L)', '儲存草稿(S)', '產生報告(G)', '清除', '離開(E)'])
+        self.assertEqual(labels, ['載入草稿(L)', '儲存草稿(S)', '產生報告(G)', '清除所有資料', '離開(E)'])
         self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
         self.assertEqual(str(self.app.generate_btn.cget('style')), 'Primary.TButton')
         palette = g.THEMES[g.DEFAULT_THEME]
@@ -958,10 +958,10 @@ class GuiTest(unittest.TestCase):
     def test_no_extra_blank_space_above_tabs(self):
         self.root.update()
         nb = self.app.notebook
-        selected = nb.index(nb.select())
-        x, y, w, h = nb.bbox(selected)
-        top = nb.winfo_rooty() + y - self.root.winfo_rooty()
-        self.assertLessEqual(top, 10, f'分頁上方留白 {top}px 太多')
+        geometry = g.tab_geometry(nb, nb.index(nb.select()))
+        self.assertIsNotNone(geometry)
+        top = nb.winfo_rooty() + geometry[2] - self.root.winfo_rooty()
+        self.assertLessEqual(top, 12, f'分頁上方留白 {top}px 太多')
         self.assertGreaterEqual(top, 0)
 
     # ---- 分頁改名
@@ -975,9 +975,12 @@ class GuiTest(unittest.TestCase):
     def test_all_tabs_fit_in_the_window_width(self):
         self.root.update()
         nb = self.app.notebook
-        last = len(nb.tabs()) - 1
-        x, y, w, h = nb.bbox(last)
-        self.assertLessEqual(x + w, nb.winfo_width(), '最後一個分頁被切掉了（分頁名稱太長、視窗太窄）')
+        geometry = g.tab_geometry(nb, len(nb.tabs()) - 1)
+        self.assertIsNotNone(geometry)
+        self.assertLessEqual(geometry[1], nb.winfo_width(), '最後一個分頁被切掉了（分頁名稱太長、視窗太窄）')
+        # 每個分頁都看得到（量得到位置）
+        for i in range(len(nb.tabs())):
+            self.assertIsNotNone(g.tab_geometry(nb, i), f'分頁 {i} 被擠出視窗外')
 
     # ---- 所有分頁預設都不用捲動、按鈕列間距
     def test_every_tab_fits_without_scrollbar_when_the_screen_allows(self):
@@ -1017,8 +1020,11 @@ class GuiTest(unittest.TestCase):
         labels = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Button)]
         self.assertEqual(labels.count('加入照片'), len(g.PHOTO_CATEGORIES))  # 每個分類一個
         self.assertNotIn('選擇照片', labels)
-        self.assertEqual(labels.count('移除選取'), len(g.PHOTO_CATEGORIES))
-        self.assertEqual(labels.count('清除全部'), len(g.PHOTO_CATEGORIES))
+        self.assertEqual(labels.count('移除所選照片'), len(g.PHOTO_CATEGORIES))
+        self.assertEqual(labels.count('移除全部照片'), len(g.PHOTO_CATEGORIES))
+        self.assertNotIn('移除選取', labels)
+        self.assertNotIn('清除全部', labels)
+        self.assertNotIn('清除', labels)
 
     def test_add_photos_dialog_title(self):
         titles = []
@@ -1254,7 +1260,7 @@ class GuiTest(unittest.TestCase):
         table = self.app.listboxes[g.PHOTO_CATEGORIES[0]]
         self.assertEqual(tuple(table.cget('columns')), ('name', 'caption'))
         self.assertEqual([table.heading(c, 'text') for c in ('name', 'caption')], ['檔名', '說明'])
-        self.assertLess(int(table.column('name', 'width')), int(table.column('caption', 'width')))  # 檔名欄比較窄
+        self.assertLessEqual(abs(int(table.column('name', 'width')) - int(table.column('caption', 'width'))), 2)  # 兩欄對半分
         self.assertGreater(table.winfo_height(), g.PHOTO_TABLE_ROWS * 34, '表格沒有撐滿畫面高度')
         canvas, inner, _ = self.app._scroll_tabs[g.TAB_PHOTOS]
         self.assertGreater(table.winfo_height(), canvas.winfo_height() * 0.5)  # 至少占可視高度的一半以上
@@ -1292,20 +1298,48 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.jump_buttons[cat].cget('text'), '尚無照片')
         self.assertEqual(str(self.app.jump_buttons[cat].cget('state')), 'disabled')
 
-    def test_ctrl_n_jumps_only_on_the_photo_tab(self):
+    def test_n_key_in_table_jumps_to_next_missing_and_ctrl_n_does_not(self):
         cat, table, (a, b, c) = self._photos()
-        self.app.notebook.select(self.app._tab_by_title(g.TAB_ROAD))
-        self.app._shortcut_jump()
-        self.assertEqual(table.selected_indexes(), ())  # 不在服勤照片分頁：不做事
+        self.app.photo_captions[cat][a] = '一'
+        self.app._render_list(cat)
         self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
         self.root.update()
-        self.app._shortcut_jump()
-        self.assertEqual(table.selected_indexes(), (0,))
-        calls = []
-        with mock.patch.object(self.app, '_shortcut_jump', lambda: calls.append('n')):
-            self.app._bind_shortcuts()
-            self._press(self.app.personnel, 'n')
-        self.assertEqual(calls, ['n'])
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        table.focus_force()
+        self.root.update()
+        table.event_generate('<KeyPress-n>', keysym='n')
+        self.root.update()
+        self.assertEqual(table.selected_indexes(), (1,))              # 按 n：跳到下一張未填說明
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        table.focus_force()
+        table.event_generate('<KeyPress-N>', keysym='N')               # 大寫 N 也可以
+        self.root.update()
+        self.assertEqual(table.selected_indexes(), (2,))
+        table.focus_force()
+        table.event_generate('<KeyPress-n>', keysym='n', state=4)      # Ctrl+N：不處理
+        self.root.update()
+        self.assertEqual(table.selected_indexes(), (2,))
+
+    def test_typing_n_in_caption_box_only_types_the_letter(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        self.root.update()
+        table.set_selection([1])
+        self.app._on_photo_select(cat, table)
+        self.app.caption_entry.focus_force()
+        self.root.update()
+        self.app.caption_entry.event_generate('<KeyPress-n>', keysym='n')
+        self.root.update()
+        self.assertEqual(self.app.caption_var.get(), 'n')
+        self.assertEqual(table.selected_indexes(), (1,))  # 沒有跳走
+
+    def test_ctrl_n_is_no_longer_a_global_shortcut(self):
+        self.assertEqual(self.root.bind_all('<Control-n>'), '')
+        self.assertEqual(self.root.bind_all('<Control-N>'), '')
+        self.assertFalse(hasattr(self.app, '_shortcut_jump'))
+        self.assertIn('按 N', g.PHOTO_TAB_HINT)
+        self.assertNotIn('Ctrl', g.PHOTO_TAB_HINT)
 
     def test_unsaved_caption_text_is_included_in_draft_and_data(self):
         cat, table, (a, b, c) = self._photos()
@@ -1425,6 +1459,91 @@ class GuiTest(unittest.TestCase):
             self.app.generate_report()
             self._wait_until_done()
         self.assertEqual(self.confirm_calls, [])  # 輸入框裡的文字會先存起來，不會誤報「沒填說明」
+
+    # ---- 版面：左邊表格區切齊小分頁列、右邊預覽往左與往下擴大
+    def _show_photos_tab(self):
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_PHOTOS))
+        self.root.update()
+        self.root.update_idletasks()
+        self.root.update()
+
+    def test_left_frame_right_edge_matches_last_sub_tab(self):
+        self._show_photos_tab()
+        sub = self.app.photo_notebook
+        geometry = g.tab_geometry(sub, len(sub.tabs()) - 1)
+        self.assertIsNotNone(geometry)
+        self.assertLessEqual(abs(sub.winfo_width() - geometry[1]), 6,
+                             f'表格區寬 {sub.winfo_width()}，小分頁列右緣 {geometry[1]}')
+        table = self.app.listboxes[g.PHOTO_CATEGORIES[0]]
+        self.assertLess(sub.winfo_width(), 800)
+        self.assertLessEqual(abs(int(table.column('name', 'width')) - int(table.column('caption', 'width'))), 2)
+        self.assertLess(int(table.column('caption', 'width')), 480)
+
+    def test_preview_panel_takes_the_remaining_width_and_the_full_height(self):
+        self._show_photos_tab()
+        sub, right = self.app.photo_notebook, self.app.photo_right_panel
+        preview = self.app.photo_preview
+        self.assertGreaterEqual(right.winfo_rootx(), sub.winfo_rootx() + sub.winfo_width())  # 在表格區右邊
+        self.assertGreater(right.winfo_width(), g.PREVIEW_SIZE[0] + 150)                      # 比最小尺寸寬很多
+        self.assertGreater(preview.box.winfo_height(), g.PREVIEW_SIZE[1] + 100)               # 往下擴大
+        sub_bottom = sub.winfo_rooty() + sub.winfo_height()
+        right_bottom = right.winfo_rooty() + right.winfo_height()
+        self.assertLessEqual(abs(sub_bottom - right_bottom), 12)                              # 底部切齊
+        # 右邊的右緣就是視窗內容區的右緣（沒有留一大塊空白）
+        canvas, inner, _ = self.app._scroll_tabs[g.TAB_PHOTOS]
+        self.assertGreaterEqual(right.winfo_rootx() + right.winfo_width(), canvas.winfo_rootx() + canvas.winfo_width() - 40)
+
+    def test_preview_image_fills_the_box_and_follows_window_size(self):
+        cat, table, (a, b, c) = self._photos(size=(1600, 1000))
+        self._show_photos_tab()
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        preview = self.app.photo_preview
+        self.root.update()
+        bw, bh = preview.box_size()
+        self.assertLessEqual(preview.image.width(), bw)
+        self.assertLessEqual(preview.image.height(), bh)
+        self.assertGreater(max(preview.image.width() / bw, preview.image.height() / bh), 0.95)  # 至少有一邊幾乎填滿
+        before = preview.image.width()
+        width, height = self.root.winfo_width(), self.root.winfo_height()
+        try:
+            self.root.geometry(f'{width - 300}x{height}')
+            self.root.update()
+            self.root.update_idletasks()
+            self.root.update()
+            self.assertLess(preview.image.width(), before)  # 視窗變窄，預覽圖跟著縮小
+        finally:
+            self.root.geometry(f'{width}x{height}')
+            self.root.update()
+
+    def test_preview_never_shrinks_below_minimum_box(self):
+        self._show_photos_tab()
+        box = self.app.photo_preview.box
+        self.assertGreaterEqual(box.winfo_width(), g.PREVIEW_SIZE[0])
+        self.assertGreaterEqual(box.winfo_height(), g.PREVIEW_SIZE[1])
+
+    def test_filename_and_caption_columns_split_the_width_in_half(self):
+        self._show_photos_tab()
+        table = self.app.listboxes[g.PHOTO_CATEGORIES[0]]
+        name, caption = int(table.column('name', 'width')), int(table.column('caption', 'width'))
+        self.assertLessEqual(abs(name - caption), 2)
+        self.assertGreaterEqual(name + caption, table.winfo_width() - 4)  # 兩欄剛好把表格寬度占滿
+        self.assertGreater(name, 290)  # 檔名欄比先前（290）寬
+        # 視窗變窄，兩欄跟著各縮一半
+        w, h = self.root.winfo_width(), self.root.winfo_height()
+        try:
+            self.root.geometry(f'{w - 240}x{h}')
+            self.root.update()
+            self.root.update_idletasks()
+            self.root.update()
+            n2, c2 = int(table.column('name', 'width')), int(table.column('caption', 'width'))
+            self.assertLessEqual(abs(n2 - c2), 2)
+        finally:
+            self.root.geometry(f'{w}x{h}')
+            self.root.update()
+
+    def test_clear_everything_button_label(self):
+        self.assertEqual(self.app.clear_btn.cget('text'), '清除所有資料')
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
@@ -1608,23 +1727,24 @@ class GuiTest(unittest.TestCase):
         self.assertGreaterEqual(active[1], normal[1])
 
     def test_selected_tab_is_taller_and_not_narrower_on_screen(self):
-        nb = next(w for w in self.root.winfo_children()[0].winfo_children() if isinstance(w, ttk.Notebook))
+        nb = self.app.notebook
         self.root.update()
-        boxes = []
-        for i in range(len(nb.tabs())):
+        count = len(nb.tabs())
+        self.assertEqual(count, 6)
+        for i in range(count):
             nb.select(i)
             self.root.update()
-            boxes.append(nb.bbox(i))
-        for i, (x, y, w, h) in enumerate(boxes):
-            nb.select(i)
+            selected = g.tab_geometry(nb, i)
+            self.assertIsNotNone(selected, f'量不到分頁 {i}')
+            others = [g.tab_geometry(nb, j) for j in range(count) if j != i]
+            self.assertTrue(all(o is not None for o in others))
+            # 被選取的分頁比其他分頁高（頂端更高）
+            self.assertLess(selected[2], min(o[2] for o in others), f'分頁 {i} 被選取時沒有比其他分頁突出')
+            # 選取時的寬度不應比沒選取時窄
+            nb.select((i + 1) % count)
             self.root.update()
-            x2, y2, w2, h2 = nb.bbox(i)
-            others = [nb.bbox(j) for j in range(len(boxes)) if j != i]
-            self.assertGreaterEqual(h2, max(b[3] for b in others), f'分頁 {i} 被選取時比其他分頁矮')
-            # 選取時的寬度不應比沒選取時小
-            nb.select((i + 1) % len(boxes))
-            self.root.update()
-            self.assertGreaterEqual(w2, nb.bbox(i)[2], f'分頁 {i} 選取時比沒選取時窄')
+            idle = g.tab_geometry(nb, i)
+            self.assertGreaterEqual(selected[1] - selected[0], idle[1] - idle[0], f'分頁 {i} 選取時比沒選取時窄')
 
     def test_notebook_tabs_are_visually_separated(self):
         style = ttk.Style(self.root)
@@ -1799,8 +1919,9 @@ class GuiTest(unittest.TestCase):
         preview = self.app.previews[cat]
         self.assertEqual(preview.current, (cat, a))
         self.assertIsNotNone(preview.image)
-        self.assertLessEqual(preview.image.width(), g.PREVIEW_SIZE[0])
-        self.assertLessEqual(preview.image.height(), g.PREVIEW_SIZE[1])
+        bw, bh = preview.box_size()
+        self.assertLessEqual(preview.image.width(), bw)
+        self.assertLessEqual(preview.image.height(), bh)
         text = preview.info.cget('text')
         self.assertIn('a.jpg', text)
         self.assertIn('400×200（橫式）', text)

@@ -5,7 +5,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog
 from unittest import mock
 
 from PIL import Image
@@ -14,6 +14,8 @@ from docx import Document
 from _common import TEMPLATE
 import report_generator_gui as g
 from test_report import unique_cells
+
+messagebox = g.messagebox  # 程式自己的對話框（可以替換成假的）
 
 
 def style_lookup(root, style_name, option, state=None):
@@ -1544,6 +1546,188 @@ class GuiTest(unittest.TestCase):
 
     def test_clear_everything_button_label(self):
         self.assertEqual(self.app.clear_btn.cget('text'), '清除所有資料')
+
+    # ================= 對話框：使用程式的字型與較大的字級 =================
+    def _dialog(self):
+        d = g.AppDialogs()
+        d.attach(self.app)
+        return d
+
+    def _answer_dialog(self, action):
+        """對話框開啟後（wait_window 期間）執行 action(對話框視窗)。"""
+        def run():
+            dialogs = [w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel)]
+            self.assertTrue(dialogs, '沒有對話框')
+            action(dialogs[-1])
+        self.root.after(150, run)
+
+    def _find_button(self, dialog, text):
+        for w in self._all_widgets(dialog):
+            if isinstance(w, ttk.Button) and w.cget('text') == text:
+                return w
+        self.fail(f'找不到按鈕 {text}')
+
+    def test_dialog_text_is_larger_than_normal_interface_text(self):
+        import tkinter.font as tkfont
+        d = self._dialog()
+        seen = {}
+
+        def look(dialog):
+            text = d.last_text
+            font = tkfont.Font(root=self.root, font=text.cget('font'))
+            seen['size'] = abs(font.cget('size'))
+            seen['family'] = font.cget('family')
+            seen['message'] = text.get('1.0', 'end-1c')
+            seen['button_font'] = tkfont.Font(root=self.root, font=ttk.Style(self.root).lookup('Dialog.TButton', 'font'))
+            self._find_button(dialog, '是(Y)').invoke()
+
+        self._answer_dialog(look)
+        self.assertTrue(d.askyesno('確認', '載入草稿會覆蓋目前畫面上的內容，確定嗎？'))
+        body = abs(__import__('tkinter.font', fromlist=['x']).nametofont('TkDefaultFont', root=self.root).cget('size'))
+        self.assertGreaterEqual(seen['size'], body + 2)             # 比一般介面文字至少大 2 點
+        self.assertGreaterEqual(seen['size'], 13)
+        self.assertEqual(seen['family'], g.FONT_FAMILY)
+        self.assertEqual(seen['message'], '載入草稿會覆蓋目前畫面上的內容，確定嗎？')
+        self.assertGreaterEqual(abs(seen['button_font'].cget('size')), 13)  # 按鈕文字也一樣大
+
+    def test_askyesno_default_yes_enter_and_keys(self):
+        d = self._dialog()
+        focus = {}
+
+        def press_enter(dialog):
+            focus['text'] = self.root.focus_get().cget('text') if self.root.focus_get() else None
+            dialog.event_generate('<Return>')
+
+        self._answer_dialog(press_enter)
+        self.assertTrue(d.askyesno('t', 'm'))                         # 預設「是」，按 Enter = 是
+        self.assertEqual(focus['text'], '是(Y)')
+        self._answer_dialog(lambda dialog: dialog.event_generate('<KeyPress-n>'))
+        self.assertFalse(d.askyesno('t', 'm'))                        # 按 n = 否
+        self._answer_dialog(lambda dialog: dialog.event_generate('<KeyPress-Y>'))
+        self.assertTrue(d.askyesno('t', 'm', default='no'))           # 大寫 Y 也可以
+
+    def test_askyesno_default_no_and_escape(self):
+        d = self._dialog()
+        focus = {}
+
+        def press_enter(dialog):
+            focus['text'] = self.root.focus_get().cget('text')
+            dialog.event_generate('<Return>')
+
+        self._answer_dialog(press_enter)
+        self.assertFalse(d.askyesno('t', 'm', icon='warning', default='no'))   # 預設「否」：按 Enter 不會誤清除
+        self.assertEqual(focus['text'], '否(N)')
+        self._answer_dialog(lambda dialog: dialog.event_generate('<Escape>'))
+        self.assertFalse(d.askyesno('t', 'm'))                                   # Esc = 否
+
+    def test_askyesnocancel_values(self):
+        d = self._dialog()
+        self._answer_dialog(lambda dialog: self._find_button(dialog, '是(Y)').invoke())
+        self.assertIs(d.askyesnocancel('t', 'm'), True)
+        self._answer_dialog(lambda dialog: self._find_button(dialog, '否(N)').invoke())
+        self.assertIs(d.askyesnocancel('t', 'm'), False)
+        self._answer_dialog(lambda dialog: self._find_button(dialog, '取消(C)').invoke())
+        self.assertIsNone(d.askyesnocancel('t', 'm'))
+        self._answer_dialog(lambda dialog: dialog.event_generate('<Escape>'))
+        self.assertIsNone(d.askyesnocancel('t', 'm'))                            # Esc = 取消
+        self._answer_dialog(lambda dialog: dialog.event_generate('<KeyPress-c>'))
+        self.assertIsNone(d.askyesnocancel('t', 'm'))
+
+    def test_info_and_error_dialogs_close_with_enter_or_button(self):
+        d = self._dialog()
+        self._answer_dialog(lambda dialog: dialog.event_generate('<Return>'))
+        self.assertEqual(d.showinfo('t', '完成'), 'ok')
+        self._answer_dialog(lambda dialog: self._find_button(dialog, '確定').invoke())
+        self.assertEqual(d.showerror('t', '錯誤'), 'ok')
+
+    def test_long_message_gets_scrollbar_and_short_message_does_not(self):
+        d = self._dialog()
+        info = {}
+
+        def look(dialog):
+            scrollbars = [w for w in self._all_widgets(dialog) if isinstance(w, ttk.Scrollbar)]
+            info['scroll'] = bool(scrollbars and scrollbars[0].winfo_manager())
+            info['height'] = int(d.last_text.cget('height'))
+            dialog.event_generate('<Return>')
+
+        self._answer_dialog(look)
+        d.showinfo('t', '\n'.join(f'第 {i} 行' for i in range(60)))
+        self.assertTrue(info['scroll'])
+        self.assertEqual(info['height'], g.DIALOG_MAX_LINES)
+        self._answer_dialog(look)
+        d.showinfo('t', '短訊息')
+        self.assertFalse(info['scroll'])
+        self.assertLess(info['height'], g.DIALOG_MAX_LINES)
+
+    def test_dialog_is_modal_and_centered_over_the_window(self):
+        d = self._dialog()
+        seen = {}
+
+        def look(dialog):
+            seen['grab'] = self.root.grab_current() is not None or dialog.grab_current() is not None
+            dialog.update_idletasks()
+            seen['cx'] = dialog.winfo_rootx() + dialog.winfo_width() // 2
+            seen['wx'] = self.root.winfo_rootx() + self.root.winfo_width() // 2
+            seen['transient'] = str(dialog.transient())
+            dialog.event_generate('<Return>')
+
+        self._answer_dialog(look)
+        d.showinfo('t', 'm')
+        self.assertTrue(seen['grab'])
+        self.assertLessEqual(abs(seen['cx'] - seen['wx']), 40)
+        self.assertEqual(seen['transient'], str(self.root))
+
+    def test_dialog_follows_theme_colors(self):
+        self.app.apply_theme('高對比')
+        d = self._dialog()
+        seen = {}
+
+        def look(dialog):
+            seen['bg'] = str(d.last_text.cget('background'))
+            seen['fg'] = str(d.last_text.cget('foreground'))
+            seen['default_style'] = str(self._find_button(dialog, '確定').cget('style'))
+            dialog.event_generate('<Return>')
+
+        self._answer_dialog(look)
+        d.showinfo('t', 'm')
+        self.assertEqual(seen['bg'], g.THEMES['高對比']['bg'])
+        self.assertEqual(seen['fg'], g.THEMES['高對比']['text'])
+        self.assertEqual(seen['default_style'], 'DialogDefault.TButton')
+        self.assertEqual(ttk.Style(self.root).lookup('DialogDefault.TButton', 'background'), g.THEMES['高對比']['primary'])
+
+    def test_app_uses_its_own_dialogs_not_the_system_ones(self):
+        self.assertIsInstance(g.messagebox, g.AppDialogs)
+        self.assertIs(g.messagebox.app, self.app)
+        self.assertFalse(hasattr(g, 'simpledialog'))
+
+    def test_falls_back_to_system_dialogs_when_not_attached(self):
+        d = g.AppDialogs()
+        calls = []
+        with mock.patch.object(g.native_messagebox, 'askyesno', lambda *a, **k: calls.append(('askyesno', a, k)) or True), \
+                mock.patch.object(g.native_messagebox, 'showinfo', lambda *a, **k: calls.append(('showinfo', a, k)) or 'ok'):
+            self.assertTrue(d.askyesno('標題', '訊息', default='no'))
+            self.assertEqual(d.showinfo('標題', '訊息'), 'ok')
+        self.assertEqual([c[0] for c in calls], ['askyesno', 'showinfo'])
+        self.assertEqual(calls[0][2].get('default'), 'no')
+
+    def test_real_load_draft_confirmation_uses_the_large_dialog(self):
+        """實際走「載入草稿」流程：確認訊息顯示在放大的對話框裡。"""
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        seen = {}
+
+        def look(dialog):
+            seen['message'] = g.messagebox.last_text.get('1.0', 'end-1c')
+            seen['size'] = abs(__import__('tkinter.font', fromlist=['x']).Font(root=self.root, font=g.messagebox.last_text.cget('font')).cget('size'))
+            self._find_button(dialog, '否(N)').invoke()
+
+        real = g.AppDialogs.askyesno
+        with mock.patch.object(g.messagebox, 'askyesno', lambda *a, **k: real(g.messagebox, *a, **k)), \
+                mock.patch.object(filedialog, 'askopenfilename', lambda **k: draft):
+            self._answer_dialog(look)
+            self.app.load_draft()
+        self.assertEqual(seen['message'], '載入草稿會覆蓋目前畫面上的內容，確定嗎？')
+        self.assertGreaterEqual(seen['size'], 13)
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')

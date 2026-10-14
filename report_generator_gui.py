@@ -20,7 +20,8 @@ import threading
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
-from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+from tkinter import ttk, filedialog, scrolledtext
+from tkinter import messagebox as native_messagebox
 from tkinter import font as tkfont
 
 from docx import Document
@@ -99,6 +100,9 @@ DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
 DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
 TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
+DIALOG_FONT_EXTRA_PT = 2    # 對話框文字比一般介面字級再大幾點（系統的訊息視窗字太小又不能改，所以自己畫）
+DIALOG_TEXT_COLUMNS = 46    # 對話框文字區寬度（字元數）
+DIALOG_MAX_LINES = 16       # 對話框文字區最多顯示幾行，超過就出現捲動軸
 PREVIEW_SIZE = (360, 300)       # 照片預覽區的最小大小（像素）；實際會隨視窗放大，盡量占滿右側
 PREVIEW_SOURCE_MAX = (1800, 1400)  # 預覽用的照片快取大小上限（放大視窗時才不會糊）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
@@ -896,6 +900,119 @@ def move_item(seq, src, dst):
 
 # ---------------------------------------------------------------- GUI
 
+class AppDialogs:
+    """取代系統的訊息視窗：使用程式的字型、較大的字級與目前的外觀主題。
+
+    介面與 tkinter.messagebox 相同（showinfo / showerror / askyesno / askyesnocancel），
+    可以直接當 messagebox 用。還沒綁定到程式視窗時（attach），退回系統的訊息視窗。
+    """
+
+    ICONS = {
+        'info': ('ℹ', '#1d4ed8'), 'question': ('？', '#1d4ed8'),
+        'warning': ('⚠', '#c2410c'), 'error': ('✖', '#b91c1c'),
+    }
+
+    def __init__(self):
+        self.app = None
+
+    def attach(self, app):
+        self.app = app
+
+    # ---- 與 tkinter.messagebox 相同的介面
+    def showinfo(self, title, message, **kwargs):
+        if self.app is None:
+            return native_messagebox.showinfo(title, message, **kwargs)
+        self._show(title, message, 'info', [('確定', 'ok', None)], default='ok', cancel='ok')
+        return 'ok'
+
+    def showerror(self, title, message, **kwargs):
+        if self.app is None:
+            return native_messagebox.showerror(title, message, **kwargs)
+        self._show(title, message, 'error', [('確定', 'ok', None)], default='ok', cancel='ok')
+        return 'ok'
+
+    def askyesno(self, title, message, icon='question', default='yes', **kwargs):
+        if self.app is None:
+            return native_messagebox.askyesno(title, message, icon=icon, default=default, **kwargs)
+        buttons = [('是(Y)', True, 'y'), ('否(N)', False, 'n')]
+        return bool(self._show(title, message, icon, buttons, default=(default != 'no'), cancel=False))
+
+    def askyesnocancel(self, title, message, icon='question', default='yes', **kwargs):
+        if self.app is None:
+            return native_messagebox.askyesnocancel(title, message, icon=icon, default=default, **kwargs)
+        buttons = [('是(Y)', True, 'y'), ('否(N)', False, 'n'), ('取消(C)', None, 'c')]
+        default_value = {'yes': True, 'no': False, 'cancel': None}.get(default, True)
+        return self._show(title, message, icon, buttons, default=default_value, cancel=None)
+
+    # ---- 實際畫出對話框
+    def _show(self, title, message, icon, buttons, default, cancel):
+        app = self.app
+        root, palette, family = app.root, app.palette, app.font_family
+        size = 9 + GUI_FONT_DELTA + DIALOG_FONT_EXTRA_PT
+        result = {'value': cancel}
+        dialog = tk.Toplevel(root)
+        self.last_dialog = dialog
+        dialog.title(title)
+        dialog.configure(background=palette['bg'])
+        dialog.transient(root)
+        dialog.resizable(False, False)
+
+        def finish(value=None):
+            result['value'] = value
+            dialog.destroy()
+
+        frame = ttk.Frame(dialog, padding=(24, 20, 24, 16))
+        frame.pack(fill=tk.BOTH, expand=True)
+        glyph, color = self.ICONS.get(icon, self.ICONS['question'])
+        tk.Label(frame, text=glyph, font=(family, 30), foreground=color, background=palette['bg']).grid(
+            row=0, column=0, sticky=tk.N, padx=(0, 18))
+        text = tk.Text(frame, width=DIALOG_TEXT_COLUMNS, height=3, wrap='word', font=(family, size),
+                       background=palette['bg'], foreground=palette['text'], relief='flat', borderwidth=0,
+                       highlightthickness=0, padx=0, pady=0, cursor='arrow')
+        text.insert('1.0', message)
+        text.configure(state='disabled')
+        text.grid(row=0, column=1, sticky=(tk.N, tk.W, tk.E))
+        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        dialog.update_idletasks()
+        lines = text.count('1.0', 'end', 'displaylines') or (1,)
+        text.configure(height=max(2, min(DIALOG_MAX_LINES, lines[0])))
+        if lines[0] > DIALOG_MAX_LINES:
+            scrollbar.grid(row=0, column=2, sticky=(tk.N, tk.S))
+        self.last_text = text
+
+        bar = ttk.Frame(frame)
+        bar.grid(row=1, column=0, columnspan=3, pady=(18, 0))
+        widgets = {}
+        for label, value, key in buttons:
+            is_default = value == default
+            button = ttk.Button(bar, text=label, command=lambda v=value: finish(v),
+                                style='DialogDefault.TButton' if is_default else 'Dialog.TButton')
+            button.pack(side=tk.LEFT, padx=8)
+            widgets[value] = button
+            if key:
+                for k in (key, key.upper()):
+                    dialog.bind(f'<KeyPress-{k}>', lambda e, v=value: finish(v))
+        self.last_buttons = widgets
+        dialog.bind('<Return>', lambda e: finish(default))
+        dialog.bind('<Escape>', lambda e: finish(cancel))
+        dialog.protocol('WM_DELETE_WINDOW', lambda: finish(cancel))
+
+        dialog.update_idletasks()
+        x = root.winfo_rootx() + max(0, (root.winfo_width() - dialog.winfo_width()) // 2)
+        y = root.winfo_rooty() + max(0, (root.winfo_height() - dialog.winfo_height()) // 3)
+        dialog.geometry(f'+{x}+{y}')
+        dialog.lift()
+        dialog.grab_set()
+        dialog.focus_force()
+        widgets[default].focus_set()
+        dialog.wait_window()
+        return result['value']
+
+
+messagebox = AppDialogs()  # 全程式共用；ReportGeneratorGUI 啟動時會 attach
+
+
 class PhotoTable(ttk.Treeview):
     """照片表格：兩欄「檔名｜說明」。沒填說明的列用淡橘底（tag 'missing'）。
 
@@ -1069,6 +1186,7 @@ class ReportGeneratorGUI:
         self.theme_name = self._load_theme_setting()
         self.palette = THEMES[self.theme_name]
         self._setup_style()
+        self._style_dialog_default_button()
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.root.title(APP_TITLE)
@@ -1100,6 +1218,7 @@ class ReportGeneratorGUI:
         self._blank_signature = self._signature(with_report_date=False)
         self._last_autosave_signature = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        messagebox.attach(self)
         self._bind_shortcuts()
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
         if restore_on_start:
@@ -1245,6 +1364,8 @@ class ReportGeneratorGUI:
                   expand=[('selected', (0, 0, 0, 0))])
         style.configure('Heading.TLabel', font=(self.font_family, 12 + GUI_FONT_DELTA), foreground=p['heading_fg'])
         style.configure('Field.TLabel', font=(self.font_family, 10 + GUI_FONT_DELTA), foreground=p['field_fg'])
+        dialog_font = (self.font_family, 9 + GUI_FONT_DELTA + DIALOG_FONT_EXTRA_PT)
+        style.configure('Dialog.TButton', font=dialog_font, padding=(18, 6))
         for name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
             fill, fg = p[key], p[f'{key}_fg']
             style.configure(name, background=fill, foreground=fg, bordercolor=p[f'{key}_border'],
@@ -1253,6 +1374,17 @@ class ReportGeneratorGUI:
                                         ('pressed', p[f'{key}_active'])],
                       foreground=[('disabled', '#9ca3af'), ('active', fg), ('pressed', fg)])
 
+    def _style_dialog_default_button(self):
+        """對話框裡預設的按鈕（按 Enter 會按到的）用主要按鈕的顏色，一眼看得出來。"""
+        p = self.palette
+        style = ttk.Style(self.root)
+        dialog_font = (self.font_family, 9 + GUI_FONT_DELTA + DIALOG_FONT_EXTRA_PT)
+        style.configure('DialogDefault.TButton', font=dialog_font, padding=(18, 6), background=p['primary'],
+                        foreground=p['primary_fg'], bordercolor=p['primary_border'], lightcolor=BEVEL_LIGHT,
+                        darkcolor=mix_color(p['primary'], '#000000', BEVEL_DARK_RATIO))
+        style.map('DialogDefault.TButton', background=[('active', p['primary_active'])],
+                  foreground=[('active', p['primary_fg'])])
+
     def apply_theme(self, name):
         """切換外觀主題並記住選擇。"""
         if name not in THEMES:
@@ -1260,6 +1392,7 @@ class ReportGeneratorGUI:
         self.theme_name = name
         self.palette = THEMES[name]
         self._setup_style()
+        self._style_dialog_default_button()
         self._recolor(self.root)
         for category in self.listboxes:
             self._render_list(category)

@@ -1791,12 +1791,25 @@ class GuiTest(unittest.TestCase):
         for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont'):
             self.assertEqual(tkfont.nametofont(name, root=self.root).cget('weight'), 'normal')
         for style_name, weight in (('Heading.TLabel', 'bold'), ('TNotebook.Tab', 'bold'),
-                                   ('Sub.TNotebook.Tab', 'bold'), ('Field.TLabel', 'normal')):
+                                   ('Sub.TNotebook.Tab', 'normal'), ('Field.TLabel', 'normal')):
             font = tkfont.Font(root=self.root, font=style_lookup(self.root, style_name, 'font'))
             self.assertEqual(font.cget('weight'), weight, style_name)
         for w in self._all_widgets(self.root):
             if isinstance(w, ttk.Label) and str(w.cget('style')) == 'Field.TLabel':
                 self.assertNotIn('bold', str(w.cget('font')))
+
+    def test_numbered_section_titles_use_heading_style(self):
+        """一～八大項的標題（藍色粗體）都用標題樣式；「1、」這類小項用欄位標籤樣式。"""
+        found = {}
+        for w in self._all_widgets(self.root):
+            if isinstance(w, ttk.Label):
+                text = str(w.cget('text'))
+                if text[:2] in ('一、', '二、', '三、', '四、', '五、', '六、', '七、', '八、', '九、'):
+                    found[text[0]] = str(w.cget('style'))
+                elif text[:2] in ('1、', '2、', '3、', '4、'):
+                    self.assertEqual(str(w.cget('style')), 'Field.TLabel', text)
+        self.assertEqual(sorted(found), sorted('一二三四五六七八九'))
+        self.assertEqual(set(found.values()), {'Heading.TLabel'}, found)
 
     def test_headings_are_distinguished_by_size_and_color(self):
         import tkinter.font as tkfont

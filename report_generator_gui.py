@@ -1353,7 +1353,8 @@ class ReportGeneratorGUI:
         style.configure('Hint.TLabel', foreground=p['muted'])
         style.configure('Sub.TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=1, tabmargins=(2, 4, 2, 0))
-        style.configure('Sub.TNotebook.Tab', padding=(16, 6), font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'), background=p['tab_idle'], foreground=p['tab_idle_fg'],
+        style.configure('Sub.TNotebook.Tab', padding=(16, 6), font=(self.font_family, 10 + GUI_FONT_DELTA),  # 小分頁含 ✓，不用粗體
+                        background=p['tab_idle'], foreground=p['tab_idle_fg'],
                         bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'])
         style.map('Sub.TNotebook.Tab', background=[('selected', '#ffffff'), ('active', p['tab_hover'])],
                   foreground=[('selected', p['heading_fg'])], padding=[('selected', (16, 9))])
@@ -1603,7 +1604,9 @@ class ReportGeneratorGUI:
             header = ttk.Frame(inner)
             header.grid(row=row_idx, column=0, sticky=(tk.W, tk.E), pady=(10, 2))
             header.columnconfigure(0, weight=1)
-            title_label = ttk.Label(header, text=label, style='Field.TLabel')
+            # 「三、…」「四、…」這類大項標題用標題樣式（藍色粗體）；「1、…」這類小項維持欄位標籤樣式
+            is_section = re.match(r'[一二三四五六七八九十]+、', label) is not None
+            title_label = ttk.Label(header, text=label, style='Heading.TLabel' if is_section else 'Field.TLabel')
             title_label.grid(row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
             menu_button = self._make_list_menu(header, text_widget)

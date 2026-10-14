@@ -35,6 +35,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
+LIST_MENU_EXTRA_PT = 1  # 「項目符號/編號」下拉選單比其他介面文字再大幾點
 GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細。介面不使用粗體（邊緣不好看），強調改用字級與顏色
 # 介面字型：芫荽 Iansui（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
 # 只有 Regular 一個字重；介面不使用粗體（模擬的粗體邊緣不好看），強調改用字級與顏色
@@ -1069,6 +1070,7 @@ class ReportGeneratorGUI:
         style.configure('TMenubutton', foreground=p['text'])
         style.configure('TButton', foreground=p['text'])
         style.configure('Hint.TLabel', foreground=p['muted'])
+        style.configure('List.TMenubutton', foreground=p['text'], font=(self.font_family, self._list_menu_pt()))
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
         style.configure('TNotebook.Tab', padding=TAB_PADDING, background=p['tab_idle'], foreground=p['tab_idle_fg'],
@@ -1293,10 +1295,15 @@ class ReportGeneratorGUI:
             self.text_fields[key] = text_widget
             row_idx += 2
 
+    def _list_menu_pt(self):
+        """下拉選單的字級 = 一般介面字級 + LIST_MENU_EXTRA_PT。"""
+        base = abs(tkfont.nametofont('TkDefaultFont', root=self.root).cget('size'))
+        return base + LIST_MENU_EXTRA_PT
+
     def _make_list_menu(self, parent, widget):
         """「項目符號/編號 ▾」下拉選單：選一種就套用到選取的行（再選同一種則取消）。"""
-        button = ttk.Menubutton(parent, text="項目符號/編號", width=14)
-        menu = tk.Menu(button, tearoff=0)
+        button = ttk.Menubutton(parent, text="項目符號/編號", width=14, style='List.TMenubutton')
+        menu = tk.Menu(button, tearoff=0, font=(self.font_family, self._list_menu_pt()))
         for symbol, name in BULLET_CHOICES:
             menu.add_command(label=f"{symbol}  {name}",
                              command=lambda w=widget, sym=symbol: self.apply_list(

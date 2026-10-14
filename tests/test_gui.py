@@ -956,6 +956,23 @@ class GuiTest(unittest.TestCase):
             self.assertFalse(g.enable_dpi_awareness())
         self.assertIn(g.enable_dpi_awareness.__name__, dir(g))
 
+    def test_list_dropdown_is_one_point_larger(self):
+        import tkinter.font as tkfont
+        body = abs(tkfont.nametofont('TkDefaultFont', root=self.root).cget('size'))
+        self.assertEqual(g.LIST_MENU_EXTRA_PT, 1)
+        # 按鈕本身
+        button_font = tkfont.Font(root=self.root, font=style_lookup(self.root, 'List.TMenubutton', 'font'))
+        self.assertEqual(abs(button_font.cget('size')), body + 1)
+        # 展開的選單項目
+        for w in self._all_widgets(self.root):
+            if isinstance(w, ttk.Menubutton) and getattr(w, 'menu', None) is not None:
+                self.assertEqual(str(w.cget('style')), 'List.TMenubutton')
+                menu_font = tkfont.Font(root=self.root, font=w.menu.cget('font'))
+                self.assertEqual(abs(menu_font.cget('size')), body + 1)
+                self.assertEqual(menu_font.cget('family'), g.FONT_FAMILY)
+                found = True
+        self.assertTrue(found)
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))

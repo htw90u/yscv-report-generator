@@ -1028,6 +1028,35 @@ class GuiTest(unittest.TestCase):
             self.app.select_photos(cat, self.app.listboxes[cat])
         self.assertEqual(titles, [f'加入照片 - {cat}'])
 
+    # ---- 啟動時不要讓使用者看到分頁一個個跑過
+    def test_tab_cycling_during_startup_fit_is_invisible(self):
+        nb = self.app.notebook
+        original = nb.index(nb.select())
+        seen_alpha = []
+        real_select = nb.select
+
+        def spy(*args, **kwargs):
+            if args or kwargs:  # 只記錄「切換分頁」的呼叫
+                seen_alpha.append(float(self.root.attributes('-alpha')))
+            return real_select(*args, **kwargs)
+
+        with mock.patch.object(nb, 'select', spy):
+            self.app._fit_window_height()
+        self.assertTrue(seen_alpha, '量測時應該有切換分頁')
+        self.assertTrue(all(a == 0.0 for a in seen_alpha), f'切換分頁時視窗還看得到：{seen_alpha}')
+        self.assertEqual(float(self.root.attributes('-alpha')), 1.0)  # 量完要恢復可見
+        self.assertEqual(nb.index(nb.select()), original)             # 回到原本的分頁
+
+    def test_window_is_visible_and_on_first_tab_after_startup(self):
+        self.assertEqual(float(self.root.attributes('-alpha')), 1.0)
+        self.assertEqual(self.app.notebook.index(self.app.notebook.select()), 0)
+
+    def test_fit_restores_visibility_even_if_measuring_fails(self):
+        with mock.patch.object(self.app, '_fit_window_height_hidden', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                self.app._fit_window_height()
+        self.assertEqual(float(self.root.attributes('-alpha')), 1.0)
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))

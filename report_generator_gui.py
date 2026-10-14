@@ -1018,6 +1018,13 @@ class ReportGeneratorGUI:
 
     def _fit_window_height(self):
         """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最多少 2 列）。"""
+        self._set_visible(False)  # 量測時要逐一切換分頁；先讓視窗透明，使用者不會看到分頁一個個跑過
+        try:
+            self._fit_window_height_hidden()
+        finally:
+            self._set_visible(True)
+
+    def _fit_window_height_hidden(self):
         self.root.update()
         extra = self._tabs_extra_height()
         if extra > 0:
@@ -1038,6 +1045,13 @@ class ReportGeneratorGUI:
             extra = self._tabs_extra_height()
             if extra > 0:
                 self._grow_window(extra)
+
+    def _set_visible(self, visible):
+        """用透明度顯示/隱藏整個視窗（不支援時略過）。"""
+        try:
+            self.root.attributes('-alpha', 1.0 if visible else 0.0)
+        except tk.TclError:
+            pass
 
     def _tab_by_title(self, title):
         for tab in self.notebook.tabs():

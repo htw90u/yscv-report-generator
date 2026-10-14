@@ -1936,6 +1936,97 @@ class GuiTest(unittest.TestCase):
         added = [f for cat in g.PHOTO_CATEGORIES for f in self.app.photo_files[cat]]
         self.assertEqual(sorted(added), sorted(files))
 
+    # ---- 照片旋轉（預覽區的按鈕；只記錄角度，不改原檔，報告與草稿都會套用）
+    def _select_first(self, cat, table):
+        self._show_photos_tab()
+        table.set_selection([0])
+        self.app._on_photo_select(cat, table)
+        self.root.update()
+
+    def test_rotate_buttons_disabled_until_a_photo_is_selected(self):
+        self.assertEqual(str(self.app.rotate_left_btn.cget('state')), 'disabled')
+        self.assertEqual(str(self.app.rotate_right_btn.cget('state')), 'disabled')
+        cat, table, (a,) = self._photos(names=('r.jpg',))
+        self._select_first(cat, table)
+        self.assertEqual(str(self.app.rotate_left_btn.cget('state')), 'normal')
+        self.assertEqual(str(self.app.rotate_right_btn.cget('state')), 'normal')
+
+    def test_rotating_swaps_preview_orientation_and_keeps_original_file(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self._select_first(cat, table)
+        preview = self.app.photo_preview
+        self.assertGreater(preview.image.width(), preview.image.height())      # 原本橫式
+        self.app.rotate_right_btn.invoke()
+        self.assertEqual(self.app.photo_rotations[cat][a], 90)
+        self.assertGreater(preview.image.height(), preview.image.width())      # 轉 90° 變直式
+        self.app.rotate_right_btn.invoke()
+        self.assertEqual(self.app.photo_rotations[cat][a], 180)
+        self.assertGreater(preview.image.width(), preview.image.height())
+        self.app.rotate_left_btn.invoke()
+        self.app.rotate_left_btn.invoke()
+        self.assertNotIn(a, self.app.photo_rotations[cat])                     # 轉回 0° 就不再記錄
+        self.app.rotate_left_btn.invoke()
+        self.assertEqual(self.app.photo_rotations[cat][a], 270)                # 逆時針 90° = 順時針 270°
+        with Image.open(a) as original:
+            self.assertEqual(original.size, (400, 200))                        # 原檔沒被改動
+
+    def test_rotation_direction_is_clockwise(self):
+        im = Image.new('RGB', (4, 2), 'white')
+        im.putpixel((0, 0), (255, 0, 0))  # 左上角是紅色
+        turned = g.rotate_clockwise(im, 90)
+        self.assertEqual(turned.size, (2, 4))
+        self.assertEqual(turned.getpixel((1, 0)), (255, 0, 0))  # 順時針 90° 後，左上角跑到右上角
+        self.assertEqual(g.normalize_rotation(-90), 270)
+        self.assertEqual(g.normalize_rotation(450), 90)
+
+    def test_preview_has_no_filename_label_and_uses_more_space(self):
+        self._show_photos_tab()
+        right, preview = self.app.photo_right_panel, self.app.photo_preview
+        self.assertFalse([w for w in preview.winfo_children() if isinstance(w, ttk.Label)])
+        # 預覽框幾乎占滿框架（只剩很薄的邊）
+        self.assertLessEqual(preview.winfo_height() - preview.box.winfo_height(), 8)
+
+    def test_rotation_is_applied_in_the_report(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self.app.photo_rotations[cat][a] = 90
+        src, size = g.prepare_image(a, 90)
+        self.assertEqual(size, (200, 400))
+        with Image.open(src) as rotated:
+            self.assertEqual(rotated.size, (200, 400))
+        self.assertEqual(g.prepare_image(a)[1], (400, 200))
+        out = os.path.join(self.tmp.name, 'rot.docx')
+        self.fill_dates()
+        data, error = self.app.collect_data()
+        self.assertIsNone(error)
+        g.build_report(TEMPLATE, data, {c: list(v) for c, v in self.app.photo_files.items()}, {}, out,
+                       rotations={c: dict(v) for c, v in self.app.photo_rotations.items()})
+        doc = Document(out)
+        shapes = doc.inline_shapes
+        self.assertGreaterEqual(len(shapes), 1)
+        self.assertGreater(shapes[0].height, shapes[0].width)  # 報告裡這張變成直式
+
+    def test_rotation_survives_draft_roundtrip_and_is_dropped_with_the_photo(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.photo_rotations[cat][b] = 270
+        draft = self.app.build_draft()
+        self.assertEqual(draft['rotations'][cat], {b: 270})
+        self.assertTrue(self.app.is_dirty())
+        self.app.apply_draft(draft)
+        self.assertEqual(self.app.photo_rotations[cat], {b: 270})
+        table.set_selection([1])
+        self.app.remove_photos(cat, table)
+        self.assertEqual(self.app.photo_rotations[cat], {})
+        self.app.photo_rotations[cat][a] = 90
+        self.app.clear_photos(cat, table)
+        self.assertEqual(self.app.photo_rotations[cat], {})
+
+    def test_old_draft_without_rotations_still_loads(self):
+        cat, table, (a,) = self._photos(names=('o.jpg',))
+        draft = self.app.build_draft()
+        draft.pop('rotations')
+        self.assertEqual(self.app.apply_draft(draft), [])
+        self.assertEqual(self.app.photo_rotations[cat], {})
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -2326,9 +2417,7 @@ class GuiTest(unittest.TestCase):
         bw, bh = preview.box_size()
         self.assertLessEqual(preview.image.width(), bw)
         self.assertLessEqual(preview.image.height(), bh)
-        text = preview.info.cget('text')
-        self.assertIn('a.jpg', text)
-        self.assertIn('400×200（橫式）', text)
+        self.assertFalse([w for w in preview.winfo_children() if isinstance(w, ttk.Label)])  # 預覽區不再顯示檔名與直式／橫式，空間全部給圖片
         self.assertEqual(self.app.caption_var.get(), '山屋外觀')  # 說明顯示在預覽下方的輸入框
         self.assertEqual(str(self.app.caption_entry.cget('state')), 'normal')
 
@@ -2338,7 +2427,6 @@ class GuiTest(unittest.TestCase):
         self.app._on_photo_select(cat, table)
         preview = self.app.previews[cat]
         self.assertGreater(preview.image.height(), preview.image.width())  # 轉正後為直式
-        self.assertIn('200×400（直式）', preview.info.cget('text'))
 
     def test_preview_of_unreadable_file_does_not_crash(self):
         cat = g.PHOTO_CATEGORIES[0]
@@ -2352,7 +2440,7 @@ class GuiTest(unittest.TestCase):
         self.app._on_photo_select(cat, table)
         preview = self.app.previews[cat]
         self.assertIsNone(preview.image)
-        self.assertIn('bad.jpg', preview.info.cget('text'))
+        self.assertIn('bad.jpg', preview.picture.cget('text'))  # 錯誤訊息直接顯示在預覽框裡
 
     def test_preview_cleared_when_photo_removed_or_cleared(self):
         cat, table, (a, b, c) = self._photos()

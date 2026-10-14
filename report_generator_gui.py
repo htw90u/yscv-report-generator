@@ -359,16 +359,31 @@ def _set_cell_value(cell, text, center=False):
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def prepare_image(path):
+_CLOCKWISE_TRANSPOSE = {90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_90}
+
+
+def normalize_rotation(degrees):
+    """使用者旋轉的角度（順時針）整理成 0、90、180、270。"""
+    return int(degrees) % 360 // 90 * 90
+
+
+def rotate_clockwise(img, degrees):
+    """把圖片順時針轉 degrees 度（0/90/180/270）；0 度回傳原圖。"""
+    degrees = normalize_rotation(degrees)
+    return img.transpose(_CLOCKWISE_TRANSPOSE[degrees]) if degrees else img
+
+
+def prepare_image(path, rotation=0):
     """回傳 (來源, (寬px, 高px))；來源可直接給 add_picture 使用。
 
-    有 EXIF 旋轉時先轉正；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
+    有 EXIF 旋轉時先轉正，再套用使用者在預覽旋轉的角度（順時針）；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
     不需要處理時來源直接是原檔路徑（不重新壓縮）。回傳的尺寸是處理後（轉正後）的尺寸。
     """
+    rotation = normalize_rotation(rotation)
     with Image.open(path) as img:
-        needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1)
+        needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1) or rotation != 0
         if needs_rotate:
-            img = ImageOps.exif_transpose(img)
+            img = rotate_clockwise(ImageOps.exif_transpose(img), rotation)
         needs_resize = img.width > MAX_IMAGE_WIDTH_PX
         if not needs_rotate and not needs_resize:
             return path, (img.width, img.height)
@@ -626,7 +641,7 @@ def _mark_row(row, *flags):
         trPr.append(OxmlElement(flag))
 
 
-def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
+def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations=None):
     """載入照片並計算尺寸。載入失敗的照片以文字佔位，不中斷整份報告。"""
     categories = {}
     for category, paths in photo_files.items():
@@ -636,7 +651,7 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
             item = PhotoItem(path=path, caption=caption)
             name = os.path.basename(path)
             try:
-                item.source, (item.px_w, item.px_h) = prepare_image(path)
+                item.source, (item.px_w, item.px_h) = prepare_image(path, (rotations or {}).get(category, {}).get(path, 0))
                 size_photo(item, fit_width, max_portrait_h)
             except Exception as e:
                 logging.error(f"無法載入照片 {name}: {e}")
@@ -647,7 +662,7 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
     return categories
 
 
-def _add_photo_section(doc, main_table, photo_files, captions, warnings):
+def _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations=None):
     body = doc.element.body
 
     # 只刪除內容含「照片」的舊照片表格，避免誤刪其他表格
@@ -697,7 +712,7 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
         set_font_kai(heading_run)
         start_y = HEADING_H
 
-    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings)
+    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations)
     sequence = plan_layout(categories, page_h, start_y, line_chars)
 
     # 連續同分類的列合成一張表格（跨頁時由 tblHeader 重複標題列）
@@ -871,7 +886,7 @@ def _describe_pdf_failure(raw):
     return f"Word 轉換 PDF 失敗{detail}"
 
 
-def build_report(template_path, data, photo_files, captions, output_path):
+def build_report(template_path, data, photo_files, captions, output_path, rotations=None):
     """產生報告並存檔，回傳警告訊息清單。"""
     doc = Document(template_path)
     if len(doc.tables) < 1:
@@ -879,7 +894,7 @@ def build_report(template_path, data, photo_files, captions, output_path):
     main_table = doc.tables[0]
 
     warnings = _fill_main_table(main_table, data)
-    _add_photo_section(doc, main_table, photo_files, captions, warnings)
+    _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations)
     doc.save(output_path)
     return warnings
 
@@ -1092,12 +1107,12 @@ class PhotoTable(ttk.Treeview):
 
 
 class PhotoPreview(ttk.Frame):
-    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名與尺寸。框會隨視窗放大，圖片跟著縮放到剛好放得下。"""
+    """照片預覽區：只顯示縮圖（已依 EXIF 轉正，再套用使用者旋轉的角度），空間全部留給圖片。框會隨視窗放大，圖片跟著縮放到剛好放得下。"""
 
     PLACEHOLDER = "點選左邊表格中的照片\n即可預覽"
 
     def __init__(self, master, font_family):
-        super().__init__(master, padding=6, relief=tk.GROOVE)
+        super().__init__(master, padding=2, relief=tk.GROOVE)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.box = tk.Frame(self, width=PREVIEW_SIZE[0], height=PREVIEW_SIZE[1])  # 最小大小；其餘空間會撐滿
@@ -1105,8 +1120,6 @@ class PhotoPreview(ttk.Frame):
         self.box.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
         self.picture = tk.Label(self.box, text=self.PLACEHOLDER, fg='gray', justify=tk.CENTER)
         self.picture.pack(fill=tk.BOTH, expand=True)
-        self.info = ttk.Label(self, text='', justify=tk.LEFT, font=(font_family, 9 + GUI_FONT_DELTA))
-        self.info.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
         self.image = None      # 要保留參照，否則 PhotoImage 會被回收而不顯示
         self.current = None    # (分類, 路徑)
         self._source = None    # 已轉正的原圖（縮小到快取上限），框改變大小時用它重新縮放
@@ -1115,7 +1128,7 @@ class PhotoPreview(ttk.Frame):
 
     def box_size(self):
         """目前可用來放圖的大小（像素）。"""
-        return max(60, self.box.winfo_width() - 8), max(60, self.box.winfo_height() - 8)
+        return max(60, self.box.winfo_width() - 4), max(60, self.box.winfo_height() - 4)
 
     def clear(self, message=None):
         self.image = None
@@ -1123,7 +1136,6 @@ class PhotoPreview(ttk.Frame):
         self._source = None
         self._rendered_size = None
         self.picture.config(image='', text=message or self.PLACEHOLDER)
-        self.info.config(text='')
 
     def _render(self, force=False):
         if self._source is None:
@@ -1137,26 +1149,19 @@ class PhotoPreview(ttk.Frame):
         self._rendered_size = size
         self.picture.config(image=self.image, text='')
 
-    def show(self, category, path, caption=None):
-        name = os.path.basename(path)
+    def show(self, category, path, rotation=0):
         try:
             with Image.open(path) as img:
-                width, height = img.size
-                if img.getexif().get(0x0112, 1) in (5, 6, 7, 8):  # EXIF 旋轉後寬高互換
-                    width, height = height, width
                 img.draft('RGB', (PREVIEW_SOURCE_MAX[0] * 2, PREVIEW_SOURCE_MAX[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
                 source = ImageOps.exif_transpose(img)
                 source.thumbnail(PREVIEW_SOURCE_MAX, Image.LANCZOS)
-                source = source.copy()
+                source = rotate_clockwise(source.copy(), rotation)
         except Exception as e:
-            self.clear(f"無法預覽\n{e}")
-            self.info.config(text=name)
+            self.clear(f"無法預覽\n{os.path.basename(path)}\n{e}")
             return
         self._source = source
         self.current = (category, path)
         self._render(force=True)
-        orient = '橫式' if width >= height else '直式'
-        self.info.config(text=f"{name}  {width}×{height}（{orient}）")
 
 
 def load_private_fonts():
@@ -1218,6 +1223,7 @@ class ReportGeneratorGUI:
         self.template_path = template_path
         self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
+        self.photo_rotations = {c: {} for c in self.photo_files}  # category -> {path: 順時針角度 90/180/270}（不改原檔）
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
         self._scroll_tabs = {}  # 分頁標題 -> (canvas, 內容框)
@@ -1751,7 +1757,16 @@ class ReportGeneratorGUI:
         self.photo_right_panel = right
         preview = PhotoPreview(right, self.font_family)
         preview.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
-        ttk.Label(right, text="說明：", style='Field.TLabel').grid(row=1, column=0, sticky=tk.W, pady=(8, 2))
+        caption_bar = ttk.Frame(right)
+        caption_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 2))
+        caption_bar.columnconfigure(0, weight=1)
+        ttk.Label(caption_bar, text="說明：", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W)
+        self.rotate_left_btn = ttk.Button(caption_bar, text="↺ 向左轉 90°", state='disabled',
+                                          command=lambda: self.rotate_current_photo(-90))
+        self.rotate_left_btn.grid(row=0, column=1)
+        self.rotate_right_btn = ttk.Button(caption_bar, text="向右轉 90° ↻", state='disabled',
+                                           command=lambda: self.rotate_current_photo(90))
+        self.rotate_right_btn.grid(row=0, column=2, padx=(6, 0))
         self.caption_var = tk.StringVar(master=self.root)
         entry = ttk.Entry(right, textvariable=self.caption_var, state='disabled')
         entry.grid(row=2, column=0, sticky=(tk.W, tk.E))
@@ -1885,6 +1900,8 @@ class ReportGeneratorGUI:
         self._caption_target = None
         self.caption_var.set('')
         self.caption_entry.config(state='disabled')
+        self.rotate_left_btn.config(state='disabled')
+        self.rotate_right_btn.config(state='disabled')
         self.photo_preview.clear()
 
     def _on_photo_select(self, category, table):
@@ -1893,10 +1910,26 @@ class ReportGeneratorGUI:
         if not selected:
             return
         path = self.photo_files[category][selected[0]]
-        self.photo_preview.show(category, path)
+        self.photo_preview.show(category, path, self.photo_rotations[category].get(path, 0))
+        self.rotate_left_btn.config(state='normal')
+        self.rotate_right_btn.config(state='normal')
         self._caption_target = (category, path)
         self.caption_entry.config(state='normal')
         self.caption_var.set(self.photo_captions[category].get(path, ''))
+
+    def rotate_current_photo(self, delta):
+        """把預覽中的這張照片轉 delta 度（正的順時針、負的逆時針）；只記錄角度，不改原檔，報告也會照這個角度放。"""
+        target = self.photo_preview.current
+        if not target:
+            return
+        category, path = target
+        angle = normalize_rotation(self.photo_rotations[category].get(path, 0) + delta)
+        if angle:
+            self.photo_rotations[category][path] = angle
+        else:
+            self.photo_rotations[category].pop(path, None)
+        self.photo_preview.show(category, path, angle)
+        self.status_label.config(text=f"已旋轉照片（目前 {angle}°）")
 
     def _commit_caption(self):
         """把說明輸入框目前的文字存到對應的照片（沒有變動就什麼都不做）。"""
@@ -2066,6 +2099,7 @@ class ReportGeneratorGUI:
         for idx in reversed(selected):
             filepath = self.photo_files[category].pop(idx)
             self.photo_captions[category].pop(filepath, None)
+            self.photo_rotations[category].pop(filepath, None)
         self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已移除 {len(selected)} 張照片")
@@ -2073,6 +2107,7 @@ class ReportGeneratorGUI:
     def clear_photos(self, category, table):
         self.photo_files[category].clear()
         self.photo_captions[category].clear()
+        self.photo_rotations[category].clear()
         self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已清除 {category} 的所有照片")
@@ -2085,6 +2120,7 @@ class ReportGeneratorGUI:
         for category in self.listboxes:
             self.photo_files[category].clear()
             self.photo_captions[category].clear()
+            self.photo_rotations[category].clear()
             self._render_list(category)
         self._reset_caption_panel()
         self._refresh_tab_marks()
@@ -2113,6 +2149,7 @@ class ReportGeneratorGUI:
             'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
             'photos': {c: list(p) for c, p in self.photo_files.items()},
             'captions': {c: dict(v) for c, v in self.photo_captions.items()},
+            'rotations': {c: dict(v) for c, v in self.photo_rotations.items()},
         }
 
     def apply_draft(self, draft):
@@ -2132,6 +2169,7 @@ class ReportGeneratorGUI:
             if category not in self.photo_files:
                 continue
             captions = draft.get('captions', {}).get(category, {})
+            rotations = draft.get('rotations', {}).get(category, {})
             for path in paths:
                 if not os.path.exists(path):
                     warnings.append(f"找不到照片，已略過：{path}")
@@ -2139,6 +2177,12 @@ class ReportGeneratorGUI:
                 self.photo_files[category].append(path)
                 if captions.get(path):
                     self.photo_captions[category][path] = captions[path]
+                try:
+                    angle = normalize_rotation(rotations.get(path, 0))
+                except (TypeError, ValueError):
+                    angle = 0
+                if angle:
+                    self.photo_rotations[category][path] = angle
             self._render_list(category)
         self._refresh_tab_marks()
         return warnings
@@ -2390,6 +2434,7 @@ class ReportGeneratorGUI:
 
         photo_files = {c: list(p) for c, p in self.photo_files.items()}
         captions = {c: dict(v) for c, v in self.photo_captions.items()}
+        rotations = {c: dict(v) for c, v in self.photo_rotations.items()}
         missing = [p for photos in photo_files.values() for p in photos if not os.path.exists(p)]
         if missing:
             messagebox.showerror("錯誤", "以下照片檔案不存在：\n" + "\n".join(missing[:10]))
@@ -2422,7 +2467,7 @@ class ReportGeneratorGUI:
         self.generate_btn.config(state=tk.DISABLED)
         self._start_busy(BUSY_MESSAGE)
         threading.Thread(target=self._generate_report_worker,
-                         args=(data, photo_files, captions, output_path),
+                         args=(data, photo_files, captions, output_path, rotations),
                          daemon=True).start()
 
     def _start_busy(self, message):
@@ -2462,9 +2507,9 @@ class ReportGeneratorGUI:
             pass
         self.root.after(100, self._drain_ui_queue)
 
-    def _generate_report_worker(self, data, photo_files, captions, output_path):
+    def _generate_report_worker(self, data, photo_files, captions, output_path, rotations=None):
         try:
-            warnings = build_report(self.template_path, data, photo_files, captions, output_path)
+            warnings = build_report(self.template_path, data, photo_files, captions, output_path, rotations)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
 
             pdf_path = os.path.splitext(output_path)[0] + '.pdf'

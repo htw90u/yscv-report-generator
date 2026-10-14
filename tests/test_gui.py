@@ -121,18 +121,33 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(os.path.exists(out))
         self.assertTrue(any(k == 'info' and 'PDF 未產生' in m for k, m in self.shown))
 
-    def test_auto_open_can_be_turned_off(self):
+    def test_auto_open_is_always_on_and_has_no_option(self):
+        self.assertFalse(hasattr(self.app, 'auto_open'))
+        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, (ttk.Checkbutton, ttk.Button))]
+        self.assertNotIn('產生後自動開啟', texts)
         self.fill_dates()
         out = os.path.join(self.tmp.name, 'o.docx')
         opened = []
-        self.app.auto_open.set(False)
         with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
                 mock.patch.object(g, 'open_file', lambda path: opened.append(path)):
             self.app.generate_report()
             self._wait_until_done()
-        self.assertTrue(os.path.exists(out))
-        self.assertEqual(opened, [])
-        self.assertTrue(any(k == 'info' for k, _ in self.shown))
+        self.assertEqual(opened, [out])
+
+    def test_button_order_and_danger_style(self):
+        frame = self.app.generate_btn.master
+        labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
+        self.assertEqual(labels, ['載入草稿', '儲存草稿', '產生報告', '清除', '離開'])
+        self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
+        style = ttk.Style(self.root)
+        self.assertEqual(style.lookup('Danger.TButton', 'background'), g.DANGER_BG)
+        self.assertEqual(style.lookup('Danger.TButton', 'foreground'), '#ffffff')
+        self.assertEqual(style.lookup('Danger.TButton', 'background', ['active']), g.DANGER_ACTIVE_BG)
+        # 紅色是明顯的紅（R 高、G/B 低）
+        r, gg, b = (int(g.DANGER_BG[i:i + 2], 16) for i in (1, 3, 5))
+        self.assertGreater(r, 180)
+        self.assertLess(gg, 80)
+        self.assertLess(b, 80)
 
     def test_open_file_failure_does_not_raise(self):
         with mock.patch.object(os, 'startfile', side_effect=OSError('boom'), create=True):

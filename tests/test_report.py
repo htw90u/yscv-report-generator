@@ -419,6 +419,19 @@ class FormattingTest(BuildReportTest):
         self.assertTrue(all(r.font.bold for r in heading.runs))
         self.assertEqual(heading.runs[0].font.size.pt, 14)
 
+    def test_fill_date_and_service_date_are_centered_in_word(self):
+        for text in ('115年10月12日', '115年10月10日至115年10月11日'):
+            _, p = self._paragraphs(text)
+            jc = p._p.pPr.find(self.W + 'jc')
+            with self.subTest(text=text):
+                self.assertIsNotNone(jc)
+                self.assertEqual(jc.get(self.W + 'val'), 'center')
+
+    def test_personnel_and_location_are_not_changed_to_center(self):
+        _, p = self._paragraphs('王小明')
+        jc = p._p.pPr.find(self.W + 'jc') if p._p.pPr is not None else None
+        self.assertTrue(jc is None or jc.get(self.W + 'val') != 'center')
+
     def test_title_and_date_alignment_kept(self):
         _, title = self._paragraphs('玉山國家公園高山保育志工協勤回報單')
         self.assertTrue(title.runs[0].font.bold)

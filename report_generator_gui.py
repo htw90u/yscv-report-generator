@@ -69,6 +69,8 @@ PANEL_BG = '#f3f4f6'      # 表單背景
 TAB_ACTIVE_BG = '#1d4ed8'  # 目前分頁的底色
 TAB_IDLE_BG = '#d5dae3'    # 其他分頁的底色
 TAB_BORDER = '#8b95a7'
+DANGER_BG = '#dc2626'         # 「清除」按鈕的紅色
+DANGER_ACTIVE_BG = '#b91c1c'
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
 TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
 PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
@@ -269,7 +271,7 @@ def _insert_content_after(paragraph, lines, drop_text=None):
         anchor = new
 
 
-def _set_cell_value(cell, text):
+def _set_cell_value(cell, text, center=False):
     """填入基本資料：沿用儲存格原有的段落設定與字型大小（對齊、14pt 等），字型改為標楷體。"""
     paragraphs = cell.paragraphs
     for extra in paragraphs[1:]:
@@ -293,6 +295,8 @@ def _set_cell_value(cell, text):
     for attr in ('ascii', 'hAnsi', 'eastAsia'):
         rfonts.set(qn(f'w:{attr}'), KAI)
     rfonts.attrib.pop(qn('w:hint'), None)
+    if center:
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
 def prepare_image(path):
@@ -362,11 +366,11 @@ def _fill_main_table(main_table, data):
     widen_label_column(main_table)
 
     try:
-        _set_cell_value(main_table.rows[0].cells[2], f"{data['year']}年{data['month']}月{data['day']}日")
+        _set_cell_value(main_table.rows[0].cells[2], f"{data['year']}年{data['month']}月{data['day']}日", center=True)
         _set_cell_value(main_table.rows[1].cells[1], data['personnel'])
         _set_cell_value(main_table.rows[2].cells[1],
                         f"{data['start_year']}年{data['start_month']}月{data['start_day']}日至"
-                        f"{data['end_year']}年{data['end_month']}月{data['end_day']}日")
+                        f"{data['end_year']}年{data['end_month']}月{data['end_day']}日", center=True)
         _set_cell_value(main_table.rows[3].cells[1], data['location'])
     except IndexError:
         raise ValueError("模板格式錯誤：基本資料表格的列/欄數量與預期不符（需至少 4 列、第一列至少 3 欄）")
@@ -940,6 +944,10 @@ class ReportGeneratorGUI:
                         darkcolor=TAB_BORDER, borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
         style.configure('TNotebook.Tab', padding=TAB_PADDING, background=TAB_IDLE_BG, foreground='#1f2937',
                         bordercolor=TAB_BORDER, lightcolor=TAB_BORDER, darkcolor=TAB_BORDER, borderwidth=2)
+        style.configure('Danger.TButton', background=DANGER_BG, foreground='#ffffff', bordercolor='#991b1b',
+                        lightcolor=DANGER_BG, darkcolor=DANGER_BG)
+        style.map('Danger.TButton', background=[('active', DANGER_ACTIVE_BG), ('pressed', DANGER_ACTIVE_BG)],
+                  foreground=[('active', '#ffffff'), ('pressed', '#ffffff')])
         style.map('TNotebook.Tab',
                   background=[('selected', TAB_ACTIVE_BG), ('active', '#b9c6e4')],
                   foreground=[('selected', '#ffffff')],
@@ -990,13 +998,12 @@ class ReportGeneratorGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=row, column=0, columnspan=3, pady=10)
 
+        ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
         self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report)
         self.generate_btn.pack(side=tk.LEFT, padx=5)
-        self.auto_open = tk.BooleanVar(value=True)
-        ttk.Checkbutton(button_frame, text="產生後自動開啟", variable=self.auto_open).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="清除", command=self.clear_all).pack(side=tk.LEFT, padx=5)
+        self.clear_btn = ttk.Button(button_frame, text="清除", command=self.clear_all, style='Danger.TButton')
+        self.clear_btn.pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="離開", command=self.on_close).pack(side=tk.LEFT, padx=5)
 
         row += 1
@@ -1575,7 +1582,7 @@ class ReportGeneratorGUI:
         self.generate_btn.config(state=tk.DISABLED)
         self.status_label.config(text="正在產生報告與 PDF...")
         threading.Thread(target=self._generate_report_worker,
-                         args=(data, photo_files, captions, output_path, self.auto_open.get()),
+                         args=(data, photo_files, captions, output_path),
                          daemon=True).start()
 
     def _post(self, func):
@@ -1590,7 +1597,7 @@ class ReportGeneratorGUI:
             pass
         self.root.after(100, self._drain_ui_queue)
 
-    def _generate_report_worker(self, data, photo_files, captions, output_path, open_after=False):
+    def _generate_report_worker(self, data, photo_files, captions, output_path):
         try:
             warnings = build_report(self.template_path, data, photo_files, captions, output_path)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
@@ -1604,16 +1611,13 @@ class ReportGeneratorGUI:
                 warnings.append(f"PDF 未產生：{e}")
                 pdf_path = None
 
-            if open_after:
-                # 只開啟檔案，本工具維持開啟，方便修改後再次產生
-                self._post(lambda: open_file(output_path))
+            # 產生後自動開啟檔案；本工具維持開啟，方便修改後再次產生
+            self._post(lambda: open_file(output_path))
             files = f"Word: {output_path}" + (f"\nPDF: {pdf_path}" if pdf_path else "")
             if warnings:
                 message = f"報告已產生！\n\n{files}\n\n⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings)
                 logging.warning("警告: " + "; ".join(warnings))
                 self._post(lambda: messagebox.showinfo("成功（有警告）", message))
-            elif not open_after:
-                self._post(lambda: messagebox.showinfo("成功", f"報告已產生！\n\n{files}"))
             self._post(lambda: self.status_label.config(text=f"✓ SUCCESS: 已產生 {output_path}"))
         except Exception as e:
             error_msg = f"✗ FAIL: {e}"

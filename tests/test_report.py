@@ -302,6 +302,32 @@ class ListToolsTest(unittest.TestCase):
         self.assertEqual(numbered, ['1. a', '', '2. b', '3. c'])
         self.assertEqual(g.toggle_numbers(numbered), ['a', '', 'b', 'c'])
 
+    def test_bullet_with_chosen_symbol(self):
+        added = g.toggle_bullets(['a', '', 'b'], '◆')
+        self.assertEqual(added, ['◆ a', '', '◆ b'])
+        self.assertEqual(g.toggle_bullets(added, '◆'), ['a', '', 'b'])  # 同一個符號再選一次 = 取消
+
+    def test_choosing_another_symbol_replaces_the_old_one(self):
+        self.assertEqual(g.toggle_bullets(['◆ a', '• b', '1. c'], '■'), ['■ a', '■ b', '■ c'])
+
+    def test_remove_list_markers(self):
+        self.assertEqual(g.remove_list_markers(['◆ a', '', '2. b', '- c', '一般']), ['a', '', 'b', 'c', '一般'])
+
+    def test_every_dropdown_symbol_is_recognised_as_a_marker(self):
+        for symbol, _ in g.BULLET_CHOICES:
+            line = f'{symbol} 內容'
+            with self.subTest(symbol=symbol):
+                self.assertTrue(g.LIST_MARKER_RE.match(line))
+                self.assertEqual(g.strip_list_marker(line), '內容')
+                self.assertEqual(g.continue_list(line), ('continue', f'{symbol} '))
+                self.assertEqual(g.continue_list(f'{symbol} '), ('end', ''))
+
+    def test_hyphen_needs_space_to_count_as_marker(self):
+        self.assertIsNone(g.LIST_MARKER_RE.match('-3 度'))
+        self.assertEqual(g.strip_list_marker('-3 度'), '-3 度')
+        self.assertEqual(g.continue_list('-3 度'), (None, ''))
+        self.assertTrue(g.LIST_MARKER_RE.match('- 項目'))
+
     def test_switch_between_bullets_and_numbers(self):
         self.assertEqual(g.toggle_numbers(['• a', '• b']), ['1. a', '2. b'])
         self.assertEqual(g.toggle_bullets(['1. a', '2. b']), ['• a', '• b'])
@@ -386,6 +412,12 @@ class FormattingTest(BuildReportTest):
         ind = p._p.pPr.find(self.W + 'ind')
         self.assertEqual(ind.get(self.W + 'left'), '480')
         self.assertIsNone(ind.get(self.W + 'hanging'))
+
+    def test_any_dropdown_symbol_gets_hanging_indent_in_report(self):
+        for symbol, _ in g.BULLET_CHOICES:
+            ind = g._build_content_paragraph(f'{symbol} 內容').find(self.W + 'pPr').find(self.W + 'ind')
+            with self.subTest(symbol=symbol):
+                self.assertEqual(ind.get(self.W + 'hanging'), '240')
 
     def test_numbered_line_hanging_indent(self):
         doc_p = g._build_content_paragraph('1. 項目')

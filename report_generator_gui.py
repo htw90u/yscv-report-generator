@@ -108,7 +108,17 @@ FIELD_NAMES = {
 
 # ---------------------------------------------------------------- 文件處理（不依賴 tkinter）
 
-LIST_MARKER_RE = re.compile(r'^(?:[◆◇■□●○★☆•·‧▲△▼▽※＊*\-–—]|\d+\s*[.、)）]|[一二三四五六七八九十]+、)')
+# 下拉選單提供的項目符號：(符號, 名稱)
+BULLET_CHOICES = [
+    ('•', '圓點'), ('◆', '實心菱形'), ('◇', '空心菱形'), ('■', '實心方塊'), ('□', '空心方塊'),
+    ('●', '實心圓'), ('○', '空心圓'), ('★', '實心星'), ('☆', '空心星'), ('▲', '實心三角'),
+    ('※', '米字號'), ('-', '短橫線'),
+]
+BULLET_SYMBOLS = [sym for sym, _ in BULLET_CHOICES]
+# 其他常見符號（使用者自己貼上的）也當成項目符號處理；連字號類必須後面接空白，避免把「-3度」「—」誤判
+_SYMBOL_CHARS = '•·‧◆◇■□●○★☆▲△▼▽※＊*'
+_MARKER_PATTERN = rf'(?:[{_SYMBOL_CHARS}]|[-–—](?=\s))'
+LIST_MARKER_RE = re.compile(rf'^(?:{_MARKER_PATTERN}|\d+\s*[.、)）]|[一二三四五六七八九十]+、)')
 NUMBER_MARKER_RE = re.compile(r'^\d+\s*[.、)）]')
 BULLET = '• '
 
@@ -119,19 +129,23 @@ def content_lines(text):
 
 
 # ---- 編輯區的項目符號 / 編號（純文字處理，方便測試）
-_STRIP_MARKER_RE = re.compile(r'^(?:[•·‧◆◇■□●○★☆▲△▼▽※＊*\-–—]\s*|\d+\s*[.、)）]\s*)')
+_STRIP_MARKER_RE = re.compile(rf'^(?:{_MARKER_PATTERN}\s*|\d+\s*[.、)）]\s*)')
 
 
 def strip_list_marker(line):
     return _STRIP_MARKER_RE.sub('', line.lstrip(), count=1)
 
 
-def toggle_bullets(lines):
-    """全部有內容的行都已是「• 」開頭就取消；否則全部加上「• 」。空白行不動。"""
+def toggle_bullets(lines, symbol=BULLET_SYMBOLS[0]):
+    """全部有內容的行都已是該符號開頭就取消；否則全部換成「符號 + 空白」。空白行不動。"""
     filled = [ln for ln in lines if ln.strip()]
-    if filled and all(ln.lstrip().startswith('•') for ln in filled):
+    if filled and all(ln.lstrip().startswith(symbol) for ln in filled):
         return [strip_list_marker(ln) if ln.strip() else ln for ln in lines]
-    return [BULLET + strip_list_marker(ln) if ln.strip() else ln for ln in lines]
+    return [f'{symbol} {strip_list_marker(ln)}' if ln.strip() else ln for ln in lines]
+
+
+def remove_list_markers(lines):
+    return [strip_list_marker(ln) if ln.strip() else ln for ln in lines]
 
 
 def toggle_numbers(lines):
@@ -152,8 +166,9 @@ def toggle_numbers(lines):
 def continue_list(text_before_cursor):
     """在項目符號/編號的行按 Enter：回傳 ('continue', 下一行前綴)、('end', '')（空項目，結束清單）或 (None, '')。"""
     line = text_before_cursor.lstrip()
-    if line.startswith('•'):
-        rest, prefix = line[1:].strip(), BULLET
+    symbol = next((sym for sym in BULLET_SYMBOLS if line.startswith(sym)), None)
+    if symbol and (symbol != '-' or line[1:2].isspace()):
+        rest, prefix = line[len(symbol):].strip(), f'{symbol} '
     else:
         m = re.match(r'^(\d+)\s*[.、)）]\s*', line)
         if not m:
@@ -1018,14 +1033,27 @@ class ReportGeneratorGUI:
             ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
                 row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
-            ttk.Button(header, text="• 項目符號", width=10,
-                       command=lambda w=text_widget: self.apply_list(w, toggle_bullets)).grid(row=0, column=1, padx=2)
+            self._make_bullet_menu(header, text_widget).grid(row=0, column=1, padx=2)
             ttk.Button(header, text="1. 編號", width=8,
                        command=lambda w=text_widget: self.apply_list(w, toggle_numbers)).grid(row=0, column=2, padx=2)
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
             row_idx += 2
+
+    def _make_bullet_menu(self, parent, widget):
+        """「項目符號 ▾」下拉選單：選一個符號就套用到選取的行（再選同一個符號則取消）。"""
+        button = ttk.Menubutton(parent, text="項目符號 ▾", width=11)
+        menu = tk.Menu(button, tearoff=0)
+        for symbol, name in BULLET_CHOICES:
+            menu.add_command(label=f"{symbol}  {name}",
+                             command=lambda w=widget, sym=symbol: self.apply_list(
+                                 w, lambda lines: toggle_bullets(lines, sym)))
+        menu.add_separator()
+        menu.add_command(label="取消項目符號", command=lambda w=widget: self.apply_list(w, remove_list_markers))
+        button['menu'] = menu
+        button.menu = menu
+        return button
 
     def apply_list(self, widget, toggler):
         """對選取的行（沒有選取就是游標所在行）加上/取消項目符號或編號。"""

@@ -379,6 +379,41 @@ class GuiTest(unittest.TestCase):
         self.app.apply_list(w, g.toggle_bullets)
         self.assertEqual(w.get('1.0', 'end-1c'), 'a\n• b')
 
+    def _bullet_menu(self, widget):
+        for w in self._all_widgets(self.root):
+            if isinstance(w, ttk.Menubutton) and getattr(w, 'menu', None) is not None:
+                # 同一個欄位的選單：以兄弟元件裡的文字區比對
+                if widget.master in w.master.master.winfo_children():  # ScrolledText 的文字區外面還包了一層 Frame
+                    return w.menu
+        self.fail('找不到項目符號選單')
+
+    def _all_widgets(self, parent):
+        for child in parent.winfo_children():
+            yield child
+            yield from self._all_widgets(child)
+
+    def test_bullet_dropdown_lists_all_symbols_and_applies_choice(self):
+        w = self.app.text_fields['nature']
+        menu = self._bullet_menu(w)
+        labels = [menu.entrycget(i, 'label') for i in range(menu.index('end') + 1)
+                  if menu.type(i) == 'command']
+        self.assertEqual(len(labels), len(g.BULLET_CHOICES) + 1)  # 全部符號 + 取消
+        self.assertTrue(any(lbl.startswith('◆') for lbl in labels))
+        w.insert('1.0', 'a\nb')
+        w.tag_add(tk.SEL, '1.0', 'end-1c')
+        menu.invoke([i for i in range(menu.index('end') + 1) if menu.type(i) == 'command'
+                     and menu.entrycget(i, 'label').startswith('◆')][0])
+        self.assertEqual(w.get('1.0', 'end-1c'), '◆ a\n◆ b')
+        menu.invoke(menu.index('end'))  # 最後一項：取消項目符號
+        self.assertEqual(w.get('1.0', 'end-1c'), 'a\nb')
+
+    def test_enter_keeps_the_chosen_symbol(self):
+        w = self.app.text_fields['nature']
+        w.insert('1.0', '■ 第一項')
+        w.mark_set(tk.INSERT, 'end-1c')
+        self.app._on_return(w)
+        self.assertEqual(w.get('1.0', 'end-1c'), '■ 第一項\n■ ')
+
     def test_enter_continues_list_and_ends_on_empty_item(self):
         w = self.app.text_fields['nature']
         w.insert('1.0', '1. 第一項')

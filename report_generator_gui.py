@@ -35,12 +35,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
-GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細：'normal'（一般）或 'bold'。Chocolate 只有 Regular 字重，'bold' 會是電腦模擬的粗體
-# 介面字型：巧克力黑體 Chocolate Classical Sans（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
+GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細。介面不使用粗體（邊緣不好看），強調改用字級、顏色與 Medium 字重
+# 介面字型：Chiron GoRound TC（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
+# 使用它的 Medium 字重當作一般字體：筆畫比 Regular 稍粗、比較清楚，又不會有電腦模擬粗體的毛邊
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
-FONT_FILES = ('ChocolateClassicalSans-Regular.ttf',)
-FONT_LICENSE = 'OFL-ChocolateClassicalSans.txt'
-FONT_FAMILY = 'Chocolate Classical Sans'
+FONT_FILES = ('ChironGoRoundTC-Medium.ttf',)
+FONT_LICENSE = 'OFL-ChironGoRoundTC.txt'
+FONT_FAMILY = 'Chiron GoRound TC Medium'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
 LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
 logging.basicConfig(
@@ -71,20 +72,20 @@ LEGACY_DEFAULT_CAPTION = '[照片說明]'  # 舊版預設值；載入舊草稿�
 # 主要與危險按鈕都是「淺底深字」，文字與底色的對比度都達到 WCAG AA（4.5:1 以上）。
 THEMES = {
     '柔和淺色': dict(
-        bg='#f6f8fb', border='#b5c0d0',
+        bg='#f6f8fb', border='#b5c0d0', heading_fg='#1e3a8a', field_fg='#1f2937',
         tab_idle='#e6ecf4', tab_idle_fg='#475569', tab_hover='#d9e3f1',
         tab_active='#cfe0fb', tab_active_fg='#1e3a8a',
         primary='#cdeedd', primary_fg='#14532d', primary_active='#b4e3c9', primary_border='#6fbf96',
         danger='#fde2e2', danger_fg='#991b1b', danger_active='#fbc9c9', danger_border='#e89a9a'),
     # 色弱友善：避開紅綠搭配，改用藍色（主要）與橘色（危險），取自 Okabe-Ito 色盲友善色盤
     '色弱友善': dict(
-        bg='#f7f7f5', border='#a8a29e',
+        bg='#f7f7f5', border='#a8a29e', heading_fg='#003a5c', field_fg='#1c1917',
         tab_idle='#ececea', tab_idle_fg='#44403c', tab_hover='#e0e0dd',
         tab_active='#cfe6f5', tab_active_fg='#003a5c',
         primary='#b8dcf2', primary_fg='#00314d', primary_active='#9fd0ee', primary_border='#0072B2',
         danger='#fbdcc0', danger_fg='#6b2d00', danger_active='#f6c79d', danger_border='#D55E00'),
     '高對比': dict(
-        bg='#ffffff', border='#000000',
+        bg='#ffffff', border='#000000', heading_fg='#000000', field_fg='#000000',
         tab_idle='#ffffff', tab_idle_fg='#000000', tab_hover='#e5e5e5',
         tab_active='#000000', tab_active_fg='#ffffff',
         primary='#0b3d91', primary_fg='#ffffff', primary_active='#082a66', primary_border='#000000',
@@ -117,6 +118,19 @@ PHOTO_CATEGORIES = ['道路、步道狀況及維護情形', '設施狀況及維�
 # 畫面上的分頁分組（只影響介面的排列，不影響 Word 順序）
 PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '環境清理及遊客宣導情形']  # 服勤照片(上)
 PHOTO_CATEGORIES_2 = ['自然資源狀況', '遊客違法情形', '其他']  # 服勤照片(下)
+TAB_BASIC = "基本資料"
+TAB_ROAD = "道路步道"
+TAB_FACILITY = "設施"
+TAB_NATURE = "自然資源與遊客"
+TAB_FEEDBACK = "意見與心得建議"
+# 文字欄位屬於哪個分頁（用於「產生前檢查未填欄位」）
+FIELD_TAB = {
+    'road_status': TAB_ROAD, 'road_grass': TAB_ROAD, 'road_other': TAB_ROAD,
+    'facility_house': TAB_FACILITY, 'facility_sign': TAB_FACILITY, 'facility_bridge': TAB_FACILITY,
+    'facility_other': TAB_FACILITY,
+    'nature': TAB_NATURE, 'environment': TAB_NATURE, 'violation': TAB_NATURE,
+    'feedback': TAB_FEEDBACK, 'reflection': TAB_FEEDBACK, 'questions': TAB_FEEDBACK,
+}
 PHOTO_TAB_TITLES = ("服勤照片(上)", "服勤照片(下)")
 PHOTO_LIST_ROWS = 5          # 照片清單預設顯示的列數
 PHOTO_LIST_ROWS_COMPACT = 3  # 螢幕高度不夠時改用的列數
@@ -1059,6 +1073,8 @@ class ReportGeneratorGUI:
                   foreground=[('selected', p['tab_active_fg'])],
                   padding=[('selected', TAB_PADDING_ACTIVE)],
                   expand=[('selected', (0, 0, 0, 0))])
+        style.configure('Heading.TLabel', font=(self.font_family, 12 + GUI_FONT_DELTA), foreground=p['heading_fg'])
+        style.configure('Field.TLabel', font=(self.font_family, 10 + GUI_FONT_DELTA), foreground=p['field_fg'])
         for name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
             fill, fg = p[key], p[f'{key}_fg']
             style.configure(name, background=fill, foreground=fg, bordercolor=p[f'{key}_border'],
@@ -1101,25 +1117,25 @@ class ReportGeneratorGUI:
         main_frame.rowconfigure(row, weight=1)
 
         self.create_basic_info_tab(notebook)
-        self.create_text_tab(notebook, "道路步道", [
+        self.create_text_tab(notebook, TAB_ROAD, [
             ("一、道路、步道狀況及維護情形（如有坍方、雜草等地點及維護處理等）", None),
             ("1、道路、步道狀況及維護情形：", "road_status"),
             ("2、道路、步道雜草情形：", "road_grass"),
             ("3、其他：", "road_other"),
         ], height=5)
-        self.create_text_tab(notebook, "設施", [
+        self.create_text_tab(notebook, TAB_FACILITY, [
             ("二、設施狀況及維護情形（如山屋、牌誌、木棧道等設施損壞紀錄地點、種類數量及維護處理情形等）", None),
             ("1、山屋：", "facility_house"),
             ("2、牌示：", "facility_sign"),
             ("3、木棧道：", "facility_bridge"),
             ("4、其他：", "facility_other"),
         ], height=5)
-        self.create_text_tab(notebook, "自然資源與遊客", [
+        self.create_text_tab(notebook, TAB_NATURE, [
             ("三、自然資源狀況（如特殊植物、動物、人文、地質地形、水文等資源之地點、數量及周圍環境紀錄等）：", "nature"),
             ("四、環境清理及遊客宣導情形（如垃圾清理及帶下山、遊客登山安全、環境保護宣導等情形）：", "environment"),
             ("五、遊客違法情形（如非法入園、亂丟垃圾、走捷徑等登山違法情形紀錄登山團體與人員）：", "violation"),
         ], height=6)
-        self.create_text_tab(notebook, "意見與心得建議", [
+        self.create_text_tab(notebook, TAB_FEEDBACK, [
             ("六、登山遊客反應意見：", "feedback"),
             ("七、協勤心得與建議：", "reflection"),
             ("八、相關疑問與解答：（將服勤期間相關疑問，以及透過職員或其他志工尋得之答案記錄下來）", "questions"),
@@ -1199,7 +1215,7 @@ class ReportGeneratorGUI:
 
     def create_basic_info_tab(self, notebook):
         frame = ttk.Frame(notebook, padding="10")
-        notebook.add(frame, text="基本資料")
+        notebook.add(frame, text=TAB_BASIC)
         frame.columnconfigure(1, weight=1)
 
         def date_entries(parent, prefix):
@@ -1211,18 +1227,18 @@ class ReportGeneratorGUI:
                 setattr(self, f'{prefix}{key}', entry)
 
         row = 0
-        ttk.Label(frame, text="1. 填表日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="1. 填表日期:", style='Field.TLabel').grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_frame, '')
 
         row += 1
-        ttk.Label(frame, text="2. 協勤人員姓名:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="2. 協勤人員姓名:", style='Field.TLabel').grid(row=row, column=0, sticky=tk.W, pady=5)
         self.personnel = ttk.Entry(frame, width=50)
         self.personnel.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
         row += 1
-        ttk.Label(frame, text="3. 協勤日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="3. 協勤日期:", style='Field.TLabel').grid(row=row, column=0, sticky=tk.W, pady=5)
         date_range_frame = ttk.Frame(frame)
         date_range_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_range_frame, 'start_')
@@ -1230,7 +1246,7 @@ class ReportGeneratorGUI:
         date_entries(date_range_frame, 'end_')
 
         row += 1
-        ttk.Label(frame, text="4. 協勤地點:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="4. 協勤地點:", style='Field.TLabel').grid(row=row, column=0, sticky=tk.W, pady=5)
         self.location = ttk.Entry(frame, width=50)
         self.location.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
@@ -1239,7 +1255,7 @@ class ReportGeneratorGUI:
         row_idx = 0
         for label, key in fields:
             if key is None:
-                heading = ttk.Label(inner, text=label, font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'))
+                heading = ttk.Label(inner, text=label, style='Heading.TLabel')
                 heading.grid(row=row_idx, column=0, sticky=tk.W, pady=(15, 5))
                 inner.bind('<Configure>', lambda e, lbl=heading: lbl.configure(wraplength=max(300, e.width - 30)), add='+')
                 row_idx += 1
@@ -1247,7 +1263,7 @@ class ReportGeneratorGUI:
             header = ttk.Frame(inner)
             header.grid(row=row_idx, column=0, sticky=(tk.W, tk.E), pady=(10, 2))
             header.columnconfigure(0, weight=1)
-            title_label = ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'))
+            title_label = ttk.Label(header, text=label, style='Field.TLabel')
             title_label.grid(row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
             menu_button = self._make_list_menu(header, text_widget)
@@ -1310,7 +1326,7 @@ class ReportGeneratorGUI:
 
     def create_photo_tab(self, notebook, title, heading, categories):
         inner = self.make_scrollable_tab(notebook, title)
-        ttk.Label(inner, text=heading, font=(self.font_family, 11 + GUI_FONT_DELTA, 'bold')).grid(
+        ttk.Label(inner, text=heading, style='Heading.TLabel').grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
         ttk.Label(inner, text="（點選預覽、拖曳調整順序）", foreground="gray").grid(
             row=0, column=0, sticky=tk.E)
@@ -1326,7 +1342,7 @@ class ReportGeneratorGUI:
 
         for idx, category in enumerate(categories):
             row = idx * 2 + 2
-            ttk.Label(inner, text=category, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(
+            ttk.Label(inner, text=category, style='Field.TLabel').grid(
                 row=row, column=0, sticky=tk.W, pady=(10, 5))
 
             list_frame = ttk.Frame(inner)
@@ -1709,6 +1725,37 @@ class ReportGeneratorGUI:
         data['default_caption'] = self.default_caption.get().strip()
         return data, None
 
+    def find_blank_fields(self, data):
+        """檢查各分頁有哪些欄位還是空白，回傳 {分頁名稱: [欄位名稱, ...]}（依分頁順序，沒有空白的分頁不列出）。"""
+        blanks = {}
+
+        def add(tab, label):
+            blanks.setdefault(tab, []).append(label)
+
+        if not data['personnel']:
+            add(TAB_BASIC, "協勤人員姓名")
+        if not data['location']:
+            add(TAB_BASIC, "協勤地點")
+        for tab in (TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK):
+            for key, name in FIELD_NAMES.items():
+                if FIELD_TAB.get(key) == tab and not data.get(key):
+                    add(tab, name)
+        for tab_title, categories in zip(PHOTO_TAB_TITLES, (PHOTO_CATEGORIES_1, PHOTO_CATEGORIES_2)):
+            for category in categories:
+                if not self.photo_files[category]:
+                    add(tab_title, f"{category}（尚未選擇照片）")
+        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, *PHOTO_TAB_TITLES]
+        return {tab: blanks[tab] for tab in order if tab in blanks}
+
+    @staticmethod
+    def blank_fields_message(blanks):
+        lines = ["以下欄位尚未填寫：", ""]
+        for tab, labels in blanks.items():
+            lines.append(f"【{tab}】")
+            lines.extend(f"    • {label}" for label in labels)
+        lines += ["", "仍要產生報告嗎？"]
+        return "\n".join(lines)
+
     def generate_report(self):
         if not os.path.exists(self.template_path):
             messagebox.showerror("錯誤", self._missing_template_message())
@@ -1725,6 +1772,15 @@ class ReportGeneratorGUI:
         if missing:
             messagebox.showerror("錯誤", "以下照片檔案不存在：\n" + "\n".join(missing[:10]))
             return
+
+        blanks = self.find_blank_fields(data)
+        if blanks:
+            # 預設「是」：按 Enter 就繼續產生；選「否」會回到第一個有空白欄位的分頁
+            if not messagebox.askyesno("有欄位尚未填寫", self.blank_fields_message(blanks),
+                                       icon='warning', default='yes'):
+                self.notebook.select(self._tab_by_title(next(iter(blanks))))
+                self.status_label.config(text="已取消產生報告，請補齊未填欄位")
+                return
 
         output_path = filedialog.asksaveasfilename(
             title="儲存報告（同時會產生同名的 PDF）",

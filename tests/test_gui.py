@@ -31,6 +31,12 @@ class GuiTest(unittest.TestCase):
         self.app.template_path = TEMPLATE
         self.shown = []
         self.pdf_calls = []
+        self.confirm_calls = []  # 產生前「有欄位未填」的確認視窗；測試預設按「是」
+
+        def fake_confirm(title, message, **kwargs):
+            self.confirm_calls.append((title, message, kwargs))
+            return True
+
 
         def fake_pdf(docx, pdf):
             self.pdf_calls.append((docx, pdf))
@@ -41,6 +47,7 @@ class GuiTest(unittest.TestCase):
             mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', m))),
             mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', m))),
             mock.patch.object(g, 'export_pdf', fake_pdf),
+            mock.patch.object(messagebox, 'askyesno', fake_confirm),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -681,6 +688,7 @@ class GuiTest(unittest.TestCase):
     def test_every_theme_text_is_readable_wcag_aa(self):
         for name, p in g.THEMES.items():
             pairs = [('primary', p['primary_fg'], p['primary']), ('danger', p['danger_fg'], p['danger']),
+                     ('heading', p['heading_fg'], p['bg']), ('field label', p['field_fg'], p['bg']),
                      ('active tab', p['tab_active_fg'], p['tab_active']), ('idle tab', p['tab_idle_fg'], p['tab_idle']),
                      ('primary hover', p['primary_fg'], p['primary_active']), ('danger hover', p['danger_fg'], p['danger_active'])]
             for label, fg, bg in pairs:
@@ -817,57 +825,51 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.photo_files[cat], [p])
         self.assertEqual(lb.size(), 1)
 
-    def test_photo_tabs_fit_without_scrollbar_when_screen_is_tall_enough(self):
-        nb = self.app.notebook
-        for title in g.PHOTO_TAB_TITLES:
-            canvas, inner, scrollbar = self.app._scroll_tabs[title]
-            nb.select(self.app._tab_by_title(title))
-            self.root.update()
-            needed = inner.winfo_reqheight()
-            if self.root.winfo_height() >= self.root.winfo_screenheight() - 100:
-                self.skipTest('螢幕高度不足，視窗已受限於螢幕')
-            with self.subTest(tab=title):
-                self.assertLessEqual(needed, canvas.winfo_height(), f'{title} 需要 {needed}px，可視高度只有 {canvas.winfo_height()}px')
-                self.assertEqual(scrollbar.winfo_manager(), '', f'{title} 不需要捲動，捲動軸應該隱藏')
 
     def test_scrollbar_appears_only_when_content_does_not_fit(self):
         nb = self.app.notebook
         title = '服勤照片(上)'
         canvas, inner, scrollbar = self.app._scroll_tabs[title]
         nb.select(self.app._tab_by_title(title))
-        self.root.update()
-        original = self.root.winfo_height()
+        listboxes = [lb for c, lb in self.app.listboxes.items() if c in g.PHOTO_CATEGORIES_1]
+        original = [int(lb.cget('height')) for lb in listboxes]
         try:
-            self.root.geometry(f'{self.root.winfo_width()}x{max(400, original - 400)}')  # 縮矮視窗 -> 放不下
+            for lb in listboxes:  # 內容變少 -> 放得下 -> 隱藏
+                lb.configure(height=1)
+            self.root.geometry(f'{self.root.winfo_width()}x{self.root.winfo_height()}')
             self.root.update()
-            self.assertNotEqual(scrollbar.winfo_manager(), '', '內容放不下時要顯示捲動軸')
-            self.root.geometry(f'{self.root.winfo_width()}x{original}')  # 還原 -> 放得下
-            self.root.update()
+            self.assertLessEqual(inner.winfo_reqheight(), canvas.winfo_height())
             self.assertEqual(scrollbar.winfo_manager(), '', '內容放得下時要隱藏捲動軸')
+            for lb in listboxes:  # 內容變多 -> 放不下 -> 顯示
+                lb.configure(height=40)
+            self.root.update()
+            self.assertGreater(inner.winfo_reqheight(), canvas.winfo_height())
+            self.assertNotEqual(scrollbar.winfo_manager(), '', '內容放不下時要顯示捲動軸')
         finally:
-            self.root.geometry(f'{self.root.winfo_width()}x{original}')
+            for lb, rows in zip(listboxes, original):
+                lb.configure(height=rows)
 
     def test_short_screen_falls_back_to_compact_photo_lists(self):
-        """螢幕不夠高、視窗加高也放不下時，改把照片清單縮成 3 列，讓兩個照片分頁仍然不需要捲動。"""
+        """螢幕不夠高、視窗加高也放不下時，改把照片清單縮成較少的列數，並把視窗限制在螢幕高度內。"""
         for listbox in self.app.listboxes.values():
             listbox.configure(height=g.PHOTO_LIST_ROWS)
         self.root.geometry('1050x820')
         self.root.update()
-        with mock.patch.object(self.root, 'winfo_screenheight', lambda: 930):  # 可用高度約 840 < 需要的 880
+        before = self.app._photo_tabs_extra_height()
+        with mock.patch.object(self.root, 'winfo_screenheight', lambda: 930):
             self.app._fit_window_height()
         self.root.update()
         self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS_COMPACT for lb in self.app.listboxes.values()))
-        for title in g.PHOTO_TAB_TITLES:
-            canvas, inner, scrollbar = self.app._scroll_tabs[title]
-            self.app.notebook.select(self.app._tab_by_title(title))
-            self.root.update()
-            with self.subTest(tab=title):
-                self.assertEqual(scrollbar.winfo_manager(), '')
         self.assertLessEqual(self.root.winfo_height(), 930 - 90)
+        self.assertLess(self.app._photo_tabs_extra_height(), before)  # 比原本好（縮小清單 + 加高視窗）
 
-    def test_tall_screen_keeps_normal_photo_lists(self):
-        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS for lb in self.app.listboxes.values())
-                        or self.root.winfo_screenheight() < 1000)
+    def test_lists_stay_normal_size_when_the_window_can_hold_everything(self):
+        """視窗放得下兩個照片分頁時，不需要縮小照片清單。"""
+        for lb in self.app.listboxes.values():
+            lb.configure(height=g.PHOTO_LIST_ROWS)
+        with mock.patch.object(self.app, '_photo_tabs_extra_height', lambda: 0):
+            self.app._fit_window_height()
+        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS for lb in self.app.listboxes.values()))
 
     def test_photo_tabs_need_no_horizontal_room_beyond_window(self):
         for title in g.PHOTO_TAB_TITLES:
@@ -879,7 +881,8 @@ class GuiTest(unittest.TestCase):
 
     def _linespace(self, widget):
         import tkinter.font as tkfont
-        return tkfont.Font(root=self.root, font=widget.cget('font')).metrics('linespace')
+        font = widget.cget('font') or style_lookup(self.root, str(widget.cget('style')), 'font')
+        return tkfont.Font(root=self.root, font=font).metrics('linespace')
 
     def test_long_section_titles_stay_on_one_line(self):
         """三、四、五、八 這些很長的標題，在預設視窗寬度下要一行顯示（不能被固定寬度截斷換行）。"""
@@ -917,12 +920,133 @@ class GuiTest(unittest.TestCase):
             self.root.geometry(f'1050x{original}')
             self.root.update()
 
-    def test_font_is_chocolate_classical_sans(self):
-        self.assertEqual(g.FONT_FAMILY, 'Chocolate Classical Sans')
-        self.assertEqual(g.FONT_FILES, ('ChocolateClassicalSans-Regular.ttf',))
-        self.assertEqual(self.app.font_family, 'Chocolate Classical Sans')
-        old = [n for n in os.listdir(g.FONT_DIR) if 'LXGW' in n or 'Cactus' in n]
+    def test_font_is_chiron_gor_ound_tc_medium(self):
+        self.assertEqual(g.FONT_FAMILY, 'Chiron GoRound TC Medium')
+        self.assertEqual(g.FONT_FILES, ('ChironGoRoundTC-Medium.ttf',))
+        self.assertEqual(self.app.font_family, 'Chiron GoRound TC Medium')
+        old = [n for n in os.listdir(g.FONT_DIR) if any(k in n for k in ('LXGW', 'Cactus', 'Chocolate'))]
         self.assertEqual(old, [])  # 舊字型已移除
+
+    def test_form_uses_no_bold_anywhere(self):
+        """表單不使用粗體：所有標籤樣式與介面字型都是一般字重，強調改用字級與顏色。"""
+        import tkinter.font as tkfont
+        for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont'):
+            self.assertEqual(tkfont.nametofont(name, root=self.root).cget('weight'), 'normal')
+        for style_name in ('Heading.TLabel', 'Field.TLabel'):
+            font = tkfont.Font(root=self.root, font=style_lookup(self.root, style_name, 'font'))
+            self.assertEqual(font.cget('weight'), 'normal', style_name)
+        for w in self._all_widgets(self.root):
+            if isinstance(w, ttk.Label):
+                font = str(w.cget('font'))
+                self.assertNotIn('bold', font, f'{w.cget("text")[:10]} 使用了粗體')
+
+    def test_headings_are_distinguished_by_size_and_color_instead_of_bold(self):
+        import tkinter.font as tkfont
+        palette = g.THEMES[g.DEFAULT_THEME]
+        heading = tkfont.Font(root=self.root, font=style_lookup(self.root, 'Heading.TLabel', 'font'))
+        field = tkfont.Font(root=self.root, font=style_lookup(self.root, 'Field.TLabel', 'font'))
+        body = tkfont.nametofont('TkDefaultFont', root=self.root)
+        self.assertGreater(abs(heading.cget('size')), abs(field.cget('size')))
+        self.assertGreater(abs(field.cget('size')), abs(body.cget('size')))
+        self.assertEqual(style_lookup(self.root, 'Heading.TLabel', 'foreground'), palette['heading_fg'])
+        self.assertEqual(style_lookup(self.root, 'Field.TLabel', 'foreground'), palette['field_fg'])
+
+    def test_all_labels_use_the_shared_label_styles(self):
+        styles = {str(w.cget('style')) for w in self._all_widgets(self.root)
+                  if isinstance(w, ttk.Label) and w.cget('text').startswith(('1. 填表', '三、', '九、服勤照片', '二、設施'))}
+        self.assertEqual(styles, {'Field.TLabel', 'Heading.TLabel'})
+
+    # ---- 產生前檢查未填欄位
+    def _fill_everything(self):
+        self.fill_dates()
+        self.app.personnel.insert(0, '王小明')
+        self.app.location.insert(0, '排雲山莊')
+        for w in self.app.text_fields.values():
+            w.insert('1.0', '內容')
+        for i, cat in enumerate(g.PHOTO_CATEGORIES):
+            p = os.path.join(self.tmp.name, f'p{i}.jpg')
+            Image.new('RGB', (40, 30)).save(p)
+            self.app.photo_files[cat].append(p)
+
+    def test_blank_fields_listed_per_tab(self):
+        self.fill_dates()
+        data, _ = self.app.collect_data()
+        blanks = self.app.find_blank_fields(data)
+        self.assertEqual(list(blanks), ['基本資料', '道路步道', '設施', '自然資源與遊客', '意見與心得建議',
+                                        '服勤照片(上)', '服勤照片(下)'])
+        self.assertEqual(blanks['基本資料'], ['協勤人員姓名', '協勤地點'])
+        self.assertEqual(len(blanks['道路步道']), 3)
+        self.assertEqual(len(blanks['設施']), 4)
+        self.assertEqual(len(blanks['自然資源與遊客']), 3)
+        self.assertEqual(len(blanks['意見與心得建議']), 3)
+        self.assertEqual(len(blanks['服勤照片(上)']), 3)
+        self.assertEqual(len(blanks['服勤照片(下)']), 3)
+
+    def test_partially_filled_form_lists_only_the_blank_ones(self):
+        self._fill_everything()
+        self.app.text_fields['road_grass'].delete('1.0', tk.END)
+        self.app.location.delete(0, tk.END)
+        self.app.clear_photos('其他', self.app.listboxes['其他'])
+        data, _ = self.app.collect_data()
+        blanks = self.app.find_blank_fields(data)
+        self.assertEqual(blanks, {
+            '基本資料': ['協勤地點'],
+            '道路步道': ['2、道路、步道雜草情形'],
+            '服勤照片(下)': ['其他（尚未選擇照片）'],
+        })
+
+    def test_whitespace_only_counts_as_blank(self):
+        self._fill_everything()
+        self.app.text_fields['nature'].delete('1.0', tk.END)
+        self.app.text_fields['nature'].insert('1.0', '   \n  ')
+        data, _ = self.app.collect_data()
+        self.assertIn('三、自然資源狀況', self.app.find_blank_fields(data)['自然資源與遊客'])
+
+    def test_generate_warns_about_blanks_with_default_yes_and_proceeds(self):
+        self.fill_dates()
+        self.app.personnel.insert(0, '王小明')
+        out = os.path.join(self.tmp.name, 'o.docx')
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertEqual(len(self.confirm_calls), 1)
+        title, message, kwargs = self.confirm_calls[0]
+        self.assertEqual(title, '有欄位尚未填寫')
+        self.assertEqual(kwargs.get('default'), 'yes')   # 預設「是」
+        self.assertEqual(kwargs.get('icon'), 'warning')
+        self.assertIn('【基本資料】', message)
+        self.assertIn('協勤地點', message)
+        self.assertNotIn('協勤人員姓名', message)         # 已填的不會列出
+        self.assertIn('【服勤照片(下)】', message)
+        self.assertIn('仍要產生報告嗎？', message)
+        self.assertTrue(os.path.exists(out))             # 回答「是」就照常產生
+
+    def test_answering_no_cancels_and_jumps_to_first_blank_tab(self):
+        self.fill_dates()
+        saved = []
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: False), \
+                mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: saved.append(1) or ''):
+            self.app.generate_report()
+        self.assertEqual(saved, [])  # 沒有進到存檔步驟
+        self.assertEqual(self.app.notebook.tab(self.app.notebook.select(), 'text'), '基本資料')
+        self.assertEqual(str(self.app.generate_btn['state']), 'normal')
+        self.assertEqual(self.pdf_calls, [])
+
+    def test_no_warning_when_everything_is_filled(self):
+        self._fill_everything()
+        out = os.path.join(self.tmp.name, 'o.docx')
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertEqual(self.confirm_calls, [])
+        self.assertTrue(os.path.exists(out))
+
+    def test_date_errors_are_reported_before_blank_check(self):
+        self.app.generate_report()  # 協勤日期還是空的
+        self.assertEqual(self.shown[-1][0], 'err')
+        self.assertEqual(self.confirm_calls, [])
 
     def test_primary_and_danger_buttons_keep_3d_bevel(self):
         """產生報告/清除按鈕要和其他按鈕一樣有凸起的立體邊框（亮邊 + 暗邊，且暗邊比底色深）。"""

@@ -1781,6 +1781,27 @@ class GuiTest(unittest.TestCase):
             paths.append(path)
         return paths
 
+    def test_delete_key_removes_selected_photo_and_selects_the_next(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.photo_captions[cat][b] = '要刪的'
+        self._show_photos_tab()
+        table.set_selection([1])
+        self.app._on_photo_select(cat, table)
+        table.focus_force()
+        self.root.update()
+        table.event_generate('<Delete>')
+        self.root.update()
+        self.assertEqual(self.app.photo_files[cat], [a, c])
+        self.assertNotIn(b, self.app.photo_captions[cat])
+        self.assertEqual(table.selected_indexes(), (1,))  # 原位置換成下一張
+        self.assertEqual(self.app.photo_preview.current, (cat, c))
+        table.event_generate('<Delete>')
+        table.event_generate('<Delete>')
+        self.root.update()
+        self.assertEqual(self.app.photo_files[cat], [])
+        table.event_generate('<Delete>')  # 空表格按 Delete 不出錯
+        self.root.update()
+
     def test_collect_dropped_images_filters_and_expands_folders(self):
         a, b = self._make_images(['b.JPG', 'a.png'])
         txt = os.path.join(self.tmp.name, 'note.txt')

@@ -144,7 +144,7 @@ FIELD_TAB = {
 }
 MARK_DONE = '✓'      # 已填說明／已填完的記號
 MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
-PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明）"
+PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明；按 Delete 移除所選照片）"
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
 PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
 PHOTO_NAME_COL_PX = 240       # 照片表格「檔名」「說明」兩欄的初始寬度（之後會隨表格寬度對半分）
@@ -1712,6 +1712,7 @@ class ReportGeneratorGUI:
             table.bind("<ButtonRelease-1>", lambda e: self._drag_end())
             for key in ("n", "N"):  # 在表格中按 N：跳到下一張未填說明（Ctrl+N 不處理）
                 table.bind(f"<KeyPress-{key}>", lambda e, c=category: self._on_n_key(e, c))
+            table.bind("<Delete>", lambda e, c=category, t=table: self._on_delete_key(c, t))  # Delete：移除所選照片
 
             bar = ttk.Frame(page)
             bar.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=8)
@@ -1944,6 +1945,18 @@ class ReportGeneratorGUI:
         if event.state & 0x4:  # Ctrl 有按住：不處理
             return None
         self._jump_next_missing(category)
+        return 'break'
+
+    def _on_delete_key(self, category, table):
+        """在照片表格中按 Delete：移除所選照片，並選取原位置的下一張（方便連續刪除）。"""
+        selected = table.selected_indexes()
+        if not selected:
+            return 'break'
+        self.remove_photos(category, table)
+        remaining = table.count()
+        if remaining:
+            table.set_selection([min(selected[0], remaining - 1)])
+            self._on_photo_select(category, table)
         return 'break'
 
     def _refresh_previews(self):

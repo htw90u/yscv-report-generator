@@ -986,6 +986,7 @@ class ReportGeneratorGUI:
         self._blank_signature = self._signature(with_report_date=False)
         self._last_autosave_signature = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._bind_shortcuts()
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
         if restore_on_start:
             self.root.after(300, self.offer_restore)
@@ -1045,6 +1046,22 @@ class ReportGeneratorGUI:
             extra = self._tabs_extra_height()
             if extra > 0:
                 self._grow_window(extra)
+
+    def _bind_shortcuts(self):
+        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告（大小寫都可以）。"""
+        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate}
+        for key, action in actions.items():
+            for k in (key, key.upper()):
+                self.root.bind_all(f'<Control-{k}>', lambda e, f=action: self._run_shortcut(f))
+
+    def _run_shortcut(self, action):
+        action()
+        return 'break'  # 不要再交給文字框等元件處理
+
+    def _shortcut_generate(self):
+        if str(self.generate_btn['state']) == 'disabled':  # 正在產生報告時，忽略重複觸發
+            return
+        self.generate_report()
 
     def _set_visible(self, visible):
         """用透明度顯示/隱藏整個視窗（不支援時略過）。"""
@@ -1184,9 +1201,9 @@ class ReportGeneratorGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=row, column=0, columnspan=3, pady=(6, 6))
 
-        ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
-        self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report,
+        ttk.Button(button_frame, text="載入草稿(L)", command=self.load_draft).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="儲存草稿(S)", command=self.save_draft).pack(side=tk.LEFT, padx=5)
+        self.generate_btn = ttk.Button(button_frame, text="產生報告(G)", command=self.generate_report,
                                        style='Primary.TButton')
         self.generate_btn.pack(side=tk.LEFT, padx=5)
         self.clear_btn = ttk.Button(button_frame, text="清除", command=self.clear_all, style='Danger.TButton')

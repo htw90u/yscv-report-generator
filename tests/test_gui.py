@@ -150,7 +150,7 @@ class GuiTest(unittest.TestCase):
     def test_button_order_and_styles(self):
         frame = self.app.generate_btn.master
         labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
-        self.assertEqual(labels, ['載入草稿', '儲存草稿', '產生報告', '清除', '離開'])
+        self.assertEqual(labels, ['載入草稿(L)', '儲存草稿(S)', '產生報告(G)', '清除', '離開'])
         self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
         self.assertEqual(str(self.app.generate_btn.cget('style')), 'Primary.TButton')
         palette = g.THEMES[g.DEFAULT_THEME]
@@ -1056,6 +1056,57 @@ class GuiTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.app._fit_window_height()
         self.assertEqual(float(self.root.attributes('-alpha')), 1.0)
+
+    # ---- 快捷鍵
+    def _press(self, widget, keysym):
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        widget.focus_set()
+        self.root.update()
+        widget.event_generate(f'<Control-{keysym}>')
+        self.root.update()
+
+    def test_buttons_show_shortcut_letters(self):
+        labels = {w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Button)}
+        self.assertTrue({'載入草稿(L)', '儲存草稿(S)', '產生報告(G)'} <= labels)
+        self.assertTrue({'載入草稿', '儲存草稿', '產生報告'}.isdisjoint(labels))
+
+    def test_ctrl_s_saves_draft_ctrl_l_loads_ctrl_g_generates(self):
+        calls = []
+        with mock.patch.object(self.app, 'save_draft', lambda: calls.append('save')),                 mock.patch.object(self.app, 'load_draft', lambda: calls.append('load')),                 mock.patch.object(self.app, 'generate_report', lambda: calls.append('generate')):
+            self.app._bind_shortcuts()  # 重新綁定，讓綁定使用被替換過的方法
+            self._press(self.app.personnel, 's')
+            self._press(self.app.personnel, 'l')
+            self._press(self.app.personnel, 'g')
+        self.assertEqual(calls, ['save', 'load', 'generate'])
+
+    def test_shortcuts_work_with_capital_letters_and_from_text_areas(self):
+        calls = []
+        with mock.patch.object(self.app, 'save_draft', lambda: calls.append('save')),                 mock.patch.object(self.app, 'load_draft', lambda: calls.append('load')),                 mock.patch.object(self.app, 'generate_report', lambda: calls.append('generate')):
+            self.app._bind_shortcuts()
+            text = self.app.text_fields['nature']
+            self.app.notebook.select(self.app._tab_by_title(g.TAB_NATURE))
+            self._press(text, 'S')
+            self._press(text, 'L')
+            self._press(text, 'G')
+        self.assertEqual(calls, ['save', 'load', 'generate'])
+        self.assertEqual(text.get('1.0', 'end-1c'), '')  # 快捷鍵不會在文字框裡打出字元
+
+    def test_ctrl_g_ignored_while_generating(self):
+        calls = []
+        self.app.generate_btn.config(state=tk.DISABLED)
+        with mock.patch.object(self.app, 'generate_report', lambda: calls.append('generate')):
+            self.app._bind_shortcuts()
+            self._press(self.app.personnel, 'g')
+        self.assertEqual(calls, [])
+
+    def test_shortcuts_actually_save_a_draft_file(self):
+        out = os.path.join(self.tmp.name, 'k.json')
+        self.app.personnel.insert(0, '快捷鍵')
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out):
+            self._press(self.app.personnel, 's')
+        self.assertTrue(os.path.exists(out))
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')

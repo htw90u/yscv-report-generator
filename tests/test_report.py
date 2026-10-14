@@ -66,6 +66,20 @@ class BuildReportTest(unittest.TestCase):
     def test_no_double_bullet(self):
         self.assertNotIn('• •', self.text)
 
+    def test_default_caption_text_is_configurable(self):
+        with tempfile.TemporaryDirectory() as d:
+            photos = {c: [] for c in g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2}
+            photos['其他'] = [self.p1]
+            data = {k: '' for k in g.FIELD_NAMES}
+            data.update(year='1', month='1', day='1', start_year='1', start_month='1', start_day='1',
+                        end_year='1', end_month='1', end_day='1', personnel='', location='',
+                        default_caption='請補充說明')
+            out = os.path.join(d, 'o.docx')
+            g.build_report(TEMPLATE, data, photos, {}, out)
+            text = '\n'.join(c.text for c in unique_cells(Document(out)))
+            self.assertIn('請補充說明', text)
+            self.assertNotIn(g.DEFAULT_CAPTION, text)
+
     def test_captions(self):
         self.assertIn('自訂說明A', self.text)
         self.assertIn('[照片說明]', self.text)

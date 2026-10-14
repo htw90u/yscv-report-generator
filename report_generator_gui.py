@@ -61,6 +61,7 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
 
+DEFAULT_CAPTION = '[照片說明]'  # 照片沒有填說明時，文件中顯示的預設字樣（可在照片分頁修改）
 PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
@@ -530,13 +531,13 @@ def _mark_row(row, *flags):
         trPr.append(OxmlElement(flag))
 
 
-def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
+def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, default_caption=DEFAULT_CAPTION):
     """載入照片並計算尺寸。載入失敗的照片以文字佔位，不中斷整份報告。"""
     categories = {}
     for category, paths in photo_files.items():
         items = []
         for path in paths:
-            caption = captions.get(category, {}).get(path) or "[照片說明]"
+            caption = captions.get(category, {}).get(path) or default_caption
             item = PhotoItem(path=path, caption=caption)
             name = os.path.basename(path)
             try:
@@ -551,7 +552,7 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings):
     return categories
 
 
-def _add_photo_section(doc, main_table, photo_files, captions, warnings):
+def _add_photo_section(doc, main_table, photo_files, captions, warnings, default_caption=DEFAULT_CAPTION):
     body = doc.element.body
 
     # 只刪除內容含「照片」的舊照片表格，避免誤刪其他表格
@@ -601,7 +602,7 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings):
         set_font_kai(heading_run)
         start_y = HEADING_H
 
-    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings)
+    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, default_caption)
     sequence = plan_layout(categories, page_h, start_y, line_chars)
 
     # 連續同分類的列合成一張表格（跨頁時由 tblHeader 重複標題列）
@@ -751,7 +752,8 @@ def build_report(template_path, data, photo_files, captions, output_path):
     main_table = doc.tables[0]
 
     warnings = _fill_main_table(main_table, data)
-    _add_photo_section(doc, main_table, photo_files, captions, warnings)
+    _add_photo_section(doc, main_table, photo_files, captions, warnings,
+                       data.get('default_caption', DEFAULT_CAPTION))
     doc.save(output_path)
     return warnings
 
@@ -853,6 +855,7 @@ class ReportGeneratorGUI:
         scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family)
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
+        self.default_caption = tk.StringVar(master=root, value=DEFAULT_CAPTION)
         self.root.title("保育巡查回報單生成器")
         self.root.geometry("1050x820")
 
@@ -1029,24 +1032,24 @@ class ReportGeneratorGUI:
             ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
                 row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
-            self._make_bullet_menu(header, text_widget).grid(row=0, column=1, padx=2)
-            ttk.Button(header, text="1. 編號", width=8,
-                       command=lambda w=text_widget: self.apply_list(w, toggle_numbers)).grid(row=0, column=2, padx=2)
+            self._make_list_menu(header, text_widget).grid(row=0, column=1, padx=2)
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
             row_idx += 2
 
-    def _make_bullet_menu(self, parent, widget):
-        """「項目符號 ▾」下拉選單：選一個符號就套用到選取的行（再選同一個符號則取消）。"""
-        button = ttk.Menubutton(parent, text="項目符號 ▾", width=11)
+    def _make_list_menu(self, parent, widget):
+        """「項目符號/編號 ▾」下拉選單：選一種就套用到選取的行（再選同一種則取消）。"""
+        button = ttk.Menubutton(parent, text="項目符號/編號", width=14)
         menu = tk.Menu(button, tearoff=0)
         for symbol, name in BULLET_CHOICES:
             menu.add_command(label=f"{symbol}  {name}",
                              command=lambda w=widget, sym=symbol: self.apply_list(
                                  w, lambda lines: toggle_bullets(lines, sym)))
         menu.add_separator()
-        menu.add_command(label="取消項目符號", command=lambda w=widget: self.apply_list(w, remove_list_markers))
+        menu.add_command(label="1. 2. 3.  編號", command=lambda w=widget: self.apply_list(w, toggle_numbers))
+        menu.add_separator()
+        menu.add_command(label="取消項目符號/編號", command=lambda w=widget: self.apply_list(w, remove_list_markers))
         button['menu'] = menu
         button.menu = menu
         return button
@@ -1087,14 +1090,20 @@ class ReportGeneratorGUI:
         inner = self.make_scrollable_tab(notebook, title)
         ttk.Label(inner, text=heading, font=(self.font_family, 11 + GUI_FONT_DELTA, 'bold')).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
-        ttk.Label(inner, text="（點選預覽、拖曳調整順序、雙擊編輯說明）", foreground="gray").grid(
+        ttk.Label(inner, text="（點選預覽、拖曳調整順序）", foreground="gray").grid(
             row=0, column=0, sticky=tk.E)
 
+        caption_row = ttk.Frame(inner)
+        caption_row.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        ttk.Label(caption_row, text="未填說明時的預設字樣：").pack(side=tk.LEFT)
+        ttk.Entry(caption_row, textvariable=self.default_caption, width=24).pack(side=tk.LEFT, padx=5)
+        ttk.Label(caption_row, text="（可留空；個別照片可雙擊清單項目輸入說明）", foreground="gray").pack(side=tk.LEFT)
+
         preview = PhotoPreview(inner, self.font_family)
-        preview.grid(row=1, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
+        preview.grid(row=2, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
 
         for idx, category in enumerate(categories):
-            row = idx * 2 + 1
+            row = idx * 2 + 2
             ttk.Label(inner, text=category, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(
                 row=row, column=0, sticky=tk.W, pady=(10, 5))
 
@@ -1248,6 +1257,7 @@ class ReportGeneratorGUI:
             listbox.delete(0, tk.END)
         for preview in set(self.previews.values()):
             preview.clear()
+        self.default_caption.set(DEFAULT_CAPTION)
 
     def clear_all(self):
         if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):
@@ -1265,6 +1275,7 @@ class ReportGeneratorGUI:
             'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
             'photos': {c: list(p) for c, p in self.photo_files.items()},
             'captions': {c: dict(v) for c, v in self.photo_captions.items()},
+            'default_caption': self.default_caption.get(),
         }
 
     def apply_draft(self, draft):
@@ -1276,6 +1287,7 @@ class ReportGeneratorGUI:
 
         for name in ENTRY_FIELDS:
             getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
+        self.default_caption.set(str(draft.get('default_caption', DEFAULT_CAPTION)))
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 
@@ -1442,6 +1454,7 @@ class ReportGeneratorGUI:
 
         for key, widget in self.text_fields.items():
             data[key] = widget.get('1.0', tk.END).strip()
+        data['default_caption'] = self.default_caption.get().strip()
         return data, None
 
     def generate_report(self):

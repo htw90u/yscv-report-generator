@@ -397,7 +397,8 @@ class GuiTest(unittest.TestCase):
         menu = self._bullet_menu(w)
         labels = [menu.entrycget(i, 'label') for i in range(menu.index('end') + 1)
                   if menu.type(i) == 'command']
-        self.assertEqual(len(labels), len(g.BULLET_CHOICES) + 1)  # 全部符號 + 取消
+        self.assertEqual(len(labels), len(g.BULLET_CHOICES) + 2)  # 全部符號 + 編號 + 取消
+        self.assertTrue(any('編號' in lbl and lbl.startswith('1.') for lbl in labels))
         self.assertTrue(any(lbl.startswith('◆') for lbl in labels))
         w.insert('1.0', 'a\nb')
         w.tag_add(tk.SEL, '1.0', 'end-1c')
@@ -406,6 +407,73 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(w.get('1.0', 'end-1c'), '◆ a\n◆ b')
         menu.invoke(menu.index('end'))  # 最後一項：取消項目符號
         self.assertEqual(w.get('1.0', 'end-1c'), 'a\nb')
+
+    def test_numbering_is_in_the_same_dropdown_and_no_separate_button(self):
+        w = self.app.text_fields['nature']
+        menu = self._bullet_menu(w)
+        idx = [i for i in range(menu.index('end') + 1) if menu.type(i) == 'command'
+               and menu.entrycget(i, 'label').startswith('1.')][0]
+        w.insert('1.0', 'a\nb')
+        w.tag_add(tk.SEL, '1.0', 'end-1c')
+        menu.invoke(idx)
+        self.assertEqual(w.get('1.0', 'end-1c'), '1. a\n2. b')
+        menu.invoke(idx)  # 再選一次取消
+        self.assertEqual(w.get('1.0', 'end-1c'), 'a\nb')
+        buttons = [c.cget('text') for c in self._all_widgets(self.root) if isinstance(c, ttk.Button)]
+        self.assertNotIn('1. 編號', buttons)
+
+    # ---- 預設照片說明
+    def test_default_caption_is_editable_and_used_in_report(self):
+        self.fill_dates()
+        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
+        cat, lb, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
+        self.app.photo_captions[cat][a] = '有說明'
+        self.app.default_caption.set('  圖說待補  ')
+        data, err = self.app.collect_data()
+        self.assertIsNone(err)
+        self.assertEqual(data['default_caption'], '圖說待補')  # 前後空白會去掉
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()},
+                       {c: dict(v) for c, v in self.app.photo_captions.items()}, out)
+        text = '\n'.join(c.text for c in unique_cells(Document(out)))
+        self.assertIn('有說明', text)
+        self.assertIn('圖說待補', text)
+        self.assertNotIn(g.DEFAULT_CAPTION, text)
+
+    def test_default_caption_can_be_blank(self):
+        self.fill_dates()
+        cat, lb, (a,) = self._photos(names=('a.jpg',))
+        self.app.default_caption.set('')
+        data, _ = self.app.collect_data()
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()}, {}, out)
+        self.assertNotIn(g.DEFAULT_CAPTION, '\n'.join(c.text for c in unique_cells(Document(out))))
+
+    def test_default_caption_saved_in_draft_marks_dirty_and_resets_on_clear(self):
+        self.app._saved_signature = self.app._signature()
+        self.app.default_caption.set('自訂預設')
+        self.assertTrue(self.app.is_dirty())
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.app.default_caption.set('別的')
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.default_caption.get(), '自訂預設')
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
+            self.app.clear_all()
+        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
+
+    def test_old_draft_without_default_caption_uses_default(self):
+        import json
+        draft = os.path.join(self.tmp.name, 'old.json')
+        self._save_draft_to(draft)
+        with open(draft, encoding='utf-8') as f:
+            data = json.load(f)
+        data.pop('default_caption')
+        with open(draft, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self.app.default_caption.set('x')
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
 
     def test_enter_keeps_the_chosen_symbol(self):
         w = self.app.text_fields['nature']

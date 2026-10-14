@@ -34,6 +34,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
+# 介面字型：霞鶩文楷等寬 TC（SIL OFL 授權，字型檔放在 fonts/ 資料夾，執行時私下載入、不安裝到系統）
+FONT_DIR = os.path.join(BASE_DIR, 'fonts')
+FONT_FILES = ('LXGWWenKaiMonoTC-Regular.ttf', 'LXGWWenKaiMonoTC-Bold.ttf')
+FONT_FAMILY = 'LXGW WenKai Mono TC'
+FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
 LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
 logging.basicConfig(
     level=logging.INFO,
@@ -741,8 +746,31 @@ def build_report(template_path, data, photo_files, captions, output_path):
 
 # ---------------------------------------------------------------- GUI
 
-def scale_gui_fonts(root, delta):
-    """把 Tk 的預設字型（按鈕、輸入框、文字區、分頁等）加大 delta 點。"""
+def load_private_fonts():
+    """Windows：只在本程式執行期間載入 fonts/ 裡的字型（不安裝、不需要系統管理員權限）。回傳是否有載入成功。"""
+    if sys.platform != 'win32':
+        return False
+    import ctypes
+    loaded = False
+    for name in FONT_FILES:
+        path = os.path.join(FONT_DIR, name)
+        if os.path.exists(path):
+            # FR_PRIVATE = 0x10：字型只對本程序有效
+            loaded |= ctypes.windll.gdi32.AddFontResourceExW(path, 0x10, 0) > 0
+    return loaded
+
+
+def pick_font_family(root):
+    """有載入到指定字型就用它，否則退回系統字型。"""
+    load_private_fonts()
+    families = set(tkfont.families(root))
+    if FONT_FAMILY in families:
+        return FONT_FAMILY
+    return FALLBACK_FONT_FAMILY if FALLBACK_FONT_FAMILY in families else 'Arial'
+
+
+def scale_gui_fonts(root, delta, family=None):
+    """把 Tk 的預設字型（按鈕、輸入框、文字區、分頁等）加大 delta 點，並可一併換字型。"""
     for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont', 'TkHeadingFont',
                  'TkCaptionFont', 'TkSmallCaptionFont', 'TkIconFont', 'TkTooltipFont'):
         try:
@@ -751,12 +779,15 @@ def scale_gui_fonts(root, delta):
             continue
         size = font.cget('size')
         font.configure(size=size + delta if size > 0 else size - delta)  # 負值代表像素
+        if family:
+            font.configure(family=family)
 
 class ReportGeneratorGUI:
     def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
                  autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=TEMPLATE_PATH):
         self.root = root
-        scale_gui_fonts(root, GUI_FONT_DELTA)
+        self.font_family = pick_font_family(root)
+        scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family)
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.root.title("保育巡查回報單生成器")
@@ -896,25 +927,25 @@ class ReportGeneratorGUI:
             setattr(self, f'{prefix}day', d)
 
         row = 0
-        ttk.Label(frame, text="1. 年月日:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="1. 年月日:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_frame, '', "日")
 
         row += 1
-        ttk.Label(frame, text="2. 協勤人員姓名:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="2. 協勤人員姓名:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         self.personnel = ttk.Entry(frame, width=50)
         self.personnel.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
         row += 1
-        ttk.Label(frame, text="3. 協勤日期:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="3. 協勤日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_range_frame = ttk.Frame(frame)
         date_range_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_range_frame, 'start_', "日 至")
         date_entries(date_range_frame, 'end_', "日")
 
         row += 1
-        ttk.Label(frame, text="4. 協勤地點:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="4. 協勤地點:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         self.location = ttk.Entry(frame, width=50)
         self.location.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
@@ -923,14 +954,14 @@ class ReportGeneratorGUI:
         row_idx = 0
         for label, key in fields:
             if key is None:
-                ttk.Label(inner, text=label, font=('Arial', 10 + GUI_FONT_DELTA, 'bold'), wraplength=880).grid(
+                ttk.Label(inner, text=label, font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'), wraplength=880).grid(
                     row=row_idx, column=0, sticky=tk.W, pady=(15, 5))
                 row_idx += 1
                 continue
             header = ttk.Frame(inner)
             header.grid(row=row_idx, column=0, sticky=(tk.W, tk.E), pady=(10, 2))
             header.columnconfigure(0, weight=1)
-            ttk.Label(header, text=label, font=('Arial', 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
+            ttk.Label(header, text=label, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
                 row=0, column=0, sticky=tk.W)
             text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
             ttk.Button(header, text="• 項目符號", width=10,
@@ -976,14 +1007,14 @@ class ReportGeneratorGUI:
 
     def create_photo_tab(self, notebook, title, heading, categories):
         inner = self.make_scrollable_tab(notebook, title)
-        ttk.Label(inner, text=heading, font=('Arial', 11 + GUI_FONT_DELTA, 'bold')).grid(
+        ttk.Label(inner, text=heading, font=(self.font_family, 11 + GUI_FONT_DELTA, 'bold')).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
         ttk.Label(inner, text="（雙擊照片可編輯說明）", foreground="gray").grid(
             row=0, column=0, sticky=tk.E)
 
         for idx, category in enumerate(categories):
             row = idx * 2 + 1
-            ttk.Label(inner, text=category, font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(
+            ttk.Label(inner, text=category, font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(
                 row=row, column=0, sticky=tk.W, pady=(10, 5))
 
             list_frame = ttk.Frame(inner)

@@ -405,6 +405,24 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(scaled, base + step)
         self.assertEqual(g.GUI_FONT_DELTA, 2)
 
+    def test_font_files_bundled_with_license(self):
+        for name in g.FONT_FILES + ('OFL.txt',):
+            self.assertTrue(os.path.exists(os.path.join(g.FONT_DIR, name)), name)
+
+    def test_gui_uses_bundled_font_family(self):
+        import tkinter.font as tkfont
+        self.assertEqual(self.app.font_family, g.FONT_FAMILY)
+        for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont'):
+            self.assertEqual(tkfont.nametofont(name, root=self.root).cget('family'), g.FONT_FAMILY)
+
+    def test_font_family_falls_back_when_not_available(self):
+        with mock.patch.object(g, 'load_private_fonts', lambda: False), \
+                mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial']):
+            self.assertEqual(g.pick_font_family(self.root), 'Arial')
+        with mock.patch.object(g, 'load_private_fonts', lambda: False), \
+                mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
+            self.assertEqual(g.pick_font_family(self.root), g.FALLBACK_FONT_FAMILY)
+
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')
         self.root.update()

@@ -920,6 +920,42 @@ class GuiTest(unittest.TestCase):
             self.root.geometry(f'1050x{original}')
             self.root.update()
 
+    # ---- 文字清晰度（對比）與外觀選單置中
+    def test_text_colors_have_high_contrast_in_every_theme(self):
+        for name, p in g.THEMES.items():
+            for label, fg, bg in (('body text', p['text'], '#ffffff'), ('body text on form', p['text'], p['bg']),
+                                  ('hint text', p['muted'], p['bg'])):
+                with self.subTest(theme=name, item=label):
+                    self.assertGreaterEqual(self._contrast(fg, bg), 7.0)  # WCAG AAA 等級
+
+    def test_default_text_and_hint_use_theme_colors_not_pale_gray(self):
+        p = g.THEMES[g.DEFAULT_THEME]
+        self.assertEqual(style_lookup(self.root, 'TLabel', 'foreground'), p['text'])
+        self.assertEqual(style_lookup(self.root, 'TEntry', 'foreground'), p['text'])
+        self.assertEqual(style_lookup(self.root, 'Hint.TLabel', 'foreground'), p['muted'])
+        for w in self._all_widgets(self.root):
+            if isinstance(w, ttk.Label) and w.cget('text').startswith(('（點選預覽', '（雙擊檔名')):
+                self.assertEqual(str(w.cget('style')), 'Hint.TLabel')
+            if isinstance(w, (tk.Text, tk.Listbox)):
+                self.assertEqual(str(w.cget('foreground')), p['text'])
+
+    def test_theme_change_updates_native_text_colors(self):
+        self.app.apply_theme('高對比')
+        for w in self._all_widgets(self.root):
+            if isinstance(w, (tk.Text, tk.Listbox)):
+                self.assertEqual(str(w.cget('foreground')), g.THEMES['高對比']['text'])
+
+    def test_theme_dropdown_text_and_options_are_centered(self):
+        self.assertEqual(str(self.app.theme_box.cget('justify')), 'center')  # 選取後顯示的文字置中
+        popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {self.app.theme_box}')
+        self.assertEqual(str(self.root.tk.call(f'{popdown}.f.l', 'cget', '-justify')), 'center')  # 展開的選項置中
+        self.assertEqual(tuple(self.app.theme_box.cget('values')), tuple(g.THEMES))
+
+    def test_dpi_awareness_helper_is_safe(self):
+        with mock.patch.object(g.sys, 'platform', 'linux'):
+            self.assertFalse(g.enable_dpi_awareness())
+        self.assertIn(g.enable_dpi_awareness.__name__, dir(g))
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))

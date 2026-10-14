@@ -72,20 +72,20 @@ LEGACY_DEFAULT_CAPTION = '[照片說明]'  # 舊版預設值；載入舊草稿�
 # 主要與危險按鈕都是「淺底深字」，文字與底色的對比度都達到 WCAG AA（4.5:1 以上）。
 THEMES = {
     '柔和淺色': dict(
-        bg='#f6f8fb', border='#b5c0d0', heading_fg='#1e3a8a', field_fg='#1f2937',
+        bg='#f6f8fb', border='#b5c0d0', heading_fg='#1e3a8a', field_fg='#111827', text='#0b0f19', muted='#374151',
         tab_idle='#e6ecf4', tab_idle_fg='#475569', tab_hover='#d9e3f1',
         tab_active='#cfe0fb', tab_active_fg='#1e3a8a',
         primary='#cdeedd', primary_fg='#14532d', primary_active='#b4e3c9', primary_border='#6fbf96',
         danger='#fde2e2', danger_fg='#991b1b', danger_active='#fbc9c9', danger_border='#e89a9a'),
     # 色弱友善：避開紅綠搭配，改用藍色（主要）與橘色（危險），取自 Okabe-Ito 色盲友善色盤
     '色弱友善': dict(
-        bg='#f7f7f5', border='#a8a29e', heading_fg='#003a5c', field_fg='#1c1917',
+        bg='#f7f7f5', border='#a8a29e', heading_fg='#003a5c', field_fg='#0c0a09', text='#0c0a09', muted='#44403c',
         tab_idle='#ececea', tab_idle_fg='#44403c', tab_hover='#e0e0dd',
         tab_active='#cfe6f5', tab_active_fg='#003a5c',
         primary='#b8dcf2', primary_fg='#00314d', primary_active='#9fd0ee', primary_border='#0072B2',
         danger='#fbdcc0', danger_fg='#6b2d00', danger_active='#f6c79d', danger_border='#D55E00'),
     '高對比': dict(
-        bg='#ffffff', border='#000000', heading_fg='#000000', field_fg='#000000',
+        bg='#ffffff', border='#000000', heading_fg='#000000', field_fg='#000000', text='#000000', muted='#000000',
         tab_idle='#ffffff', tab_idle_fg='#000000', tab_hover='#e5e5e5',
         tab_active='#000000', tab_active_fg='#ffffff',
         primary='#0b3d91', primary_fg='#ffffff', primary_active='#082a66', primary_border='#000000',
@@ -1063,7 +1063,12 @@ class ReportGeneratorGUI:
         style = ttk.Style(self.root)
         style.theme_use('clam')
         self.root.configure(background=p['bg'])
-        style.configure('.', background=p['bg'])
+        style.configure('.', background=p['bg'], foreground=p['text'])
+        style.configure('TEntry', foreground=p['text'], fieldbackground='#ffffff')
+        style.configure('TCombobox', foreground=p['text'], fieldbackground='#ffffff')
+        style.configure('TMenubutton', foreground=p['text'])
+        style.configure('TButton', foreground=p['text'])
+        style.configure('Hint.TLabel', foreground=p['muted'])
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
         style.configure('TNotebook.Tab', padding=TAB_PADDING, background=p['tab_idle'], foreground=p['tab_idle_fg'],
@@ -1096,11 +1101,21 @@ class ReportGeneratorGUI:
             self.theme_var.set(name)
         self.status_label.config(text=f"已套用外觀：{name}")
 
+    def _center_theme_dropdown(self):
+        """外觀下拉選單：選項文字置中（展開的清單也置中；Tk 8.6 的清單支援 -justify）。"""
+        popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {self.theme_box}')
+        self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
+
     def _recolor(self, widget):
         """ttk 元件會自動跟著樣式變色；原生 tk 的容器（Canvas/Frame/Label）要手動換底色。"""
         for child in widget.winfo_children():
-            if child.winfo_class() in ('Canvas', 'Frame', 'Label'):
+            kind = child.winfo_class()
+            if kind in ('Canvas', 'Frame'):
                 child.configure(background=self.palette['bg'])
+            elif kind == 'Label':
+                child.configure(background=self.palette['bg'], foreground=self.palette['muted'])
+            elif kind in ('Text', 'Listbox'):
+                child.configure(foreground=self.palette['text'])
             self._recolor(child)
 
     def create_widgets(self):
@@ -1165,10 +1180,12 @@ class ReportGeneratorGUI:
         ttk.Label(theme_frame, text="外觀：").pack(side=tk.LEFT)
         self.theme_var = tk.StringVar(master=self.root, value=self.theme_name)
         theme_box = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=list(THEMES),
-                                 state='readonly', width=9)
+                                 state='readonly', width=9, justify=tk.CENTER)
         theme_box.pack(side=tk.LEFT)
         theme_box.bind('<<ComboboxSelected>>', lambda e: self.apply_theme(self.theme_var.get()))
         self.theme_box = theme_box
+        self._center_theme_dropdown()
+        self._recolor(self.root)
 
     # ---- 共用：可捲動分頁
     @staticmethod
@@ -1328,14 +1345,14 @@ class ReportGeneratorGUI:
         inner = self.make_scrollable_tab(notebook, title)
         ttk.Label(inner, text=heading, style='Heading.TLabel').grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
-        ttk.Label(inner, text="（點選預覽、拖曳調整順序）", foreground="gray").grid(
+        ttk.Label(inner, text="（點選預覽、拖曳調整順序）", style='Hint.TLabel').grid(
             row=0, column=0, sticky=tk.E)
 
         caption_row = ttk.Frame(inner)
         caption_row.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         ttk.Label(caption_row, text="未填說明時的預設字樣：").pack(side=tk.LEFT)
         ttk.Entry(caption_row, textvariable=self.default_caption, width=24).pack(side=tk.LEFT, padx=5)
-        ttk.Label(caption_row, text="（雙擊檔名輸入照片說明）", foreground="gray").pack(side=tk.LEFT)
+        ttk.Label(caption_row, text="（雙擊檔名輸入照片說明）", style='Hint.TLabel').pack(side=tk.LEFT)
 
         preview = PhotoPreview(inner, self.font_family)
         preview.grid(row=2, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
@@ -1845,7 +1862,23 @@ class ReportGeneratorGUI:
             self._post(lambda: self.generate_btn.config(state=tk.NORMAL))
 
 
+def enable_dpi_awareness():
+    """讓 Windows 不要把視窗當成點陣圖放大（縮放比例 125%/150% 時文字會糊掉）。"""
+    if sys.platform != 'win32':
+        return False
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # 1 = 系統層級 DPI 感知
+        return True
+    except (AttributeError, OSError):
+        try:
+            return bool(ctypes.windll.user32.SetProcessDPIAware())
+        except (AttributeError, OSError):
+            return False
+
+
 def main():
+    enable_dpi_awareness()
     root = tk.Tk()
     ReportGeneratorGUI(root)
 

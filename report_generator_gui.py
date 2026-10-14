@@ -69,6 +69,8 @@ PANEL_BG = '#f3f4f6'      # 表單背景
 TAB_ACTIVE_BG = '#1d4ed8'  # 目前分頁的底色
 TAB_IDLE_BG = '#d5dae3'    # 其他分頁的底色
 TAB_BORDER = '#8b95a7'
+PRIMARY_BG = '#15803d'        # 「產生報告」按鈕的綠色
+PRIMARY_ACTIVE_BG = '#166534'
 DANGER_BG = '#dc2626'         # 「清除」按鈕的紅色
 DANGER_ACTIVE_BG = '#b91c1c'
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
@@ -946,6 +948,11 @@ class ReportGeneratorGUI:
                         bordercolor=TAB_BORDER, lightcolor=TAB_BORDER, darkcolor=TAB_BORDER, borderwidth=2)
         style.configure('Danger.TButton', background=DANGER_BG, foreground='#ffffff', bordercolor='#991b1b',
                         lightcolor=DANGER_BG, darkcolor=DANGER_BG)
+        style.configure('Primary.TButton', background=PRIMARY_BG, foreground='#ffffff', bordercolor='#14532d',
+                        lightcolor=PRIMARY_BG, darkcolor=PRIMARY_BG)
+        style.map('Primary.TButton', background=[('active', PRIMARY_ACTIVE_BG), ('pressed', PRIMARY_ACTIVE_BG),
+                                                 ('disabled', '#9ca3af')],
+                  foreground=[('active', '#ffffff'), ('pressed', '#ffffff'), ('disabled', '#f3f4f6')])
         style.map('Danger.TButton', background=[('active', DANGER_ACTIVE_BG), ('pressed', DANGER_ACTIVE_BG)],
                   foreground=[('active', '#ffffff'), ('pressed', '#ffffff')])
         style.map('TNotebook.Tab',
@@ -1000,7 +1007,8 @@ class ReportGeneratorGUI:
 
         ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)
-        self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report)
+        self.generate_btn = ttk.Button(button_frame, text="產生報告", command=self.generate_report,
+                                       style='Primary.TButton')
         self.generate_btn.pack(side=tk.LEFT, padx=5)
         self.clear_btn = ttk.Button(button_frame, text="清除", command=self.clear_all, style='Danger.TButton')
         self.clear_btn.pack(side=tk.LEFT, padx=5)
@@ -1327,7 +1335,13 @@ class ReportGeneratorGUI:
         self.default_caption.set(DEFAULT_CAPTION)
 
     def clear_all(self):
-        if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):
+        if self.is_dirty():
+            message = ("⚠ 目前有尚未儲存的內容！\n\n"
+                       "清除會移除所有欄位、照片與說明，無法復原。\n建議先按「儲存草稿」。\n\n確定要清除嗎？")
+        else:
+            message = ("清除會移除所有欄位、照片與說明（填表日期會重設為今天），無法復原。\n\n確定要清除嗎？")
+        # 預設選「否」，不小心按到 Enter 也不會清掉資料
+        if not messagebox.askyesno("清除全部內容", message, icon='warning', default='no'):
             return
         self._clear_widgets()
         self._fill_report_date()

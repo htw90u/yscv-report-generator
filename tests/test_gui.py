@@ -16,6 +16,10 @@ import report_generator_gui as g
 from test_report import unique_cells
 
 
+def style_lookup(root, style_name, option, state=None):
+    return ttk.Style(root).lookup(style_name, option, state or [])
+
+
 class GuiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -139,6 +143,16 @@ class GuiTest(unittest.TestCase):
         labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
         self.assertEqual(labels, ['載入草稿', '儲存草稿', '產生報告', '清除', '離開'])
         self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
+        self.assertEqual(str(self.app.generate_btn.cget('style')), 'Primary.TButton')
+        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background'), g.PRIMARY_BG)
+        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'foreground'), '#ffffff')
+        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background', ['active']), g.PRIMARY_ACTIVE_BG)
+        pr, pg, pb = (int(g.PRIMARY_BG[i:i + 2], 16) for i in (1, 3, 5))
+        self.assertGreater(pg, pr)  # 綠色：G 最大
+        self.assertGreater(pg, pb)
+        # 離開維持預設灰色，不上色
+        leave = [w for w in frame.winfo_children() if isinstance(w, ttk.Button) and w.cget('text') == '離開'][0]
+        self.assertIn(str(leave.cget('style')), ('', 'TButton'))
         style = ttk.Style(self.root)
         self.assertEqual(style.lookup('Danger.TButton', 'background'), g.DANGER_BG)
         self.assertEqual(style.lookup('Danger.TButton', 'foreground'), '#ffffff')
@@ -604,6 +618,51 @@ class GuiTest(unittest.TestCase):
         g.build_report(TEMPLATE, data, {c: [] for c in self.app.photo_files}, {}, out)
         text = '\n'.join(c.text for c in unique_cells(Document(out)))
         self.assertIn('115年10月14日', text)
+
+    # ---- 清除前的確認
+    def _clear_with_answer(self, answer):
+        calls = []
+
+        def ask(title, message, **kwargs):
+            calls.append((title, message, kwargs))
+            return answer
+
+        with mock.patch.object(messagebox, 'askyesno', ask):
+            self.app.clear_all()
+        return calls
+
+    def test_clear_asks_for_confirmation_with_safe_default(self):
+        self.app.personnel.insert(0, '保留')
+        calls = self._clear_with_answer(False)
+        self.assertEqual(len(calls), 1)
+        _, _, kwargs = calls[0]
+        self.assertEqual(kwargs.get('default'), 'no')  # 預設「否」，按 Enter 不會誤清除
+        self.assertEqual(kwargs.get('icon'), 'warning')
+        self.assertEqual(self.app.personnel.get(), '保留')  # 選否：什麼都不動
+
+    def test_clear_confirmed_clears_everything(self):
+        self.app.personnel.insert(0, '清掉')
+        cat, lb, _ = self._photos()
+        self._clear_with_answer(True)
+        self.assertEqual(self.app.personnel.get(), '')
+        self.assertEqual(lb.size(), 0)
+
+    def test_clear_warning_mentions_scope_and_irreversibility(self):
+        _, message, _ = self._clear_with_answer(False)[0]
+        for word in ('欄位', '照片', '說明', '無法復原'):
+            self.assertIn(word, message)
+
+    def test_clear_warns_extra_when_there_is_unsaved_content(self):
+        _, clean_message, _ = self._clear_with_answer(False)[0]
+        self.assertNotIn('尚未儲存', clean_message)
+        self.app.personnel.insert(0, 'x')
+        _, dirty_message, _ = self._clear_with_answer(False)[0]
+        self.assertIn('尚未儲存', dirty_message)
+        self.assertIn('儲存草稿', dirty_message)
+        # 存成草稿之後，又回到一般確認
+        self._save_draft_to(os.path.join(self.tmp.name, 'd.json'))
+        _, saved_message, _ = self._clear_with_answer(False)[0]
+        self.assertNotIn('尚未儲存', saved_message)
 
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')

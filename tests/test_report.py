@@ -231,6 +231,27 @@ class LayoutTest(unittest.TestCase):
         self.assertLess(g.caption_height('短', 20), g.caption_height('長' * 45, 20))
 
 
+class MoveItemTest(unittest.TestCase):
+    def test_move_down_up_and_same(self):
+        seq = ['a', 'b', 'c', 'd']
+        g.move_item(seq, 0, 2)
+        self.assertEqual(seq, ['b', 'c', 'a', 'd'])
+        g.move_item(seq, 3, 0)
+        self.assertEqual(seq, ['d', 'b', 'c', 'a'])
+        g.move_item(seq, 1, 1)
+        self.assertEqual(seq, ['d', 'b', 'c', 'a'])
+
+
+class OrderKeptTest(unittest.TestCase):
+    def test_user_order_is_kept_within_orientation_group(self):
+        items = [make_item(4, 3, caption=f'L{i}') for i in range(4)]
+        rows = [r for _, r in g.plan_layout({'a': items}, 30, 0, 20)]
+        self.assertEqual([[p.caption for p in r] for r in rows], [['L0', 'L1'], ['L2', 'L3']])
+        items.reverse()  # 使用者把順序調換 -> 版面跟著變
+        rows = [r for _, r in g.plan_layout({'a': items}, 30, 0, 20)]
+        self.assertEqual([[p.caption for p in r] for r in rows], [['L3', 'L2'], ['L1', 'L0']])
+
+
 class DocumentStructureTest(BuildReportTest):
     """沿用 BuildReportTest 產生的文件，檢查模板結構被正確整理。"""
 

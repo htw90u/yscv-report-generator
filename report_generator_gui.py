@@ -28,7 +28,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageTk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
@@ -61,6 +61,7 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
 
+PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
 
@@ -744,7 +745,58 @@ def build_report(template_path, data, photo_files, captions, output_path):
     return warnings
 
 
+def move_item(seq, src, dst):
+    """把 seq[src] 移到 dst 的位置（原地修改），其餘順序不變。"""
+    seq.insert(dst, seq.pop(src))
+
+
 # ---------------------------------------------------------------- GUI
+
+class PhotoPreview(ttk.Frame):
+    """照片預覽區：顯示縮圖（已依 EXIF 轉正）、檔名、尺寸與說明。"""
+
+    PLACEHOLDER = "點選左邊的照片\n即可預覽"
+
+    def __init__(self, master, font_family):
+        super().__init__(master, padding=6, relief=tk.GROOVE)
+        box = tk.Frame(self, width=PREVIEW_SIZE[0], height=PREVIEW_SIZE[1])
+        box.pack_propagate(False)
+        box.pack()
+        self.picture = tk.Label(box, text=self.PLACEHOLDER, fg='gray', justify=tk.CENTER)
+        self.picture.pack(fill=tk.BOTH, expand=True)
+        self.info = ttk.Label(self, text='', wraplength=PREVIEW_SIZE[0], justify=tk.LEFT,
+                              font=(font_family, 9 + GUI_FONT_DELTA))
+        self.info.pack(anchor=tk.W, pady=(6, 0))
+        self.image = None      # 要保留參照，否則 PhotoImage 會被回收而不顯示
+        self.current = None    # (分類, 路徑)
+
+    def clear(self, message=None):
+        self.image = None
+        self.current = None
+        self.picture.config(image='', text=message or self.PLACEHOLDER)
+        self.info.config(text='')
+
+    def show(self, category, path, caption=None):
+        name = os.path.basename(path)
+        try:
+            with Image.open(path) as img:
+                width, height = img.size
+                if img.getexif().get(0x0112, 1) in (5, 6, 7, 8):  # EXIF 旋轉後寬高互換
+                    width, height = height, width
+                img.draft('RGB', (PREVIEW_SIZE[0] * 2, PREVIEW_SIZE[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
+                thumb = ImageOps.exif_transpose(img)
+                thumb.thumbnail(PREVIEW_SIZE, Image.LANCZOS)
+                photo = ImageTk.PhotoImage(thumb.copy())
+        except Exception as e:
+            self.clear(f"無法預覽\n{e}")
+            self.info.config(text=name)
+            return
+        self.image = photo
+        self.current = (category, path)
+        self.picture.config(image=photo, text='')
+        orient = '橫式' if width >= height else '直式'
+        self.info.config(text=f"{name}\n{width}×{height}（{orient}）\n說明：{caption or '（無）'}")
+
 
 def load_private_fonts():
     """Windows：只在本程式執行期間載入 fonts/ 裡的字型（不安裝、不需要系統管理員權限）。回傳是否有載入成功。"""
@@ -798,6 +850,8 @@ class ReportGeneratorGUI:
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
+        self.previews = {}   # category -> PhotoPreview（同一個分頁的分類共用）
+        self._drag = None    # 拖曳排序中：[分類, 目前索引]
         self.text_fields = {}
 
         self._ui_queue = queue.Queue()
@@ -1009,8 +1063,11 @@ class ReportGeneratorGUI:
         inner = self.make_scrollable_tab(notebook, title)
         ttk.Label(inner, text=heading, font=(self.font_family, 11 + GUI_FONT_DELTA, 'bold')).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
-        ttk.Label(inner, text="（雙擊照片可編輯說明）", foreground="gray").grid(
+        ttk.Label(inner, text="（點選預覽、拖曳調整順序、雙擊編輯說明）", foreground="gray").grid(
             row=0, column=0, sticky=tk.E)
+
+        preview = PhotoPreview(inner, self.font_family)
+        preview.grid(row=1, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
 
         for idx, category in enumerate(categories):
             row = idx * 2 + 1
@@ -1021,12 +1078,16 @@ class ReportGeneratorGUI:
             list_frame.grid(row=row + 1, column=0, sticky=(tk.W, tk.E), padx=20)
             list_frame.columnconfigure(0, weight=1)
 
-            listbox = tk.Listbox(list_frame, height=4, selectmode=tk.EXTENDED)
+            listbox = tk.Listbox(list_frame, height=5, selectmode=tk.EXTENDED, exportselection=False)
             listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
             scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
             scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
             listbox.configure(yscrollcommand=scrollbar.set)
             listbox.bind("<Double-Button-1>", lambda e, c=category, lb=listbox: self.edit_caption(c, lb))
+            listbox.bind("<<ListboxSelect>>", lambda e, c=category, lb=listbox: self._on_photo_select(c, lb))
+            listbox.bind("<Button-1>", lambda e, c=category, lb=listbox: self._drag_start(c, lb, e))
+            listbox.bind("<B1-Motion>", lambda e, c=category, lb=listbox: self._drag_motion(c, lb, e))
+            listbox.bind("<ButtonRelease-1>", lambda e: self._drag_end())
 
             btn_frame = ttk.Frame(list_frame)
             btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
@@ -1038,12 +1099,61 @@ class ReportGeneratorGUI:
                        command=lambda c=category, lb=listbox: self.clear_photos(c, lb)).pack(side=tk.LEFT, padx=2)
 
             self.listboxes[category] = listbox
+            self.previews[category] = preview
 
     # ---- 事件處理
     def _photo_label(self, category, filepath):
         caption = self.photo_captions[category].get(filepath)
         name = os.path.basename(filepath)
         return f"{name} — {caption}" if caption else name
+
+    # ---- 預覽與拖曳排序
+    def _on_photo_select(self, category, listbox):
+        selected = listbox.curselection()
+        preview = self.previews[category]
+        if not selected:
+            return
+        path = self.photo_files[category][selected[0]]
+        preview.show(category, path, self.photo_captions[category].get(path))
+
+    def _refresh_previews(self):
+        """照片被移除/清除後，若預覽的照片已不在清單中就清掉預覽。"""
+        for preview in set(self.previews.values()):
+            if preview.current and preview.current[1] not in self.photo_files[preview.current[0]]:
+                preview.clear()
+
+    def _move_photo(self, category, listbox, src, dst):
+        move_item(self.photo_files[category], src, dst)
+        label = listbox.get(src)
+        listbox.delete(src)
+        listbox.insert(dst, label)
+        listbox.selection_clear(0, tk.END)
+        listbox.selection_set(dst)
+        listbox.activate(dst)
+
+    def _drag_start(self, category, listbox, event):
+        """按下滑鼠：記錄要拖曳的項目（按在清單空白處不算）。不攔截事件，讓一般的選取照常運作。"""
+        self._drag = None
+        if listbox.size() == 0:
+            return None
+        index = listbox.nearest(event.y)
+        box = listbox.bbox(index)
+        if box and box[1] <= event.y < box[1] + box[3]:
+            self._drag = [category, index]
+        return None
+
+    def _drag_motion(self, category, listbox, event):
+        if not self._drag or self._drag[0] != category:
+            return None
+        target = max(0, min(listbox.nearest(event.y), listbox.size() - 1))
+        if target != self._drag[1]:
+            self._move_photo(category, listbox, self._drag[1], target)
+            self._drag[1] = target
+            listbox.see(target)
+        return 'break'  # 拖曳時不要讓清單把它當成「擴大選取」
+
+    def _drag_end(self):
+        self._drag = None
 
     def select_photos(self, category, listbox):
         filepaths = filedialog.askopenfilenames(
@@ -1082,6 +1192,8 @@ class ReportGeneratorGUI:
             self.photo_captions[category].pop(filepath, None)
         listbox.delete(idx)
         listbox.insert(idx, self._photo_label(category, filepath))
+        listbox.selection_set(idx)
+        self._on_photo_select(category, listbox)
 
     def remove_photos(self, category, listbox):
         selected = listbox.curselection()
@@ -1091,12 +1203,14 @@ class ReportGeneratorGUI:
             filepath = self.photo_files[category].pop(idx)
             self.photo_captions[category].pop(filepath, None)
             listbox.delete(idx)
+        self._refresh_previews()
         self.status_label.config(text=f"已移除 {len(selected)} 張照片")
 
     def clear_photos(self, category, listbox):
         self.photo_files[category].clear()
         self.photo_captions[category].clear()
         listbox.delete(0, tk.END)
+        self._refresh_previews()
         self.status_label.config(text=f"已清除 {category} 的所有照片")
 
     def _clear_widgets(self):
@@ -1108,6 +1222,8 @@ class ReportGeneratorGUI:
             self.photo_files[category].clear()
             self.photo_captions[category].clear()
             listbox.delete(0, tk.END)
+        for preview in set(self.previews.values()):
+            preview.clear()
 
     def clear_all(self):
         if not messagebox.askyesno("確認", "確定要清除所有資料嗎？"):

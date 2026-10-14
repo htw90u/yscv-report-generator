@@ -1,4 +1,5 @@
 """GUI 流程測試（需要可用的顯示環境）。執行：python -m unittest discover -s tests"""
+import gc
 import os
 import tempfile
 import time
@@ -40,6 +41,9 @@ class GuiTest(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        self.app = self.root = None
+        # 在主執行緒先回收 Tk 物件；否則可能在背景執行緒被 GC，造成 Tcl_AsyncDelete 當機
+        gc.collect()
         self.tmp.cleanup()
 
     def fill_dates(self, month='10', day='12', start_day='1', end_day='2'):
@@ -422,6 +426,143 @@ class GuiTest(unittest.TestCase):
         with mock.patch.object(g, 'load_private_fonts', lambda: False), \
                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
             self.assertEqual(g.pick_font_family(self.root), g.FALLBACK_FONT_FAMILY)
+
+    # ---- 照片預覽與拖曳排序
+    class _Ev:
+        def __init__(self, y):
+            self.y = y
+
+    def _photos(self, names=('a.jpg', 'b.jpg', 'c.jpg'), cat=None, size=(400, 200), exif=None):
+        cat = cat or g.PHOTO_CATEGORIES_1[0]
+        lb = self.app.listboxes[cat]
+        paths = []
+        for n in names:
+            p = os.path.join(self.tmp.name, n)
+            im = Image.new('RGB', size, 'red')
+            if exif:
+                ex = im.getexif()
+                ex[0x0112] = exif
+                im.save(p, exif=ex)
+            else:
+                im.save(p)
+            self.app.photo_files[cat].append(p)
+            lb.insert(tk.END, self.app._photo_label(cat, p))
+            paths.append(p)
+        return cat, lb, paths
+
+    def _drag(self, cat, lb, start, *targets):
+        """模擬從 start 位置按下，依序拖到 targets，最後放開。"""
+        full = (0, 0, 100, 1000)
+        with mock.patch.object(lb, 'bbox', lambda i: full), mock.patch.object(lb, 'nearest') as nearest:
+            nearest.return_value = start
+            self.app._drag_start(cat, lb, self._Ev(5))
+            for t in targets:
+                nearest.return_value = t
+                self.app._drag_motion(cat, lb, self._Ev(5))
+            self.app._drag_end()
+
+    def test_drag_reorders_photos_and_listbox(self):
+        cat, lb, (a, b, c) = self._photos()
+        lb.selection_set(0)
+        self._drag(cat, lb, 0, 1, 2)
+        self.assertEqual(self.app.photo_files[cat], [b, c, a])
+        self.assertEqual([lb.get(i) for i in range(3)], ['b.jpg', 'c.jpg', 'a.jpg'])
+        self.assertEqual(lb.curselection(), (2,))
+        self._drag(cat, lb, 2, 0)
+        self.assertEqual(self.app.photo_files[cat], [a, b, c])
+
+    def test_drag_order_persists_in_draft_and_marks_dirty(self):
+        cat, lb, (a, b, c) = self._photos()
+        self.app._saved_signature = self.app._signature()
+        self._drag(cat, lb, 2, 0)
+        self.assertEqual(self.app.build_draft()['photos'][cat], [c, a, b])
+        self.assertTrue(self.app.is_dirty())
+
+    def test_drag_in_blank_area_does_nothing(self):
+        cat, lb, (a, b, c) = self._photos()
+        with mock.patch.object(lb, 'bbox', lambda i: (0, 0, 100, 20)), mock.patch.object(lb, 'nearest', lambda y: 2):
+            self.app._drag_start(cat, lb, self._Ev(500))  # 按在清單最後一項下方的空白處
+            self.assertIsNone(self.app._drag)
+            self.assertIsNone(self.app._drag_motion(cat, lb, self._Ev(500)))
+        self.assertEqual(self.app.photo_files[cat], [a, b, c])
+
+    def test_drag_target_is_clamped(self):
+        cat, lb, (a, b, c) = self._photos()
+        self._drag(cat, lb, 0, 99)
+        self.assertEqual(self.app.photo_files[cat], [b, c, a])
+
+    def test_select_shows_preview_with_info(self):
+        cat, lb, (a, b, c) = self._photos(size=(400, 200))
+        self.app.photo_captions[cat][a] = '山屋外觀'
+        lb.selection_set(0)
+        nb = next(w for w in self.root.winfo_children()[0].winfo_children() if isinstance(w, ttk.Notebook))
+        nb.select(5)  # 沒顯示出來的元件收不到事件，要先切到照片分頁
+        self.root.update()
+        lb.event_generate('<<ListboxSelect>>')  # 確認事件有綁到預覽
+        self.root.update()
+        preview = self.app.previews[cat]
+        self.assertEqual(preview.current, (cat, a))
+        self.assertIsNotNone(preview.image)
+        self.assertLessEqual(preview.image.width(), g.PREVIEW_SIZE[0])
+        self.assertLessEqual(preview.image.height(), g.PREVIEW_SIZE[1])
+        text = preview.info.cget('text')
+        self.assertIn('a.jpg', text)
+        self.assertIn('400×200（橫式）', text)
+        self.assertIn('山屋外觀', text)
+
+    def test_preview_applies_exif_rotation(self):
+        cat, lb, (a,) = self._photos(names=('r.jpg',), size=(400, 200), exif=6)
+        lb.selection_set(0)
+        self.app._on_photo_select(cat, lb)
+        preview = self.app.previews[cat]
+        self.assertGreater(preview.image.height(), preview.image.width())  # 轉正後為直式
+        self.assertIn('200×400（直式）', preview.info.cget('text'))
+
+    def test_preview_of_unreadable_file_does_not_crash(self):
+        cat = g.PHOTO_CATEGORIES_1[0]
+        lb = self.app.listboxes[cat]
+        bad = os.path.join(self.tmp.name, 'bad.jpg')
+        with open(bad, 'wb') as f:
+            f.write(b'not an image')
+        self.app.photo_files[cat].append(bad)
+        lb.insert(tk.END, 'bad.jpg')
+        lb.selection_set(0)
+        self.app._on_photo_select(cat, lb)
+        preview = self.app.previews[cat]
+        self.assertIsNone(preview.image)
+        self.assertIn('bad.jpg', preview.info.cget('text'))
+
+    def test_preview_cleared_when_photo_removed_or_cleared(self):
+        cat, lb, (a, b, c) = self._photos()
+        lb.selection_set(1)
+        self.app._on_photo_select(cat, lb)
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(0)
+        self.app.remove_photos(cat, lb)  # 移除 a：預覽的是 b，不受影響
+        self.assertEqual(self.app.previews[cat].current, (cat, b))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(0)
+        self.app.remove_photos(cat, lb)  # 移除 b：預覽要清掉
+        self.assertIsNone(self.app.previews[cat].current)
+        self.assertIsNone(self.app.previews[cat].image)
+        lb.selection_set(0)
+        self.app._on_photo_select(cat, lb)
+        self.assertEqual(self.app.previews[cat].current, (cat, c))
+        self.app.clear_photos(cat, lb)
+        self.assertIsNone(self.app.previews[cat].current)
+
+    def test_preview_refreshed_after_caption_edit(self):
+        cat, lb, (a, b, c) = self._photos()
+        lb.selection_set(0)
+        with mock.patch.object(simpledialog, 'askstring', lambda *a, **k: '新說明'):
+            self.app.edit_caption(cat, lb)
+        self.assertIn('新說明', self.app.previews[cat].info.cget('text'))
+        self.assertEqual(lb.curselection(), (0,))
+
+    def test_tab_shares_one_preview_between_its_categories(self):
+        self.assertIs(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_1[3]])
+        self.assertIsNot(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_2[0]])
 
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')

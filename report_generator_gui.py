@@ -35,13 +35,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
-GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細。介面不使用粗體（邊緣不好看），強調改用字級、顏色與 Medium 字重
-# 介面字型：Chiron GoRound TC（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
-# 使用它的 Medium 字重當作一般字體：筆畫比 Regular 稍粗、比較清楚，又不會有電腦模擬粗體的毛邊
+GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細。介面不使用粗體（邊緣不好看），強調改用字級與顏色
+# 介面字型：芫荽 Iansui（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
+# 只有 Regular 一個字重；介面不使用粗體（模擬的粗體邊緣不好看），強調改用字級與顏色
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
-FONT_FILES = ('ChironGoRoundTC-Medium.ttf',)
-FONT_LICENSE = 'OFL-ChironGoRoundTC.txt'
-FONT_FAMILY = 'Chiron GoRound TC Medium'
+FONT_FILES = ('Iansui-Regular.ttf',)
+FONT_LICENSE = 'OFL-Iansui.txt'
+FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
 LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
 logging.basicConfig(

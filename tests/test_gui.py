@@ -920,12 +920,19 @@ class GuiTest(unittest.TestCase):
             self.root.geometry(f'1050x{original}')
             self.root.update()
 
-    def test_font_is_chiron_gor_ound_tc_medium(self):
-        self.assertEqual(g.FONT_FAMILY, 'Chiron GoRound TC Medium')
-        self.assertEqual(g.FONT_FILES, ('ChironGoRoundTC-Medium.ttf',))
-        self.assertEqual(self.app.font_family, 'Chiron GoRound TC Medium')
-        old = [n for n in os.listdir(g.FONT_DIR) if any(k in n for k in ('LXGW', 'Cactus', 'Chocolate'))]
+    def test_font_is_iansui(self):
+        self.assertEqual(g.FONT_FAMILY, 'Iansui')
+        self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
+        self.assertEqual(g.FONT_LICENSE, 'OFL-Iansui.txt')
+        self.assertEqual(self.app.font_family, 'Iansui')
+        old = [n for n in os.listdir(g.FONT_DIR) if any(k in n for k in ('LXGW', 'Cactus', 'Chocolate', 'Chiron'))]
         self.assertEqual(old, [])  # 舊字型已移除
+
+    def test_font_line_height_is_compact_enough_for_photo_tabs(self):
+        """字型的行高不能是一般字型的兩倍（之前試過的字型就是這樣），否則服勤照片分頁一定要捲動。"""
+        import tkinter.font as tkfont
+        font = tkfont.nametofont('TkDefaultFont', root=self.root)
+        self.assertLessEqual(font.metrics('linespace'), 30)
 
     def test_form_uses_no_bold_anywhere(self):
         """表單不使用粗體：所有標籤樣式與介面字型都是一般字重，強調改用字級與顏色。"""

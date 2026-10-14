@@ -166,7 +166,12 @@ FILL_LABELS = [
     ('七、協勤心得與建議：', 'reflection'),
 ]
 QUESTION_MARKER = '八、相關疑問與解答：'
-QUESTION_PLACEHOLDER = '1.相關疑問？答：因為......。'
+
+
+def is_question_placeholder(text):
+    """範本裡「1.相關疑問？答：因為……。」這行範例文字（省略號可能是 …… 或 ......，所以不比對整句）。"""
+    compact = re.sub(r'\s+', '', text)
+    return compact.startswith(('1.', '1、', '1．', '１')) and '相關疑問' in compact and '答' in compact
 
 FIELD_NAMES = {
     'road_status': '1、道路、步道狀況及維護情形', 'road_grass': '2、道路、步道雜草情形',
@@ -317,12 +322,12 @@ def _paragraph_text(element):
     return ''.join(t.text or '' for t in element.iter(qn('w:t')))
 
 
-def _insert_content_after(paragraph, lines, drop_text=None):
-    """在 paragraph 後面插入內容段落，並移除其後的空白佔位段落（含 drop_text 的佔位文字）。"""
+def _insert_content_after(paragraph, lines, is_placeholder=None):
+    """在 paragraph 後面插入內容段落，並移除其後的空白佔位段落（以及 is_placeholder(文字) 判定為範例文字的段落）。"""
     anchor = paragraph._p
     nxt = anchor.getnext()
     while nxt is not None and nxt.tag == qn('w:p') and (
-            _is_empty_paragraph(nxt) or (drop_text and drop_text in _paragraph_text(nxt))):
+            _is_empty_paragraph(nxt) or (is_placeholder and is_placeholder(_paragraph_text(nxt)))):
         anchor.getparent().remove(nxt)
         nxt = anchor.getnext()
     for text in lines:
@@ -331,7 +336,7 @@ def _insert_content_after(paragraph, lines, drop_text=None):
         anchor = new
 
 
-def _set_cell_value(cell, text, center=False):
+def _set_cell_value(cell, text, center=False, left=False):
     """填入基本資料：沿用儲存格原有的段落設定與字型大小（對齊、14pt 等），字型改為標楷體。"""
     paragraphs = cell.paragraphs
     for extra in paragraphs[1:]:
@@ -357,6 +362,8 @@ def _set_cell_value(cell, text, center=False):
     rfonts.attrib.pop(qn('w:hint'), None)
     if center:
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    elif left:
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
 
 _CLOCKWISE_TRANSPOSE = {90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_90}
@@ -445,7 +452,7 @@ def _fill_main_table(main_table, data):
         _set_cell_value(main_table.rows[1].cells[1], data['personnel'])
         _set_cell_value(main_table.rows[2].cells[1],
                         f"{data['start_year']}年{data['start_month']}月{data['start_day']}日至"
-                        f"{data['end_year']}年{data['end_month']}月{data['end_day']}日", center=True)
+                        f"{data['end_year']}年{data['end_month']}月{data['end_day']}日", left=True)  # 協勤日期靠左對齊
         _set_cell_value(main_table.rows[3].cells[1], data['location'])
     except IndexError:
         raise ValueError("模板格式錯誤：基本資料表格的列/欄數量與預期不符（需至少 4 列、第一列至少 3 欄）")
@@ -473,9 +480,9 @@ def _fill_main_table(main_table, data):
             if 'questions' not in filled:
                 head = next((p for p in cell.paragraphs if QUESTION_MARKER in p.text), None)
                 if head is not None:
-                    if data.get('questions'):
-                        _insert_content_after(head, content_lines(data['questions']),
-                                              drop_text=QUESTION_PLACEHOLDER)
+                    # 範例文字「1.相關疑問？答：因為……。」不論有沒有填內容，產生時都要拿掉
+                    _insert_content_after(head, content_lines(data['questions']) if data.get('questions') else [],
+                                          is_placeholder=is_question_placeholder)
                     filled.add('questions')
 
     for key, name in FIELD_NAMES.items():

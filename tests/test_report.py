@@ -420,13 +420,39 @@ class FormattingTest(BuildReportTest):
         self.assertTrue(all(r.font.bold for r in heading.runs))
         self.assertEqual(heading.runs[0].font.size.pt, 14)
 
-    def test_fill_date_and_service_date_are_centered_in_word(self):
-        for text in ('115年10月12日', '115年10月10日至115年10月11日'):
-            _, p = self._paragraphs(text)
-            jc = p._p.pPr.find(self.W + 'jc')
-            with self.subTest(text=text):
-                self.assertIsNotNone(jc)
-                self.assertEqual(jc.get(self.W + 'val'), 'center')
+    def test_fill_date_is_centered_and_service_date_is_left_aligned_in_word(self):
+        _, p = self._paragraphs('115年10月12日')
+        jc = p._p.pPr.find(self.W + 'jc')
+        self.assertIsNotNone(jc)
+        self.assertEqual(jc.get(self.W + 'val'), 'center')  # 填表日期置中
+        _, p = self._paragraphs('115年10月10日至115年10月11日')
+        jc = p._p.pPr.find(self.W + 'jc')
+        self.assertIsNotNone(jc)
+        self.assertEqual(jc.get(self.W + 'val'), 'left')    # 協勤日期靠左
+
+    def test_question_placeholder_is_removed(self):
+        self.assertNotIn('因為', self.text)
+        self.assertNotIn('1.相關疑問', self.text)
+        self.assertIn('八、相關疑問與解答', self.text)
+        self.assertEqual(self.text.count('內容_questions'), 1)
+
+    def test_question_placeholder_is_removed_even_when_questions_are_empty(self):
+        d = tempfile.mkdtemp()
+        data = {k: '' for k in g.FIELD_NAMES}
+        data.update(year='115', month='10', day='12', personnel='王', start_year='115', start_month='10',
+                    start_day='10', end_year='115', end_month='10', end_day='11', location='排雲山莊')
+        out = os.path.join(d, 'empty.docx')
+        g.build_report(TEMPLATE, data, {c: [] for c in g.PHOTO_CATEGORIES}, {}, out)
+        text = chr(10).join(c.text for c in unique_cells(Document(out)))
+        self.assertNotIn('因為', text)
+        self.assertNotIn('1.相關疑問', text)
+        self.assertIn('八、相關疑問與解答', text)
+
+    def test_is_question_placeholder_matches_both_ellipsis_styles(self):
+        self.assertTrue(g.is_question_placeholder('1.相關疑問？答：因為……。'))
+        self.assertTrue(g.is_question_placeholder('1.相關疑問？答：因為......。'))
+        self.assertFalse(g.is_question_placeholder('1.雲海什麼時候最漂亮？答：清晨。'))
+        self.assertFalse(g.is_question_placeholder('八、相關疑問與解答：'))
 
     def test_personnel_and_location_are_not_changed_to_center(self):
         _, p = self._paragraphs('王小明')

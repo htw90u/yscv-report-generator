@@ -143,7 +143,7 @@ FIELD_TAB = {
 }
 MARK_DONE = '✓'      # 已填說明／已填完的記號
 MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
-PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明）"
+PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明）"
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
 PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
 PHOTO_NAME_COL_PX = 240       # 照片表格「檔名」「說明」兩欄的初始寬度（之後會隨表格寬度對半分）
@@ -1229,6 +1229,7 @@ class ReportGeneratorGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         messagebox.attach(self)
         self._bind_shortcuts()
+        self._enable_file_drop()
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
         if restore_on_start:
             self.root.after(300, self.offer_restore)
@@ -1843,6 +1844,12 @@ class ReportGeneratorGUI:
         for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
             widget.bind(sequence, lambda e: self._refresh_tab_marks(), add='+')
 
+    def _enable_file_drop(self):
+        """讓視窗接受從檔案總管拖進來的檔案（只有 Windows；失敗就維持用按鈕加入）。"""
+        def on_drop(paths, x, y):
+            self.root.after(0, lambda: self.handle_dropped_files(paths, x, y))
+        self._file_drop = enable_file_drop(self.root, on_drop)
+
     # ---- 預覽、說明輸入
     def _current_photo_category(self):
         return PHOTO_CATEGORIES[self.photo_notebook.index(self.photo_notebook.select())]
@@ -1981,6 +1988,10 @@ class ReportGeneratorGUI:
         )
         if not filepaths:
             return
+        self._add_photo_files(category, filepaths)
+
+    def _add_photo_files(self, category, filepaths):
+        """把照片加到某一類（已經加過的略過），回傳實際新增的張數。"""
         added = 0
         for filepath in filepaths:
             if filepath not in self.photo_files[category]:
@@ -1989,6 +2000,34 @@ class ReportGeneratorGUI:
         self._render_list(category)
         self.status_label.config(text=f"已新增 {added} 張照片到 {category}")
         logging.info(f"新增 {added} 張照片到 {category}")
+        return added
+
+    def handle_dropped_files(self, paths, screen_x=None, screen_y=None):
+        """從檔案總管拖進視窗的檔案／資料夾：圖片加到「服勤照片」；放在哪個小分頁上就加到哪一類，否則加到目前的那一類。"""
+        images, ignored = collect_dropped_images(paths)
+        if not images:
+            self.status_label.config(text="拖進來的檔案裡沒有圖片（支援 jpg、jpeg、png、gif、bmp）")
+            return 0
+        category = self._current_photo_category()
+        if screen_x is not None:
+            nb = self.photo_notebook
+            if nb.winfo_ismapped():
+                try:
+                    hit = nb.index(f'@{screen_x - nb.winfo_rootx()},{screen_y - nb.winfo_rooty()}')
+                    category = PHOTO_CATEGORIES[hit]
+                except tk.TclError:
+                    pass
+        self.notebook.select(self._tab_by_title(TAB_PHOTOS))
+        self.photo_notebook.select(self.photo_pages[category])
+        added = self._add_photo_files(category, images)
+        notes = []
+        if len(images) - added:
+            notes.append(f"{len(images) - added} 張已加入過")
+        if ignored:
+            notes.append(f"略過 {ignored} 個非圖片檔")
+        if notes:
+            self.status_label.config(text=f"已新增 {added} 張照片到 {category}（{'、'.join(notes)}）")
+        return added
 
     def remove_photos(self, category, table):
         selected = table.selected_indexes()
@@ -2396,6 +2435,90 @@ class ReportGeneratorGUI:
             self._post(lambda: self.status_label.config(text=error_msg))
         finally:
             self._post(lambda: self.generate_btn.config(state=tk.NORMAL))
+
+
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp')
+
+
+def collect_dropped_images(paths):
+    """從拖進來的檔案／資料夾挑出圖片（資料夾只看第一層，依檔名排序）。回傳 (圖片清單, 略過的非圖片數)。"""
+    images, ignored = [], 0
+    for path in paths:
+        if os.path.isdir(path):
+            try:
+                names = sorted(os.listdir(path), key=str.lower)
+            except OSError:
+                continue
+            for name in names:
+                full = os.path.join(path, name)
+                if os.path.isfile(full) and name.lower().endswith(IMAGE_EXTENSIONS):
+                    images.append(full)
+        elif path.lower().endswith(IMAGE_EXTENSIONS):
+            images.append(path)
+        else:
+            ignored += 1
+    return images, ignored
+
+
+def enable_file_drop(root, callback):
+    """用 Windows 的 WM_DROPFILES 接收從檔案總管拖進視窗的檔案（不需要額外套件）。
+
+    callback(paths, screen_x, screen_y)。成功回傳要保留參考的物件，不支援或失敗回傳 None。
+    """
+    if sys.platform != 'win32':
+        return None
+    import ctypes
+    from ctypes import wintypes
+    try:
+        user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
+        WM_DROPFILES, GWL_WNDPROC = 0x0233, -4
+        LRESULT = ctypes.c_ssize_t
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        user32.GetParent.restype = wintypes.HWND
+        user32.GetParent.argtypes = [wintypes.HWND]
+        user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+        user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        user32.CallWindowProcW.restype = LRESULT
+        user32.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        shell32.DragQueryFileW.restype = wintypes.UINT
+        shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+        shell32.DragQueryPoint.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.POINT)]
+        shell32.DragFinish.argtypes = [wintypes.HANDLE]
+        shell32.DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
+        root.update_idletasks()
+        hwnd = user32.GetParent(root.winfo_id()) or root.winfo_id()
+        old_proc = None
+
+        def window_proc(h, msg, wparam, lparam):
+            if msg == WM_DROPFILES:
+                try:
+                    drop = wintypes.HANDLE(wparam)
+                    count = shell32.DragQueryFileW(drop, 0xFFFFFFFF, None, 0)
+                    paths = []
+                    for i in range(count):
+                        buf = ctypes.create_unicode_buffer(shell32.DragQueryFileW(drop, i, None, 0) + 1)
+                        shell32.DragQueryFileW(drop, i, buf, len(buf))
+                        paths.append(buf.value)
+                    point = wintypes.POINT()
+                    shell32.DragQueryPoint(drop, ctypes.byref(point))
+                    client = wintypes.POINT(point.x, point.y)
+                    user32.ClientToScreen(h, ctypes.byref(client))
+                    shell32.DragFinish(drop)
+                    callback(paths, client.x, client.y)
+                except Exception:
+                    logging.exception("處理拖進來的檔案失敗")
+                return 0
+            return user32.CallWindowProcW(old_proc, h, msg, wparam, lparam)
+
+        proc = WNDPROC(window_proc)
+        old_proc = user32.SetWindowLongPtrW(hwnd, GWL_WNDPROC, ctypes.cast(proc, ctypes.c_void_p))
+        if not old_proc:
+            return None
+        shell32.DragAcceptFiles(hwnd, True)
+        return (proc, old_proc)
+    except (AttributeError, OSError, tk.TclError, ctypes.ArgumentError):
+        logging.exception("無法啟用拖曳加入照片")
+        return None
 
 
 def enable_dpi_awareness():

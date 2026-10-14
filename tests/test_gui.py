@@ -1,6 +1,7 @@
 """GUI 流程測試（需要可用的顯示環境）。執行：python -m unittest discover -s tests"""
 import gc
 import os
+import sys
 import tempfile
 import time
 import tkinter as tk
@@ -1770,6 +1771,88 @@ class GuiTest(unittest.TestCase):
     def test_open_file_without_associated_program_does_not_crash(self):
         with mock.patch.object(os, 'startfile', side_effect=OSError('no association'), create=True):
             g.open_file(os.path.join(self.tmp.name, 'x.docx'))  # 沒有 Office 也沒有其他程式可開時，只記錄不報錯
+
+    # ---- 從檔案總管拖曳加入照片
+    def _make_images(self, names):
+        paths = []
+        for n in names:
+            path = os.path.join(self.tmp.name, n)
+            Image.new('RGB', (80, 60), 'blue').save(path)
+            paths.append(path)
+        return paths
+
+    def test_collect_dropped_images_filters_and_expands_folders(self):
+        a, b = self._make_images(['b.JPG', 'a.png'])
+        txt = os.path.join(self.tmp.name, 'note.txt')
+        open(txt, 'w').write('x')
+        folder = os.path.join(self.tmp.name, 'sub')
+        os.mkdir(folder)
+        for n in ('z.jpg', 'm.bmp', 'skip.docx'):
+            open(os.path.join(folder, n), 'wb').write(b'')
+        images, ignored = g.collect_dropped_images([a, txt, folder, b])
+        self.assertEqual(images, [a, os.path.join(folder, 'm.bmp'), os.path.join(folder, 'z.jpg'), b])
+        self.assertEqual(ignored, 1)  # 只有直接拖進來的 note.txt 算略過
+
+    def test_dropping_images_adds_them_to_the_current_category_and_shows_photo_tab(self):
+        files = self._make_images(['p1.jpg', 'p2.png'])
+        self.app.photo_notebook.select(self.app.photo_pages[g.PHOTO_CATEGORIES[2]])
+        self.assertEqual(self.app.handle_dropped_files(files), 2)
+        self.assertEqual(self.app.photo_files[g.PHOTO_CATEGORIES[2]], files)
+        self.assertEqual(self.app.notebook.index(self.app.notebook.select()), self.app.notebook.index(self.app._tab_by_title(g.TAB_PHOTOS)))
+        self.assertEqual(self.app.listboxes[g.PHOTO_CATEGORIES[2]].count(), 2)
+        self.assertEqual(self.app.handle_dropped_files(files), 0)  # 重複不再加入
+        self.assertEqual(len(self.app.photo_files[g.PHOTO_CATEGORIES[2]]), 2)
+        self.assertIn('已加入過', self.app.status_label.cget('text'))
+
+    def test_dropping_non_images_adds_nothing(self):
+        txt = os.path.join(self.tmp.name, 'a.txt')
+        open(txt, 'w').write('x')
+        self.assertEqual(self.app.handle_dropped_files([txt]), 0)
+        self.assertTrue(all(not v for v in self.app.photo_files.values()))
+        self.assertIn('沒有圖片', self.app.status_label.cget('text'))
+
+    def test_dropping_on_a_sub_tab_header_adds_to_that_category(self):
+        files = self._make_images(['q.jpg'])
+        self._show_photos_tab()
+        sub = self.app.photo_notebook
+        target = 3
+        left, right, top, bottom = g.tab_geometry(sub, target)
+        sx, sy = sub.winfo_rootx() + (left + right) // 2, sub.winfo_rooty() + (top + bottom) // 2
+        self.app.handle_dropped_files(files, sx, sy)
+        self.assertEqual(self.app.photo_files[g.PHOTO_CATEGORIES[target]], files)
+        self.assertEqual(self.app._current_photo_category(), g.PHOTO_CATEGORIES[target])
+
+    @unittest.skipUnless(sys.platform == 'win32', '需要 Windows')
+    def test_real_wm_dropfiles_message_adds_photos(self):
+        """用真正的 WM_DROPFILES 訊息（跟檔案總管拖曳時送出的一樣）送進視窗。"""
+        import ctypes
+        from ctypes import wintypes
+        self.assertIsNotNone(self.app._file_drop, '沒有成功啟用拖放')
+        files = self._make_images(['r1.jpg', 'r2.jpg'])
+        payload = ''.join(f + '\0' for f in files) + '\0'
+        data = payload.encode('utf-16-le')
+        header = ctypes.sizeof(ctypes.c_uint32) + 8 + 4 + 4  # DROPFILES：pFiles、POINT、fNC、fWide
+        kernel32, user32 = ctypes.windll.kernel32, ctypes.windll.user32
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        handle = kernel32.GlobalAlloc(0x0002 | 0x0040, header + len(data))
+        ptr = kernel32.GlobalLock(handle)
+        ctypes.memmove(ptr, header.to_bytes(4, 'little'), 4)
+        ctypes.memmove(ptr + 16, (1).to_bytes(4, 'little'), 4)  # fWide = TRUE
+        ctypes.memmove(ptr + header, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        user32.GetParent.restype = wintypes.HWND
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+        self.root.update()
+        hwnd = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+        user32.SendMessageW(hwnd, 0x0233, handle, 0)
+        for _ in range(5):
+            self.root.update()
+        added = [f for cat in g.PHOTO_CATEGORIES for f in self.app.photo_files[cat]]
+        self.assertEqual(sorted(added), sorted(files))
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')

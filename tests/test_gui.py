@@ -22,6 +22,8 @@ def style_lookup(root, style_name, option, state=None):
     return ttk.Style(root).lookup(style_name, option, state or [])
 
 
+_REAL_EXPORT_PDF = g.export_pdf  # setUp 會把 g.export_pdf 換成假的，這裡留一份真的給「沒有 Word」的測試用
+
 class GuiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1728,6 +1730,46 @@ class GuiTest(unittest.TestCase):
             self.app.load_draft()
         self.assertEqual(seen['message'], '載入草稿會覆蓋目前畫面上的內容，確定嗎？')
         self.assertGreaterEqual(seen['size'], 13)
+
+    # ---- 沒有安裝 Word 的電腦：Word 檔照常產生，只是沒有 PDF，且訊息要看得懂
+    def test_pdf_failure_message_when_word_is_not_installed(self):
+        from docx import Document
+        docx = os.path.join(self.tmp.name, 'a.docx')
+        Document().save(docx)
+        with mock.patch.object(g, '_PDF_SCRIPT', g._PDF_SCRIPT.replace('Word.Application', 'Word.ApplicationNotInstalled')):
+            with self.assertRaises(RuntimeError) as ctx:
+                _REAL_EXPORT_PDF(docx, os.path.join(self.tmp.name, 'a.pdf'))
+        message = str(ctx.exception)
+        self.assertIn('找不到 Microsoft Word', message)
+        self.assertNotIn('CLIXML', message)
+        self.assertNotIn('<Objs', message)
+        self.assertTrue(os.path.exists(docx))
+
+    def test_describe_pdf_failure_cleans_powershell_noise(self):
+        noisy = b'#< CLIXML\r\n<Objs Version="1.1.0.1"><Obj S="progress"></Obj></Objs>'
+        self.assertEqual(g._describe_pdf_failure(noisy), 'Word 轉換 PDF 失敗')
+        self.assertIn('找不到 Microsoft Word', g._describe_pdf_failure(b'Retrieving the COM class factory ... 80040154'))
+        self.assertIn('boom', g._describe_pdf_failure('boom'))
+
+    def test_without_word_report_still_generated_and_user_is_told_why(self):
+        self.fill_dates()
+        out = os.path.join(self.tmp.name, 'o.docx')
+
+        def no_word(docx, pdf):
+            raise RuntimeError(g._describe_pdf_failure(b'Retrieving the COM class factory ... 80040154'))
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out),                 mock.patch.object(g, 'export_pdf', no_word),                 mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertTrue(os.path.exists(out))                    # Word 檔照常產生
+        self.assertFalse(os.path.exists(out[:-5] + '.pdf'))     # 沒有 PDF
+        infos = [m for k, m in self.shown if k == 'info']
+        self.assertTrue(any('PDF 未產生' in m and '找不到 Microsoft Word' in m for m in infos), infos)
+        self.assertEqual(str(self.app.generate_btn['state']), 'normal')  # 程式沒有卡住
+
+    def test_open_file_without_associated_program_does_not_crash(self):
+        with mock.patch.object(os, 'startfile', side_effect=OSError('no association'), create=True):
+            g.open_file(os.path.join(self.tmp.name, 'x.docx'))  # 沒有 Office 也沒有其他程式可開時，只記錄不報錯
 
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')

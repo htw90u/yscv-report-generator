@@ -845,8 +845,17 @@ def export_pdf(docx_path, pdf_path, timeout=180):
     except (OSError, subprocess.TimeoutExpired) as e:
         raise RuntimeError(f"無法執行 Word 轉換：{e}")
     if result.returncode != 0 or not os.path.exists(pdf_path):
-        detail = (result.stderr or result.stdout or b'').decode('utf-8', errors='replace').strip()
-        raise RuntimeError(f"Word 轉換 PDF 失敗（是否已安裝 Word？）{detail[:200]}")
+        raise RuntimeError(_describe_pdf_failure(result.stderr or result.stdout or b''))
+
+
+def _describe_pdf_failure(raw):
+    """把 PowerShell 的錯誤輸出整理成使用者看得懂的一句話（沒有 Word 是最常見的原因）。"""
+    text = raw.decode('utf-8', errors='replace') if isinstance(raw, (bytes, bytearray)) else str(raw)
+    if re.search(r'80040154|class not registered|Retrieving the COM class factory|Word\.Application', text, re.I):
+        return "這台電腦找不到 Microsoft Word，無法轉成 PDF（Word 檔已正常產生，可以自己用其他軟體另存 PDF）"
+    cleaned = re.sub(r'#< CLIXML.*', '', text, flags=re.S).strip()  # 去掉 PowerShell 的 XML 進度訊息
+    detail = f"：{cleaned[:160]}" if cleaned else ""
+    return f"Word 轉換 PDF 失敗{detail}"
 
 
 def build_report(template_path, data, photo_files, captions, output_path):

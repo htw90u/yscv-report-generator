@@ -25,7 +25,9 @@ class GuiTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = tk.Tk()
         self.autosave = os.path.join(self.tmp.name, 'autosave.json')
-        self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+        self.settings = os.path.join(self.tmp.name, 'settings.json')
+        self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                      settings_path=self.settings)
         self.app.template_path = TEMPLATE
         self.shown = []
         self.pdf_calls = []
@@ -138,30 +140,20 @@ class GuiTest(unittest.TestCase):
             self._wait_until_done()
         self.assertEqual(opened, [out])
 
-    def test_button_order_and_danger_style(self):
+    def test_button_order_and_styles(self):
         frame = self.app.generate_btn.master
         labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
         self.assertEqual(labels, ['載入草稿', '儲存草稿', '產生報告', '清除', '離開'])
         self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
         self.assertEqual(str(self.app.generate_btn.cget('style')), 'Primary.TButton')
-        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background'), g.PRIMARY_BG)
-        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'foreground'), '#ffffff')
-        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background', ['active']), g.PRIMARY_ACTIVE_BG)
-        pr, pg, pb = (int(g.PRIMARY_BG[i:i + 2], 16) for i in (1, 3, 5))
-        self.assertGreater(pg, pr)  # 綠色：G 最大
-        self.assertGreater(pg, pb)
+        palette = g.THEMES[g.DEFAULT_THEME]
+        for style_name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
+            self.assertEqual(style_lookup(self.root, style_name, 'background'), palette[key])
+            self.assertEqual(style_lookup(self.root, style_name, 'foreground'), palette[f'{key}_fg'])
+            self.assertEqual(style_lookup(self.root, style_name, 'background', ['active']), palette[f'{key}_active'])
         # 離開維持預設灰色，不上色
         leave = [w for w in frame.winfo_children() if isinstance(w, ttk.Button) and w.cget('text') == '離開'][0]
         self.assertIn(str(leave.cget('style')), ('', 'TButton'))
-        style = ttk.Style(self.root)
-        self.assertEqual(style.lookup('Danger.TButton', 'background'), g.DANGER_BG)
-        self.assertEqual(style.lookup('Danger.TButton', 'foreground'), '#ffffff')
-        self.assertEqual(style.lookup('Danger.TButton', 'background', ['active']), g.DANGER_ACTIVE_BG)
-        # 紅色是明顯的紅（R 高、G/B 低）
-        r, gg, b = (int(g.DANGER_BG[i:i + 2], 16) for i in (1, 3, 5))
-        self.assertGreater(r, 180)
-        self.assertLess(gg, 80)
-        self.assertLess(b, 80)
 
     def test_open_file_failure_does_not_raise(self):
         with mock.patch.object(os, 'startfile', side_effect=OSError('boom'), create=True):
@@ -345,7 +337,8 @@ class GuiTest(unittest.TestCase):
         # 模擬程式當機後重開：新的 app 實例
         self.root.destroy()
         self.root = tk.Tk()
-        app2 = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+        app2 = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                      settings_path=self.settings)
         with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
             app2.offer_restore()
         self.assertEqual(app2.personnel.get(), '王小明')
@@ -549,7 +542,8 @@ class GuiTest(unittest.TestCase):
         self.root.destroy()
         self.root = tk.Tk()
         with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14, 9, 30)):
-            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                      settings_path=self.settings)
         self.assertEqual((self.app.year.get(), self.app.month.get(), self.app.day.get()), ('115', '10', '14'))
         labels = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
         self.assertIn('1. 填表日期:', labels)
@@ -608,7 +602,8 @@ class GuiTest(unittest.TestCase):
         self.root.destroy()
         self.root = tk.Tk()
         with mock.patch.object(g, 'current_date', lambda: dt.datetime(2026, 10, 14)):
-            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
+            self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                      settings_path=self.settings)
         for e, v in [(self.app.start_year, '115'), (self.app.start_month, '10'), (self.app.start_day, '8'),
                      (self.app.end_year, '115'), (self.app.end_month, '10'), (self.app.end_day, '11')]:
             e.insert(0, v)
@@ -664,6 +659,110 @@ class GuiTest(unittest.TestCase):
         _, saved_message, _ = self._clear_with_answer(False)[0]
         self.assertNotIn('尚未儲存', saved_message)
 
+    # ---- 外觀主題
+    @staticmethod
+    def _luminance(color):
+        def channel(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, gr, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+        return 0.2126 * channel(r) + 0.7152 * channel(gr) + 0.0722 * channel(b)
+
+    def _contrast(self, fg, bg):
+        hi, lo = sorted((self._luminance(fg), self._luminance(bg)), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def test_themes_available(self):
+        self.assertEqual(set(g.THEMES), {'柔和淺色', '色弱友善', '高對比'})
+        self.assertIn(g.DEFAULT_THEME, g.THEMES)
+        self.assertEqual(tuple(self.app.theme_box.cget('values')), tuple(g.THEMES))
+        self.assertEqual(self.app.theme_var.get(), g.DEFAULT_THEME)
+
+    def test_every_theme_text_is_readable_wcag_aa(self):
+        for name, p in g.THEMES.items():
+            pairs = [('primary', p['primary_fg'], p['primary']), ('danger', p['danger_fg'], p['danger']),
+                     ('active tab', p['tab_active_fg'], p['tab_active']), ('idle tab', p['tab_idle_fg'], p['tab_idle']),
+                     ('primary hover', p['primary_fg'], p['primary_active']), ('danger hover', p['danger_fg'], p['danger_active'])]
+            for label, fg, bg in pairs:
+                with self.subTest(theme=name, item=label):
+                    self.assertGreaterEqual(self._contrast(fg, bg), 4.5)
+
+    def test_default_theme_colors_are_light(self):
+        p = g.THEMES[g.DEFAULT_THEME]
+        for key in ('bg', 'tab_idle', 'tab_active', 'primary', 'danger'):
+            with self.subTest(key=key):
+                self.assertGreater(self._luminance(p[key]), 0.5)  # 淺色，不是濃重的底色
+
+    def test_colorblind_theme_avoids_red_green_pair(self):
+        p = g.THEMES['色弱友善']
+        pr = [int(p['primary_border'][i:i + 2], 16) for i in (1, 3, 5)]
+        dg = [int(p['danger_border'][i:i + 2], 16) for i in (1, 3, 5)]
+        self.assertGreater(pr[2], pr[0])   # 主要按鈕：藍色（B 大於 R）
+        self.assertGreater(pr[2], pr[1])
+        self.assertGreater(dg[0], dg[2])   # 危險按鈕：橘色（R 大於 B，且不是綠色）
+        self.assertGreater(dg[0], dg[1])
+        self.assertGreater(dg[1], dg[2])
+        self.assertNotEqual(p['primary'], p['danger'])
+
+    def test_apply_theme_changes_styles_and_widgets_and_is_remembered(self):
+        import json
+        self.app.apply_theme('色弱友善')
+        p = g.THEMES['色弱友善']
+        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background'), p['primary'])
+        self.assertEqual(style_lookup(self.root, 'Danger.TButton', 'background'), p['danger'])
+        self.assertEqual(style_lookup(self.root, 'TNotebook.Tab', 'background', ['selected']), p['tab_active'])
+        self.assertEqual(str(self.root.cget('background')), p['bg'])
+        canvases = [w for w in self._all_widgets(self.root) if isinstance(w, tk.Canvas)]
+        self.assertTrue(canvases)
+        self.assertTrue(all(str(c.cget('background')) == p['bg'] for c in canvases))
+        with open(self.settings, encoding='utf-8') as f:
+            self.assertEqual(json.load(f), {'theme': '色弱友善'})
+        # 重新開啟時沿用上次選的主題
+        self.root.destroy()
+        self.root = tk.Tk()
+        self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                        settings_path=self.settings)
+        self.assertEqual(self.app.theme_name, '色弱友善')
+        self.assertEqual(self.app.theme_var.get(), '色弱友善')
+        self.assertEqual(style_lookup(self.root, 'Primary.TButton', 'background'), p['primary'])
+
+    def test_theme_combobox_selection_applies_theme(self):
+        self.app.theme_var.set('高對比')
+        self.app.theme_box.event_generate('<<ComboboxSelected>>')
+        self.root.update()
+        self.assertEqual(self.app.theme_name, '高對比')
+        self.assertEqual(style_lookup(self.root, 'Danger.TButton', 'background'), g.THEMES['高對比']['danger'])
+
+    def test_unknown_or_broken_settings_fall_back_to_default(self):
+        for content in ('{ broken', '{"theme": "不存在"}', '[]'):
+            with open(self.settings, 'w', encoding='utf-8') as f:
+                f.write(content)
+            self.assertEqual(self.app._load_theme_setting(), g.DEFAULT_THEME, content)
+        os.remove(self.settings)
+        self.assertEqual(self.app._load_theme_setting(), g.DEFAULT_THEME)
+        self.app.apply_theme('不存在')  # 無效名稱不處理
+        self.assertEqual(self.app.theme_name, g.DEFAULT_THEME)
+
+    def test_switching_theme_does_not_make_form_dirty(self):
+        self.app.apply_theme('高對比')
+        self.assertFalse(self.app.is_dirty())
+
+    # ---- 日期欄位間距
+    def test_date_row_spacing_is_symmetric_and_widths_equal(self):
+        self.root.update()
+        for prefix in ('', 'start_', 'end_'):
+            self.assertEqual(self.app.__dict__[f'{prefix}year'].winfo_width(), self.app.year.winfo_width())
+            self.assertEqual(self.app.__dict__[f'{prefix}month'].winfo_width(), self.app.month.winfo_width())
+            self.assertEqual(self.app.__dict__[f'{prefix}day'].winfo_width(), self.app.day.winfo_width())
+        frame = self.app.start_year.master
+        for label in [w for w in frame.winfo_children() if isinstance(w, ttk.Label)]:
+            padx = label.pack_info()['padx']
+            left, right = (padx if isinstance(padx, tuple) else (padx, padx))
+            with self.subTest(label=label.cget('text')):
+                self.assertEqual(int(left), int(right))  # 單位字前後間距相同
+        texts = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Label)]
+        self.assertEqual(texts, ['年', '月', '日', '至', '年', '月', '日'])  # 「至」是獨立的一個字，不再和「日」黏在一起
+
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')
         self.assertEqual(self.root.title(), '玉山保育巡查回報單生成器')
@@ -705,10 +804,11 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(style.theme_use(), 'clam')
         active = style.lookup('TNotebook.Tab', 'background', ['selected'])
         idle = style.lookup('TNotebook.Tab', 'background', [])
-        self.assertEqual(active, g.TAB_ACTIVE_BG)
-        self.assertEqual(idle, g.TAB_IDLE_BG)
+        palette = g.THEMES[g.DEFAULT_THEME]
+        self.assertEqual(active, palette['tab_active'])
+        self.assertEqual(idle, palette['tab_idle'])
         self.assertNotEqual(active, idle)
-        self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ['selected']), '#ffffff')
+        self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ['selected']), palette['tab_active_fg'])
         self.assertGreaterEqual(int(style.lookup('TNotebook.Tab', 'borderwidth')), 2)
 
     def test_old_draft_without_default_caption_uses_default(self):

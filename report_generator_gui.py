@@ -65,14 +65,33 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
 
 DEFAULT_CAPTION = ''  # 照片沒有填說明時，文件中顯示的預設字樣（預設空白，可在照片分頁修改）
 LEGACY_DEFAULT_CAPTION = '[照片說明]'  # 舊版預設值；載入舊草稿時視為「沒改過」，改成空白
-PANEL_BG = '#f3f4f6'      # 表單背景
-TAB_ACTIVE_BG = '#1d4ed8'  # 目前分頁的底色
-TAB_IDLE_BG = '#d5dae3'    # 其他分頁的底色
-TAB_BORDER = '#8b95a7'
-PRIMARY_BG = '#15803d'        # 「產生報告」按鈕的綠色
-PRIMARY_ACTIVE_BG = '#166534'
-DANGER_BG = '#dc2626'         # 「清除」按鈕的紅色
-DANGER_ACTIVE_BG = '#b91c1c'
+# 外觀主題。每個主題：表單背景、分頁（閒置/目前/滑過）、主要按鈕（產生報告）、危險按鈕（清除）。
+# 主要與危險按鈕都是「淺底深字」，文字與底色的對比度都達到 WCAG AA（4.5:1 以上）。
+THEMES = {
+    '柔和淺色': dict(
+        bg='#f6f8fb', border='#b5c0d0',
+        tab_idle='#e6ecf4', tab_idle_fg='#475569', tab_hover='#d9e3f1',
+        tab_active='#cfe0fb', tab_active_fg='#1e3a8a',
+        primary='#cdeedd', primary_fg='#14532d', primary_active='#b4e3c9', primary_border='#6fbf96',
+        danger='#fde2e2', danger_fg='#991b1b', danger_active='#fbc9c9', danger_border='#e89a9a'),
+    # 色弱友善：避開紅綠搭配，改用藍色（主要）與橘色（危險），取自 Okabe-Ito 色盲友善色盤
+    '色弱友善': dict(
+        bg='#f7f7f5', border='#a8a29e',
+        tab_idle='#ececea', tab_idle_fg='#44403c', tab_hover='#e0e0dd',
+        tab_active='#cfe6f5', tab_active_fg='#003a5c',
+        primary='#b8dcf2', primary_fg='#00314d', primary_active='#9fd0ee', primary_border='#0072B2',
+        danger='#fbdcc0', danger_fg='#6b2d00', danger_active='#f6c79d', danger_border='#D55E00'),
+    '高對比': dict(
+        bg='#ffffff', border='#000000',
+        tab_idle='#ffffff', tab_idle_fg='#000000', tab_hover='#e5e5e5',
+        tab_active='#000000', tab_active_fg='#ffffff',
+        primary='#0b3d91', primary_fg='#ffffff', primary_active='#082a66', primary_border='#000000',
+        danger='#b34700', danger_fg='#ffffff', danger_active='#8a3700', danger_border='#000000'),
+}
+DEFAULT_THEME = '柔和淺色'
+DEFAULT_SETTINGS_PATH = os.path.join(BASE_DIR, 'report_generator_settings.json')
+DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
+DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
 TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
 PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
@@ -897,10 +916,14 @@ def scale_gui_fonts(root, delta, family=None):
 
 class ReportGeneratorGUI:
     def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
-                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=TEMPLATE_PATH):
+                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=TEMPLATE_PATH,
+                 settings_path=DEFAULT_SETTINGS_PATH):
         self.root = root
+        self.settings_path = settings_path
         self.font_family = pick_font_family(root)
         scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family)
+        self.theme_name = self._load_theme_setting()
+        self.palette = THEMES[self.theme_name]
         self._setup_style()
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
@@ -936,30 +959,64 @@ class ReportGeneratorGUI:
     def _missing_template_message(self):
         return f"找不到模板檔案：\n{self.template_path}\n\n請確認它和程式放在同一個資料夾。"
 
+    def _load_theme_setting(self):
+        try:
+            with open(self.settings_path, encoding='utf-8') as f:
+                name = json.load(f).get('theme')
+        except (OSError, ValueError, AttributeError):
+            return DEFAULT_THEME
+        return name if name in THEMES else DEFAULT_THEME
+
+    def _save_theme_setting(self):
+        try:
+            with open(self.settings_path, 'w', encoding='utf-8') as f:
+                json.dump({'theme': self.theme_name}, f, ensure_ascii=False)
+        except OSError as e:
+            logging.error(f"無法儲存外觀設定: {e}")
+
     def _setup_style(self):
-        """分頁做成一個一個明顯分開的標籤：目前分頁藍底白字，其他分頁灰底，並有邊框與間距。"""
+        """依目前主題設定外觀：分頁是一個個分開的標籤（目前分頁較突出），按鈕採淺底深字。"""
+        p = self.palette
         style = ttk.Style(self.root)
         style.theme_use('clam')
-        self.root.configure(background=PANEL_BG)
-        style.configure('.', background=PANEL_BG)
-        style.configure('TNotebook', background=PANEL_BG, bordercolor=TAB_BORDER, lightcolor=TAB_BORDER,
-                        darkcolor=TAB_BORDER, borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
-        style.configure('TNotebook.Tab', padding=TAB_PADDING, background=TAB_IDLE_BG, foreground='#1f2937',
-                        bordercolor=TAB_BORDER, lightcolor=TAB_BORDER, darkcolor=TAB_BORDER, borderwidth=2)
-        style.configure('Danger.TButton', background=DANGER_BG, foreground='#ffffff', bordercolor='#991b1b',
-                        lightcolor=DANGER_BG, darkcolor=DANGER_BG)
-        style.configure('Primary.TButton', background=PRIMARY_BG, foreground='#ffffff', bordercolor='#14532d',
-                        lightcolor=PRIMARY_BG, darkcolor=PRIMARY_BG)
-        style.map('Primary.TButton', background=[('active', PRIMARY_ACTIVE_BG), ('pressed', PRIMARY_ACTIVE_BG),
-                                                 ('disabled', '#9ca3af')],
-                  foreground=[('active', '#ffffff'), ('pressed', '#ffffff'), ('disabled', '#f3f4f6')])
-        style.map('Danger.TButton', background=[('active', DANGER_ACTIVE_BG), ('pressed', DANGER_ACTIVE_BG)],
-                  foreground=[('active', '#ffffff'), ('pressed', '#ffffff')])
+        self.root.configure(background=p['bg'])
+        style.configure('.', background=p['bg'])
+        style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
+                        darkcolor=p['border'], borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
+        style.configure('TNotebook.Tab', padding=TAB_PADDING, background=p['tab_idle'], foreground=p['tab_idle_fg'],
+                        bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'], borderwidth=2)
         style.map('TNotebook.Tab',
-                  background=[('selected', TAB_ACTIVE_BG), ('active', '#b9c6e4')],
-                  foreground=[('selected', '#ffffff')],
+                  background=[('selected', p['tab_active']), ('active', p['tab_hover'])],
+                  foreground=[('selected', p['tab_active_fg'])],
                   padding=[('selected', TAB_PADDING_ACTIVE)],
                   expand=[('selected', (0, 0, 0, 0))])
+        for name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
+            fill, fg = p[key], p[f'{key}_fg']
+            style.configure(name, background=fill, foreground=fg, bordercolor=p[f'{key}_border'],
+                            lightcolor=fill, darkcolor=fill)
+            style.map(name, background=[('disabled', '#e5e7eb'), ('active', p[f'{key}_active']),
+                                        ('pressed', p[f'{key}_active'])],
+                      foreground=[('disabled', '#9ca3af'), ('active', fg), ('pressed', fg)])
+
+    def apply_theme(self, name):
+        """切換外觀主題並記住選擇。"""
+        if name not in THEMES:
+            return
+        self.theme_name = name
+        self.palette = THEMES[name]
+        self._setup_style()
+        self._recolor(self.root)
+        self._save_theme_setting()
+        if hasattr(self, 'theme_var'):
+            self.theme_var.set(name)
+        self.status_label.config(text=f"已套用外觀：{name}")
+
+    def _recolor(self, widget):
+        """ttk 元件會自動跟著樣式變色；原生 tk 的容器（Canvas/Frame/Label）要手動換底色。"""
+        for child in widget.winfo_children():
+            if child.winfo_class() in ('Canvas', 'Frame', 'Label'):
+                child.configure(background=self.palette['bg'])
+            self._recolor(child)
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -1016,14 +1073,23 @@ class ReportGeneratorGUI:
 
         row += 1
         self.status_label = ttk.Label(main_frame, text="準備就緒", relief=tk.SUNKEN)
-        self.status_label.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E))
+        self.status_label.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E))
+        theme_frame = ttk.Frame(main_frame)
+        theme_frame.grid(row=row, column=2, sticky=tk.E, padx=(10, 0))
+        ttk.Label(theme_frame, text="外觀：").pack(side=tk.LEFT)
+        self.theme_var = tk.StringVar(master=self.root, value=self.theme_name)
+        theme_box = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=list(THEMES),
+                                 state='readonly', width=9)
+        theme_box.pack(side=tk.LEFT)
+        theme_box.bind('<<ComboboxSelected>>', lambda e: self.apply_theme(self.theme_var.get()))
+        self.theme_box = theme_box
 
     # ---- 共用：可捲動分頁
     def make_scrollable_tab(self, notebook, title):
         frame = ttk.Frame(notebook, padding="10")
         notebook.add(frame, text=title)
 
-        canvas = tk.Canvas(frame, highlightthickness=0, background=PANEL_BG)
+        canvas = tk.Canvas(frame, highlightthickness=0, background=self.palette['bg'])
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
 
@@ -1055,25 +1121,19 @@ class ReportGeneratorGUI:
         notebook.add(frame, text="基本資料")
         frame.columnconfigure(1, weight=1)
 
-        def date_entries(parent, prefix, last_label):
-            y = ttk.Entry(parent, width=8, justify=tk.CENTER)
-            y.pack(side=tk.LEFT)
-            ttk.Label(parent, text="年").pack(side=tk.LEFT, padx=2)
-            m = ttk.Entry(parent, width=5, justify=tk.CENTER)
-            m.pack(side=tk.LEFT)
-            ttk.Label(parent, text="月").pack(side=tk.LEFT, padx=2)
-            d = ttk.Entry(parent, width=5, justify=tk.CENTER)
-            d.pack(side=tk.LEFT)
-            ttk.Label(parent, text=last_label).pack(side=tk.LEFT, padx=2 if last_label == "日" else 5)
-            setattr(self, f'{prefix}year', y)
-            setattr(self, f'{prefix}month', m)
-            setattr(self, f'{prefix}day', d)
+        def date_entries(parent, prefix):
+            """年/月/日輸入框；每個單位字前後的間距相同（左右各 4 像素），起迄兩組看起來一樣寬。"""
+            for key, unit, width in (('year', '年', 8), ('month', '月', 5), ('day', '日', 5)):
+                entry = ttk.Entry(parent, width=width, justify=tk.CENTER)
+                entry.pack(side=tk.LEFT)
+                ttk.Label(parent, text=unit).pack(side=tk.LEFT, padx=DATE_UNIT_PADX)
+                setattr(self, f'{prefix}{key}', entry)
 
         row = 0
         ttk.Label(frame, text="1. 填表日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
-        date_entries(date_frame, '', "日")
+        date_entries(date_frame, '')
 
         row += 1
         ttk.Label(frame, text="2. 協勤人員姓名:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
@@ -1084,8 +1144,9 @@ class ReportGeneratorGUI:
         ttk.Label(frame, text="3. 協勤日期:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_range_frame = ttk.Frame(frame)
         date_range_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
-        date_entries(date_range_frame, 'start_', "日 至")
-        date_entries(date_range_frame, 'end_', "日")
+        date_entries(date_range_frame, 'start_')
+        ttk.Label(date_range_frame, text="至").pack(side=tk.LEFT, padx=DATE_RANGE_PADX)
+        date_entries(date_range_frame, 'end_')
 
         row += 1
         ttk.Label(frame, text="4. 協勤地點:", font=(self.font_family, 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)

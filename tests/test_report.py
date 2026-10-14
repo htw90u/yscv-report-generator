@@ -41,7 +41,7 @@ class BuildReportTest(unittest.TestCase):
         data.update(year='115', month='10', day='12', personnel='王小明', start_year='115',
                     start_month='10', start_day='10', end_year='115', end_month='10', end_day='11',
                     location='排雲山莊')
-        photos = {c: [] for c in g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2}
+        photos = {c: [] for c in g.PHOTO_CATEGORIES}
         photos['道路、步道狀況及維護情形'] = [cls.p1, cls.p2, cls.p3]
         photos['其他'] = [cls.p4]
         caps = {'道路、步道狀況及維護情形': {cls.p1: '自訂說明A'}}
@@ -68,7 +68,7 @@ class BuildReportTest(unittest.TestCase):
 
     def test_default_caption_text_is_configurable(self):
         with tempfile.TemporaryDirectory() as d:
-            photos = {c: [] for c in g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2}
+            photos = {c: [] for c in g.PHOTO_CATEGORIES}
             photos['其他'] = [self.p1]
             data = {k: '' for k in g.FIELD_NAMES}
             data.update(year='1', month='1', day='1', start_year='1', start_month='1', start_day='1',
@@ -164,7 +164,7 @@ class PrepareImageTest(unittest.TestCase):
         data = {k: '' for k in g.FIELD_NAMES}
         data.update(year='1', month='1', day='1', start_year='1', start_month='1', start_day='1',
                     end_year='1', end_month='1', end_day='1', personnel='', location='')
-        photos = {c: [] for c in g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2}
+        photos = {c: [] for c in g.PHOTO_CATEGORIES}
         photos['其他'] = [p, p]
         out = os.path.join(self.tmp.name, 'o.docx')
         g.build_report(TEMPLATE, data, photos, {}, out)

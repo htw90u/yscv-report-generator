@@ -35,11 +35,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
-GUI_FONT_WEIGHT = 'bold'  # 介面字型粗細：'bold'（粗體）或 'normal'（一般）
-# 介面字型：霞鶩文楷等寬 TC（SIL OFL 授權，字型檔放在 fonts/ 資料夾，執行時私下載入、不安裝到系統）
+GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細：'normal'（一般）或 'bold'。Chocolate 只有 Regular 字重，'bold' 會是電腦模擬的粗體
+# 介面字型：巧克力黑體 Chocolate Classical Sans（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
-FONT_FILES = ('LXGWWenKaiMonoTC-Regular.ttf', 'LXGWWenKaiMonoTC-Bold.ttf')
-FONT_FAMILY = 'LXGW WenKai Mono TC'
+FONT_FILES = ('ChocolateClassicalSans-Regular.ttf',)
+FONT_LICENSE = 'OFL-ChocolateClassicalSans.txt'
+FONT_FAMILY = 'Chocolate Classical Sans'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
 LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
 logging.basicConfig(
@@ -110,8 +111,15 @@ CAPTION_PAD = 0.08
 MIN_PHOTO_SCALE = 0.8   # 為了排滿整頁，照片最多等比例縮小到 80%
 PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成多出一頁
 
-PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況', '環境清理及遊客宣導情形']
-PHOTO_CATEGORIES_2 = ['遊客違法情形', '其他']
+# 產生 Word 時照片章節的順序（與畫面上放在哪個分頁無關）
+PHOTO_CATEGORIES = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況',
+                    '環境清理及遊客宣導情形', '遊客違法情形', '其他']
+# 畫面上的分頁分組（只影響介面的排列，不影響 Word 順序）
+PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '環境清理及遊客宣導情形']  # 服勤照片(上)
+PHOTO_CATEGORIES_2 = ['自然資源狀況', '遊客違法情形', '其他']  # 服勤照片(下)
+PHOTO_TAB_TITLES = ("服勤照片(上)", "服勤照片(下)")
+PHOTO_LIST_ROWS = 5          # 照片清單預設顯示的列數
+PHOTO_LIST_ROWS_COMPACT = 3  # 螢幕高度不夠時改用的列數
 
 # 模板中「標籤後面接內容」的欄位：(標籤文字, 資料 key)
 FILL_LABELS = [
@@ -826,6 +834,17 @@ def build_report(template_path, data, photo_files, captions, output_path):
     return warnings
 
 
+BEVEL_LIGHT = '#ffffff'   # 按鈕左上亮邊
+BEVEL_DARK_RATIO = 0.25   # 按鈕右下暗邊 = 底色混入 25% 黑色
+
+
+def mix_color(color, other, ratio):
+    """把 color 往 other 混合 ratio（0~1），回傳 #rrggbb。"""
+    a = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
+    return '#' + ''.join(f'{round(x + (y - x) * ratio):02x}' for x, y in zip(a, b))
+
+
 def move_item(seq, src, dst):
     """把 seq[src] 移到 dst 的位置（原地修改），其餘順序不變。"""
     seq.insert(dst, seq.pop(src))
@@ -935,10 +954,11 @@ class ReportGeneratorGUI:
         self.root.geometry("1050x820")
 
         self.template_path = template_path
-        self.photo_files = {c: [] for c in PHOTO_CATEGORIES_1 + PHOTO_CATEGORIES_2}
+        self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
+        self._scroll_tabs = {}  # 分頁標題 -> (canvas, 內容框)
         self.previews = {}   # category -> PhotoPreview（同一個分頁的分類共用）
         self._drag = None    # 拖曳排序中：[分類, 目前索引]
         self.text_fields = {}
@@ -956,8 +976,54 @@ class ReportGeneratorGUI:
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
         if restore_on_start:
             self.root.after(300, self.offer_restore)
+        self._fit_window_height()
         if not os.path.exists(self.template_path):
             self.root.after(200, lambda: messagebox.showerror("錯誤", self._missing_template_message()))
+
+    def _photo_tabs_extra_height(self):
+        """服勤照片兩個分頁的內容比可視區域高出多少像素（0 表示放得下）。"""
+        current = self.notebook.select()
+        extra = 0
+        for title in PHOTO_TAB_TITLES:
+            canvas, inner, _ = self._scroll_tabs[title]
+            self.notebook.select(self._tab_by_title(title))
+            self.root.update_idletasks()
+            extra = max(extra, inner.winfo_reqheight() - canvas.winfo_height())
+        self.notebook.select(current)
+        return max(0, extra)
+
+    def _grow_window(self, extra):
+        """把視窗加高 extra 像素（最多到螢幕允許的高度），回傳還差多少。"""
+        root = self.root
+        available = max(0, root.winfo_screenheight() - 90 - root.winfo_height())
+        grow = min(extra + 6, available)
+        if grow > 0:
+            height = root.winfo_height() + grow
+            top = max(0, min(root.winfo_y(), root.winfo_screenheight() - height - 90))
+            root.geometry(f"{root.winfo_width()}x{height}+{root.winfo_x()}+{top}")
+            root.update_idletasks()
+        return max(0, extra - grow)
+
+    def _fit_window_height(self):
+        """讓「服勤照片」兩個分頁預設不需要捲動：先把視窗加高；螢幕不夠高時，再把照片清單縮成 3 列。"""
+        self.root.update()
+        extra = self._photo_tabs_extra_height()
+        if extra > 0:
+            self._grow_window(extra)
+            extra = self._photo_tabs_extra_height()
+        if extra > 0:  # 螢幕高度不夠：縮小每個照片清單的列數，省下空間
+            for listbox in self.listboxes.values():
+                listbox.configure(height=PHOTO_LIST_ROWS_COMPACT)
+            self.root.update_idletasks()
+            extra = self._photo_tabs_extra_height()
+            if extra > 0:
+                self._grow_window(extra)
+
+    def _tab_by_title(self, title):
+        for tab in self.notebook.tabs():
+            if self.notebook.tab(tab, 'text') == title:
+                return tab
+        raise KeyError(title)
 
     def _missing_template_message(self):
         return f"找不到模板檔案：\n{self.template_path}\n\n請確認它和程式放在同一個資料夾。"
@@ -996,7 +1062,7 @@ class ReportGeneratorGUI:
         for name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
             fill, fg = p[key], p[f'{key}_fg']
             style.configure(name, background=fill, foreground=fg, bordercolor=p[f'{key}_border'],
-                            lightcolor=fill, darkcolor=fill)
+                            lightcolor=BEVEL_LIGHT, darkcolor=mix_color(fill, '#000000', BEVEL_DARK_RATIO))
             style.map(name, background=[('disabled', '#e5e7eb'), ('active', p[f'{key}_active']),
                                         ('pressed', p[f'{key}_active'])],
                       foreground=[('disabled', '#9ca3af'), ('active', fg), ('pressed', fg)])
@@ -1058,8 +1124,9 @@ class ReportGeneratorGUI:
             ("七、協勤心得與建議：", "reflection"),
             ("八、相關疑問與解答：（將服勤期間相關疑問，以及透過職員或其他志工尋得之答案記錄下來）", "questions"),
         ], height=6)
-        self.create_photo_tab(notebook, "服勤照片(上)", "九、服勤照片", PHOTO_CATEGORIES_1)
-        self.create_photo_tab(notebook, "服勤照片(下)", "九、服勤照片（續）", PHOTO_CATEGORIES_2)
+        self.create_photo_tab(notebook, PHOTO_TAB_TITLES[0], "九、服勤照片", PHOTO_CATEGORIES_1)
+        self.create_photo_tab(notebook, PHOTO_TAB_TITLES[1], "九、服勤照片（續）", PHOTO_CATEGORIES_2)
+        self.notebook = notebook
 
         row += 1
         button_frame = ttk.Frame(main_frame)
@@ -1088,6 +1155,16 @@ class ReportGeneratorGUI:
         self.theme_box = theme_box
 
     # ---- 共用：可捲動分頁
+    @staticmethod
+    def _update_scrollbar(canvas, scrollbar, lo, hi):
+        """內容放得下就把捲動軸藏起來，放不下才顯示。"""
+        scrollbar.set(lo, hi)
+        fits = float(lo) <= 0.0 and float(hi) >= 1.0
+        if fits and scrollbar.winfo_manager():
+            scrollbar.pack_forget()
+        elif not fits and not scrollbar.winfo_manager():
+            scrollbar.pack(side="right", fill="y", before=canvas)
+
     def make_scrollable_tab(self, notebook, title):
         frame = ttk.Frame(notebook, padding="10")
         notebook.add(frame, text=title)
@@ -1097,9 +1174,10 @@ class ReportGeneratorGUI:
         inner = ttk.Frame(canvas)
 
         window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        self._scroll_tabs[title] = (canvas, inner, scrollbar)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
-        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.configure(yscrollcommand=lambda lo, hi: self._update_scrollbar(canvas, scrollbar, lo, hi))
 
         def on_wheel(event):
             # 文字框/清單自己有捲動，不要連帶捲動分頁
@@ -1250,7 +1328,7 @@ class ReportGeneratorGUI:
             list_frame.grid(row=row + 1, column=0, sticky=(tk.W, tk.E), padx=20)
             list_frame.columnconfigure(0, weight=1)
 
-            listbox = tk.Listbox(list_frame, height=5, selectmode=tk.EXTENDED, exportselection=False)
+            listbox = tk.Listbox(list_frame, height=PHOTO_LIST_ROWS, selectmode=tk.EXTENDED, exportselection=False)
             listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
             scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
             scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))

@@ -763,6 +763,151 @@ class GuiTest(unittest.TestCase):
         texts = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Label)]
         self.assertEqual(texts, ['年', '月', '日', '至', '年', '月', '日'])  # 「至」是獨立的一個字，不再和「日」黏在一起
 
+    # ---- 照片分頁分組與視窗高度
+    def test_natural_resources_moved_to_second_photo_tab(self):
+        nature = '自然資源狀況'
+        self.assertNotIn(nature, g.PHOTO_CATEGORIES_1)
+        self.assertIn(nature, g.PHOTO_CATEGORIES_2)
+        first = self.app.previews[g.PHOTO_CATEGORIES_1[0]]
+        self.assertIsNot(self.app.previews[nature], first)
+        # 實際畫面：「自然資源狀況」的清單在「服勤照片(下)」分頁裡
+        tab = self.app._tab_by_title('服勤照片(下)')
+        self.assertTrue(str(self.app.listboxes[nature]).startswith(tab))
+        tab_up = self.app._tab_by_title('服勤照片(上)')
+        self.assertFalse(str(self.app.listboxes[nature]).startswith(tab_up))
+
+    def test_word_order_does_not_depend_on_tab_grouping(self):
+        self.assertEqual(list(self.app.photo_files), g.PHOTO_CATEGORIES)
+        self.assertEqual(g.PHOTO_CATEGORIES.index('自然資源狀況'), 2)  # 仍在「設施」之後、「環境清理」之前
+        self.assertEqual(sorted(g.PHOTO_CATEGORIES), sorted(g.PHOTO_CATEGORIES_1 + g.PHOTO_CATEGORIES_2))
+        self.assertEqual(len(set(g.PHOTO_CATEGORIES_1) & set(g.PHOTO_CATEGORIES_2)), 0)
+
+    def test_report_keeps_original_chapter_order(self):
+        import glob
+        self.fill_dates()
+        paths = {}
+        for i, cat in enumerate(g.PHOTO_CATEGORIES):
+            p = os.path.join(self.tmp.name, f'c{i}.jpg')
+            Image.new('RGB', (400, 300), 'red').save(p)
+            self.app.photo_files[cat].append(p)
+            paths[cat] = p
+        data, err = self.app.collect_data()
+        self.assertIsNone(err)
+        out = os.path.join(self.tmp.name, 'o.docx')
+        g.build_report(TEMPLATE, data, {c: list(v) for c, v in self.app.photo_files.items()}, {}, out)
+        heads = []
+        for table in Document(out).tables[1:]:
+            for row in table.rows:
+                text = row.cells[0].text.strip()
+                if text in g.PHOTO_CATEGORIES and (not heads or heads[-1] != text):
+                    heads.append(text)
+        self.assertEqual(heads, g.PHOTO_CATEGORIES)
+
+    def test_draft_roundtrip_with_moved_category(self):
+        cat = '自然資源狀況'
+        lb = self.app.listboxes[cat]
+        p = os.path.join(self.tmp.name, 'n.jpg')
+        Image.new('RGB', (30, 20)).save(p)
+        self.app.photo_files[cat].append(p)
+        lb.insert(tk.END, 'n.jpg')
+        draft = os.path.join(self.tmp.name, 'd.json')
+        self._save_draft_to(draft)
+        self.app.clear_photos(cat, lb)
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.photo_files[cat], [p])
+        self.assertEqual(lb.size(), 1)
+
+    def test_photo_tabs_fit_without_scrollbar_when_screen_is_tall_enough(self):
+        nb = self.app.notebook
+        for title in g.PHOTO_TAB_TITLES:
+            canvas, inner, scrollbar = self.app._scroll_tabs[title]
+            nb.select(self.app._tab_by_title(title))
+            self.root.update()
+            needed = inner.winfo_reqheight()
+            if self.root.winfo_height() >= self.root.winfo_screenheight() - 100:
+                self.skipTest('螢幕高度不足，視窗已受限於螢幕')
+            with self.subTest(tab=title):
+                self.assertLessEqual(needed, canvas.winfo_height(), f'{title} 需要 {needed}px，可視高度只有 {canvas.winfo_height()}px')
+                self.assertEqual(scrollbar.winfo_manager(), '', f'{title} 不需要捲動，捲動軸應該隱藏')
+
+    def test_scrollbar_appears_only_when_content_does_not_fit(self):
+        nb = self.app.notebook
+        title = '服勤照片(上)'
+        canvas, inner, scrollbar = self.app._scroll_tabs[title]
+        nb.select(self.app._tab_by_title(title))
+        self.root.update()
+        original = self.root.winfo_height()
+        try:
+            self.root.geometry(f'{self.root.winfo_width()}x{max(400, original - 400)}')  # 縮矮視窗 -> 放不下
+            self.root.update()
+            self.assertNotEqual(scrollbar.winfo_manager(), '', '內容放不下時要顯示捲動軸')
+            self.root.geometry(f'{self.root.winfo_width()}x{original}')  # 還原 -> 放得下
+            self.root.update()
+            self.assertEqual(scrollbar.winfo_manager(), '', '內容放得下時要隱藏捲動軸')
+        finally:
+            self.root.geometry(f'{self.root.winfo_width()}x{original}')
+
+    def test_short_screen_falls_back_to_compact_photo_lists(self):
+        """螢幕不夠高、視窗加高也放不下時，改把照片清單縮成 3 列，讓兩個照片分頁仍然不需要捲動。"""
+        for listbox in self.app.listboxes.values():
+            listbox.configure(height=g.PHOTO_LIST_ROWS)
+        self.root.geometry('1050x820')
+        self.root.update()
+        with mock.patch.object(self.root, 'winfo_screenheight', lambda: 930):  # 可用高度約 840 < 需要的 880
+            self.app._fit_window_height()
+        self.root.update()
+        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS_COMPACT for lb in self.app.listboxes.values()))
+        for title in g.PHOTO_TAB_TITLES:
+            canvas, inner, scrollbar = self.app._scroll_tabs[title]
+            self.app.notebook.select(self.app._tab_by_title(title))
+            self.root.update()
+            with self.subTest(tab=title):
+                self.assertEqual(scrollbar.winfo_manager(), '')
+        self.assertLessEqual(self.root.winfo_height(), 930 - 90)
+
+    def test_tall_screen_keeps_normal_photo_lists(self):
+        self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS for lb in self.app.listboxes.values())
+                        or self.root.winfo_screenheight() < 1000)
+
+    def test_photo_tabs_need_no_horizontal_room_beyond_window(self):
+        for title in g.PHOTO_TAB_TITLES:
+            canvas, inner, _ = self.app._scroll_tabs[title]
+            self.app.notebook.select(self.app._tab_by_title(title))
+            self.root.update()
+            with self.subTest(tab=title):
+                self.assertLessEqual(inner.winfo_reqwidth(), canvas.winfo_width())
+
+    def test_font_is_chocolate_classical_sans(self):
+        self.assertEqual(g.FONT_FAMILY, 'Chocolate Classical Sans')
+        self.assertEqual(g.FONT_FILES, ('ChocolateClassicalSans-Regular.ttf',))
+        self.assertEqual(self.app.font_family, 'Chocolate Classical Sans')
+        old = [n for n in os.listdir(g.FONT_DIR) if 'LXGW' in n or 'Cactus' in n]
+        self.assertEqual(old, [])  # 舊字型已移除
+
+    def test_primary_and_danger_buttons_keep_3d_bevel(self):
+        """產生報告/清除按鈕要和其他按鈕一樣有凸起的立體邊框（亮邊 + 暗邊，且暗邊比底色深）。"""
+        for style_name in ('Primary.TButton', 'Danger.TButton', 'TButton'):
+            bg = style_lookup(self.root, style_name, 'background')
+            light = style_lookup(self.root, style_name, 'lightcolor')
+            dark = style_lookup(self.root, style_name, 'darkcolor')
+            with self.subTest(style=style_name):
+                self.assertNotEqual(light, bg)
+                self.assertNotEqual(dark, bg)
+                self.assertGreater(self._luminance(light), self._luminance(dark))
+        for name in g.THEMES:
+            self.app.apply_theme(name)
+            for style_name, key in (('Primary.TButton', 'primary'), ('Danger.TButton', 'danger')):
+                with self.subTest(theme=name, style=style_name):
+                    fill = g.THEMES[name][key]
+                    self.assertEqual(style_lookup(self.root, style_name, 'lightcolor'), g.BEVEL_LIGHT)
+                    self.assertLess(self._luminance(style_lookup(self.root, style_name, 'darkcolor')),
+                                    self._luminance(fill))
+
+    def test_mix_color(self):
+        self.assertEqual(g.mix_color('#ffffff', '#000000', 0.25), '#bfbfbf')
+        self.assertEqual(g.mix_color('#102030', '#102030', 0.5), '#102030')
+        self.assertEqual(g.mix_color('#000000', '#ffffff', 1), '#ffffff')
+
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')
         self.assertEqual(self.root.title(), '玉山保育巡查回報單生成器')
@@ -774,9 +919,13 @@ class GuiTest(unittest.TestCase):
                 self.assertEqual(str(getattr(self.app, name).cget('justify')), 'center')
 
     def test_selected_tab_is_not_smaller_than_other_tabs(self):
+        import re
         style = ttk.Style(self.root)
-        normal = [int(float(v)) for v in str(style.lookup('TNotebook.Tab', 'padding', [])).replace('{', '').replace('}', '').split()]
-        active = [int(float(v)) for v in str(style.lookup('TNotebook.Tab', 'padding', ['selected'])).replace('{', '').replace('}', '').split()]
+        numbers = lambda value: [int(n) for n in re.findall(r'\d+', str(value))]
+        normal = numbers(style.lookup('TNotebook.Tab', 'padding', []))
+        active = numbers(style.lookup('TNotebook.Tab', 'padding', ['selected']))
+        self.assertEqual(len(normal), 2)
+        self.assertEqual(len(active), 2)
         self.assertGreaterEqual(active[0], normal[0])
         self.assertGreaterEqual(active[1], normal[1])
 
@@ -863,7 +1012,7 @@ class GuiTest(unittest.TestCase):
 
     def test_gui_fonts_use_configured_weight(self):
         import tkinter.font as tkfont
-        self.assertEqual(g.GUI_FONT_WEIGHT, 'bold')
+        self.assertIn(g.GUI_FONT_WEIGHT, ('normal', 'bold'))
         for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont'):
             with self.subTest(font=name):
                 self.assertEqual(tkfont.nametofont(name, root=self.root).cget('weight'), g.GUI_FONT_WEIGHT)
@@ -878,7 +1027,7 @@ class GuiTest(unittest.TestCase):
             probe.destroy()
 
     def test_font_files_bundled_with_license(self):
-        for name in g.FONT_FILES + ('OFL.txt',):
+        for name in g.FONT_FILES + (g.FONT_LICENSE,):
             self.assertTrue(os.path.exists(os.path.join(g.FONT_DIR, name)), name)
 
     def test_gui_uses_bundled_font_family(self):
@@ -1029,7 +1178,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(lb.curselection(), (0,))
 
     def test_tab_shares_one_preview_between_its_categories(self):
-        self.assertIs(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_1[3]])
+        self.assertIs(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_1[2]])
         self.assertIsNot(self.app.previews[g.PHOTO_CATEGORIES_1[0]], self.app.previews[g.PHOTO_CATEGORIES_2[0]])
 
     def test_mousewheel_scrolls_tab_from_child_widget(self):

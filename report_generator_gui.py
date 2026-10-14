@@ -815,6 +815,18 @@ def default_output_name(data):
     return f"{roc_date_range(data)}_{location}協勤回報單"
 
 
+def default_draft_name(data, now):
+    """草稿檔名（不含副檔名）：<協勤日期>_<協勤地點>協勤回報單草稿_<儲存時間>。欄位還沒填就略過那一段。"""
+    try:
+        date_part = roc_date_range(data)
+    except (KeyError, ValueError):
+        date_part = ''
+    location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
+    name = f"{location}協勤回報單草稿" if location else "巡查回報單草稿"
+    prefix = f"{date_part}_" if date_part else ""
+    return f"{prefix}{name}_{now.strftime('%Y%m%d_%H%M')}"
+
+
 _PDF_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $word = $null
@@ -2136,7 +2148,8 @@ class ReportGeneratorGUI:
             title="儲存草稿",
             defaultextension=".json",
             initialdir=self._last_dir,
-            initialfile=f"巡查回報單草稿_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+            initialfile=default_draft_name({n: getattr(self, n).get().strip() for n in ENTRY_FIELDS},
+                                           datetime.now()) + ".json",
             filetypes=[("草稿檔", "*.json")]
         )
         if not path:

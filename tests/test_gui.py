@@ -1802,6 +1802,30 @@ class GuiTest(unittest.TestCase):
         table.event_generate('<Delete>')  # 空表格按 Delete 不出錯
         self.root.update()
 
+    def test_default_draft_name_carries_the_duty_name(self):
+        from datetime import datetime
+        now = datetime(2026, 10, 14, 20, 40)
+        data = {'start_year': '115', 'start_month': '10', 'start_day': '1', 'end_year': '115', 'end_month': '10',
+                'end_day': '2', 'location': '排雲/山莊'}
+        self.assertEqual(g.default_draft_name(data, now), '1151001-02_排雲山莊協勤回報單草稿_20261014_2040')
+        self.assertEqual(g.default_draft_name(dict(data, location=''), now), '1151001-02_巡查回報單草稿_20261014_2040')
+        self.assertEqual(g.default_draft_name(dict(data, start_day='abc'), now), '排雲山莊協勤回報單草稿_20261014_2040')
+        self.assertEqual(g.default_draft_name({}, now), '巡查回報單草稿_20261014_2040')
+
+    def test_save_draft_dialog_suggests_name_with_duty_name(self):
+        self.fill_dates()
+        self.app.location.insert(0, '排雲山莊')
+        seen = {}
+
+        def ask(**kw):
+            seen.update(kw)
+            return ''
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', ask):
+            self.app.save_draft()
+        self.assertIn('排雲山莊協勤回報單草稿_', seen['initialfile'])
+        self.assertTrue(seen['initialfile'].endswith('.json'))
+
     def test_collect_dropped_images_filters_and_expands_folders(self):
         a, b = self._make_images(['b.JPG', 'a.png'])
         txt = os.path.join(self.tmp.name, 'note.txt')

@@ -61,7 +61,12 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
                 'end_year', 'end_month', 'end_day', 'location']
 
-DEFAULT_CAPTION = '[照片說明]'  # 照片沒有填說明時，文件中顯示的預設字樣（可在照片分頁修改）
+DEFAULT_CAPTION = ''  # 照片沒有填說明時，文件中顯示的預設字樣（預設空白，可在照片分頁修改）
+LEGACY_DEFAULT_CAPTION = '[照片說明]'  # 舊版預設值；載入舊草稿時視為「沒改過」，改成空白
+PANEL_BG = '#f3f4f6'      # 表單背景
+TAB_ACTIVE_BG = '#1d4ed8'  # 目前分頁的底色
+TAB_IDLE_BG = '#d5dae3'    # 其他分頁的底色
+TAB_BORDER = '#8b95a7'
 PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
@@ -315,6 +320,34 @@ def _all_text(table):
     return '\n'.join(c.text for row in table.rows for c in row.cells)
 
 
+LABEL_COLUMN_TWIPS = 2300  # 「協勤人員姓名：」等標籤欄的寬度（14pt × 7 字 + 儲存格邊距，原本 2093 會被換成兩行）
+
+
+def widen_label_column(table, target=LABEL_COLUMN_TWIPS):
+    """把基本資料表格第一欄加寬到 target（twips），從第二欄扣掉，整個表格寬度不變。"""
+    grid = table._tbl.tblGrid.findall(qn('w:gridCol'))
+    if len(grid) < 3:
+        return
+    widths = [int(c.get(qn('w:w'))) for c in grid]
+    delta = target - widths[0]
+    if delta <= 0 or widths[1] - delta < 1000:
+        return
+    change = [delta, -delta] + [0] * (len(grid) - 2)
+    for col, c in zip(change, grid):
+        c.set(qn('w:w'), str(int(c.get(qn('w:w'))) + col))
+    for tr in table._tbl.findall(qn('w:tr')):
+        position = 0
+        for tc in tr.findall(qn('w:tc')):
+            tcPr = tc.find(qn('w:tcPr'))
+            span_el = tcPr.find(qn('w:gridSpan')) if tcPr is not None else None
+            span = int(span_el.get(qn('w:val'))) if span_el is not None else 1
+            tcW = tcPr.find(qn('w:tcW')) if tcPr is not None else None
+            shift = sum(change[position:position + span])
+            if tcW is not None and shift and tcW.get(qn('w:type')) == 'dxa':
+                tcW.set(qn('w:w'), str(int(tcW.get(qn('w:w'))) + shift))
+            position += span
+
+
 def _fill_main_table(main_table, data):
     """把文字資料填進主表格，回傳警告清單。
 
@@ -322,6 +355,7 @@ def _fill_main_table(main_table, data):
     插入的內容採標楷體 12pt、固定行高 22pt（參考他人填寫的回報單）。
     """
     warnings = []
+    widen_label_column(main_table)
 
     try:
         _set_cell_value(main_table.rows[0].cells[2], f"{data['year']}年{data['month']}月{data['day']}日")
@@ -464,35 +498,28 @@ def build_rows(items):
 def plan_layout(categories, page_h, start_y, line_chars):
     """安排所有照片列，回傳依序排列的 [(分類, 列)]。
 
+    - 每個分類（章節）的照片一定連在一起，分類之間依原本順序，不會交錯混放。
     - 分類內橫式排在一起、直式排在一起（見 build_rows）。
-    - 模擬分頁：優先排「尚未排完的第一個分類」；放不下時，跨分類往後找放得下的列補位
-      （換了分類會多出該分類的標題列）；照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）
-      就能多放一列時也會這樣做，讓整頁盡量排滿。都放不下才換頁。
+    - 模擬分頁：目前這一頁放不下下一列時，在「同一個分類」裡往後找放得下的列補位；
+      照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）就能多放一列時也會這樣做，
+      讓整頁盡量排滿。都放不下才換頁。
     - page_h 為內文可用高度，start_y 為照片區開始時已用掉的高度（吋）。
     """
-    queues = {name: build_rows(items) for name, items in categories.items() if items}
-    order = list(queues)
     page = _Page(fixed=start_y)
     sequence = []
-    while any(queues.values()):
-        main = next(n for n in order if queues[n])
-        pick = None
-        for name in [main] + [n for n in order if n != main and queues[n]]:
-            index = next((i for i, r in enumerate(queues[name])
-                          if page.fits(name, r, line_chars, page_h)), None)
-            if index is not None:
-                pick = (name, index)
-                break
-        if pick is None:
-            if page.rows:
-                page.finish(page_h)
-                page = _Page()
-                continue
-            pick = (main, 0)  # 連空白頁都放不下（說明文字特別長）：硬放，讓 Word 自行處理
-        name, index = pick
-        row = queues[name].pop(index)
-        page.add(name, row, line_chars)
-        sequence.append((name, row))
+    for name, items in categories.items():
+        rows = build_rows(items)
+        while rows:
+            index = next((i for i, r in enumerate(rows) if page.fits(name, r, line_chars, page_h)), None)
+            if index is None:
+                if page.rows:
+                    page.finish(page_h)
+                    page = _Page()
+                    continue
+                index = 0  # 連空白頁都放不下（說明文字特別長）：硬放，讓 Word 自行處理
+            row = rows.pop(index)
+            page.add(name, row, line_chars)
+            sequence.append((name, row))
     page.finish(page_h)
     return sequence
 
@@ -704,9 +731,9 @@ def roc_date_range(data):
 
 
 def default_output_name(data):
-    """<協勤地點>協勤回報單_<協勤日期>（不含副檔名）。"""
+    """<協勤日期>_<協勤地點>協勤回報單（不含副檔名），日期放最前面方便依日期排序。"""
     location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
-    return f"{location}協勤回報單_{roc_date_range(data)}"
+    return f"{roc_date_range(data)}_{location}協勤回報單"
 
 
 _PDF_SCRIPT = r"""
@@ -853,6 +880,7 @@ class ReportGeneratorGUI:
         self.root = root
         self.font_family = pick_font_family(root)
         scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family)
+        self._setup_style()
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.default_caption = tk.StringVar(master=root, value=DEFAULT_CAPTION)
@@ -885,6 +913,21 @@ class ReportGeneratorGUI:
 
     def _missing_template_message(self):
         return f"找不到模板檔案：\n{self.template_path}\n\n請確認它和程式放在同一個資料夾。"
+
+    def _setup_style(self):
+        """分頁做成一個一個明顯分開的標籤：目前分頁藍底白字，其他分頁灰底，並有邊框與間距。"""
+        style = ttk.Style(self.root)
+        style.theme_use('clam')
+        self.root.configure(background=PANEL_BG)
+        style.configure('.', background=PANEL_BG)
+        style.configure('TNotebook', background=PANEL_BG, bordercolor=TAB_BORDER, lightcolor=TAB_BORDER,
+                        darkcolor=TAB_BORDER, borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
+        style.configure('TNotebook.Tab', padding=(18, 9), background=TAB_IDLE_BG, foreground='#1f2937',
+                        bordercolor=TAB_BORDER, lightcolor=TAB_BORDER, darkcolor=TAB_BORDER, borderwidth=2)
+        style.map('TNotebook.Tab',
+                  background=[('selected', TAB_ACTIVE_BG), ('active', '#b9c6e4')],
+                  foreground=[('selected', '#ffffff')],
+                  expand=[('selected', (2, 2, 2, 0))])
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -948,7 +991,7 @@ class ReportGeneratorGUI:
         frame = ttk.Frame(notebook, padding="10")
         notebook.add(frame, text=title)
 
-        canvas = tk.Canvas(frame, highlightthickness=0)
+        canvas = tk.Canvas(frame, highlightthickness=0, background=PANEL_BG)
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
 
@@ -1097,7 +1140,7 @@ class ReportGeneratorGUI:
         caption_row.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         ttk.Label(caption_row, text="未填說明時的預設字樣：").pack(side=tk.LEFT)
         ttk.Entry(caption_row, textvariable=self.default_caption, width=24).pack(side=tk.LEFT, padx=5)
-        ttk.Label(caption_row, text="（可留空；個別照片可雙擊清單項目輸入說明）", foreground="gray").pack(side=tk.LEFT)
+        ttk.Label(caption_row, text="（雙擊照片檔名輸入說明）", foreground="gray").pack(side=tk.LEFT)
 
         preview = PhotoPreview(inner, self.font_family)
         preview.grid(row=2, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
@@ -1287,7 +1330,8 @@ class ReportGeneratorGUI:
 
         for name in ENTRY_FIELDS:
             getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
-        self.default_caption.set(str(draft.get('default_caption', DEFAULT_CAPTION)))
+        default_caption = str(draft.get('default_caption', DEFAULT_CAPTION))
+        self.default_caption.set(DEFAULT_CAPTION if default_caption == LEGACY_DEFAULT_CAPTION else default_caption)
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 

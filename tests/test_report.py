@@ -78,11 +78,11 @@ class BuildReportTest(unittest.TestCase):
             g.build_report(TEMPLATE, data, photos, {}, out)
             text = '\n'.join(c.text for c in unique_cells(Document(out)))
             self.assertIn('請補充說明', text)
-            self.assertNotIn(g.DEFAULT_CAPTION, text)
+            self.assertNotIn('[照片說明]', text)
 
     def test_captions(self):
         self.assertIn('自訂說明A', self.text)
-        self.assertIn('[照片說明]', self.text)
+        self.assertNotIn('[照片說明]', self.text)  # 預設說明字樣現在是空白
 
     def test_images_and_exif(self):
         self.assertEqual(len(self.doc.inline_shapes), 3)
@@ -203,12 +203,36 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual(kinds, sorted(kinds, reverse=True))  # 橫式在前、直式在後
         self.assertEqual(sum(len(r) for r in plan), 5)
 
-    def test_cross_category_gap_fill(self):
-        # a：3 列直式，每列約 4.8 吋；頁高 12 吋時第 3 列放不下，剩下的空間改由 b 的橫式列補進來
+    def test_categories_are_never_interleaved(self):
+        # a 的第 3 列在 12 吋頁高放不下，換頁後才排；就算這頁剩下的空間放得下 b 的列，也不能插進去
         a = [make_item(3, 4) for _ in range(6)]
-        b = [make_item(2, 1) for _ in range(2)]  # 扁的橫式列，約 2 吋
+        b = [make_item(2, 1) for _ in range(2)]
         seq = g.plan_layout({'a': a, 'b': b}, 12.0, 0, self.LINE_CHARS)
-        self.assertEqual([c for c, _ in seq], ['a', 'a', 'b', 'a'])
+        self.assertEqual([c for c, _ in seq], ['a', 'a', 'a', 'b'])
+
+    def test_each_category_is_contiguous_for_many_shapes(self):
+        import random
+        rnd = random.Random(7)
+        for _ in range(40):
+            cats = {name: [make_item(*rnd.choice([(4, 3), (3, 4), (2, 1), (1, 3)]), caption='c' * rnd.randint(0, 40))
+                           for _ in range(rnd.randint(0, 7))] for name in 'abcde'}
+            seq = g.plan_layout(cats, rnd.choice([9.0, 10.4, 12.0]), rnd.choice([0, 0.45]), self.LINE_CHARS)
+            order = [c for c, _ in seq]
+            seen = []
+            for c in order:
+                if not seen or seen[-1] != c:
+                    seen.append(c)
+            self.assertEqual(seen, sorted(set(order)), order)  # 每個分類只出現一段，且依原順序
+            self.assertEqual(sum(len(r) for _, r in seq), sum(len(v) for v in cats.values()))
+
+    def test_gap_fill_still_works_inside_one_category(self):
+        # 同一分類內：直式列放不下的空隙，可由後面的橫式列補上
+        port = [make_item(3, 4) for _ in range(6)]   # 3 列直式，每列約 4.8
+        land = [make_item(2, 1) for _ in range(2)]   # 1 列扁的橫式列
+        seq = g.plan_layout({'a': port + land}, 12.0, 0, self.LINE_CHARS)
+        rows = [r for _, r in seq]
+        self.assertEqual([r[0].landscape for r in rows], [True, False, False, False])  # 橫式在前（分類內分組）
+        self.assertEqual(len(rows), 4)
 
     def test_mixed_row_for_leftover_landscape_and_portrait(self):
         items = ([make_item(4, 3) for _ in range(3)] + [make_item(3, 4) for _ in range(3)])
@@ -369,13 +393,13 @@ class OutputNameTest(unittest.TestCase):
         self.assertEqual(g.roc_date_range(d), '1150925-1160103')
 
     def test_default_output_name(self):
-        self.assertEqual(g.default_output_name(self.BASE), '排雲山莊協勤回報單_1150925-28')
+        self.assertEqual(g.default_output_name(self.BASE), '1150925-28_排雲山莊協勤回報單')
 
     def test_invalid_filename_chars_removed_and_empty_location(self):
         d = dict(self.BASE, location='排雲/山:莊?')
-        self.assertEqual(g.default_output_name(d), '排雲山莊協勤回報單_1150925-28')
+        self.assertEqual(g.default_output_name(d), '1150925-28_排雲山莊協勤回報單')
         d = dict(self.BASE, location='')
-        self.assertEqual(g.default_output_name(d), '協勤回報單_1150925-28')
+        self.assertEqual(g.default_output_name(d), '1150925-28_協勤回報單')
 
 
 class FormattingTest(BuildReportTest):
@@ -451,3 +475,29 @@ class FormattingTest(BuildReportTest):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LabelColumnTest(unittest.TestCase):
+    def test_label_column_widened_and_table_width_unchanged(self):
+        doc = Document(TEMPLATE)
+        table = doc.tables[0]
+        grid_before = [int(c.get(g.qn('w:w'))) for c in table._tbl.tblGrid.findall(g.qn('w:gridCol'))]
+        g.widen_label_column(table)
+        grid = [int(c.get(g.qn('w:w'))) for c in table._tbl.tblGrid.findall(g.qn('w:gridCol'))]
+        self.assertEqual(grid[0], g.LABEL_COLUMN_TWIPS)
+        self.assertEqual(sum(grid), sum(grid_before))
+        # 每一列的儲存格寬度加起來仍等於整個表格寬度
+        for tr in table._tbl.findall(g.qn('w:tr')):
+            total = sum(int(tc.find(g.qn('w:tcPr')).find(g.qn('w:tcW')).get(g.qn('w:w')))
+                        for tc in tr.findall(g.qn('w:tc')))
+            self.assertEqual(total, sum(grid))
+        # 「協勤人員姓名：」14pt 共 7 個全形字，要放得下一行（寬度 = 欄寬 - 左右邊距各 108 twips）
+        self.assertGreaterEqual(grid[0] - 216, 7 * 14 * 20)
+
+    def test_is_idempotent(self):
+        doc = Document(TEMPLATE)
+        g.widen_label_column(doc.tables[0])
+        once = [c.get(g.qn('w:w')) for c in doc.tables[0]._tbl.tblGrid.findall(g.qn('w:gridCol'))]
+        g.widen_label_column(doc.tables[0])
+        twice = [c.get(g.qn('w:w')) for c in doc.tables[0]._tbl.tblGrid.findall(g.qn('w:gridCol'))]
+        self.assertEqual(once, twice)

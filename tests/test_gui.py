@@ -102,7 +102,7 @@ class GuiTest(unittest.TestCase):
                 mock.patch.object(g, 'open_file', lambda path: None):
             self.app.generate_report()
             self._wait_until_done()
-        self.assertEqual(captured['initialfile'], '排雲山莊協勤回報單_1151001-02.docx')
+        self.assertEqual(captured['initialfile'], '1151001-02_排雲山莊協勤回報單.docx')
         self.assertEqual(self.pdf_calls, [(out, os.path.join(self.tmp.name, 'o.pdf'))])
         self.assertTrue(os.path.exists(os.path.join(self.tmp.name, 'o.pdf')))
 
@@ -462,7 +462,7 @@ class GuiTest(unittest.TestCase):
         text = '\n'.join(c.text for c in unique_cells(Document(out)))
         self.assertIn('有說明', text)
         self.assertIn('圖說待補', text)
-        self.assertNotIn(g.DEFAULT_CAPTION, text)
+        self.assertNotIn('[照片說明]', text)
 
     def test_default_caption_can_be_blank(self):
         self.fill_dates()
@@ -471,7 +471,7 @@ class GuiTest(unittest.TestCase):
         data, _ = self.app.collect_data()
         out = os.path.join(self.tmp.name, 'o.docx')
         g.build_report(TEMPLATE, data, {c: list(p) for c, p in self.app.photo_files.items()}, {}, out)
-        self.assertNotIn(g.DEFAULT_CAPTION, '\n'.join(c.text for c in unique_cells(Document(out))))
+        self.assertNotIn('[照片說明]', '\n'.join(c.text for c in unique_cells(Document(out))))
 
     def test_default_caption_saved_in_draft_marks_dirty_and_resets_on_clear(self):
         self.app._saved_signature = self.app._signature()
@@ -485,6 +485,39 @@ class GuiTest(unittest.TestCase):
         with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
             self.app.clear_all()
         self.assertEqual(self.app.default_caption.get(), g.DEFAULT_CAPTION)
+
+    def test_default_caption_is_blank_by_default(self):
+        self.assertEqual(g.DEFAULT_CAPTION, '')
+        self.assertEqual(self.app.default_caption.get(), '')
+
+    def test_legacy_default_caption_in_old_draft_becomes_blank(self):
+        import json
+        draft = os.path.join(self.tmp.name, 'legacy.json')
+        self._save_draft_to(draft)
+        with open(draft, encoding='utf-8') as f:
+            data = json.load(f)
+        data['default_caption'] = '[照片說明]'
+        with open(draft, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self._load_draft_from(draft)
+        self.assertEqual(self.app.default_caption.get(), '')
+
+    def test_caption_hint_text(self):
+        texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
+        self.assertIn('（雙擊照片檔名輸入說明）', texts)
+        self.assertFalse(any('可留空' in t for t in texts))
+
+    # ---- 分頁外觀
+    def test_notebook_tabs_are_visually_separated(self):
+        style = ttk.Style(self.root)
+        self.assertEqual(style.theme_use(), 'clam')
+        active = style.lookup('TNotebook.Tab', 'background', ['selected'])
+        idle = style.lookup('TNotebook.Tab', 'background', [])
+        self.assertEqual(active, g.TAB_ACTIVE_BG)
+        self.assertEqual(idle, g.TAB_IDLE_BG)
+        self.assertNotEqual(active, idle)
+        self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ['selected']), '#ffffff')
+        self.assertGreaterEqual(int(style.lookup('TNotebook.Tab', 'borderwidth')), 2)
 
     def test_old_draft_without_default_caption_uses_default(self):
         import json

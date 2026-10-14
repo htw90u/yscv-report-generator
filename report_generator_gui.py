@@ -118,10 +118,10 @@ PHOTO_CATEGORIES = ['道路、步道狀況及維護情形', '設施狀況及維�
 PHOTO_CATEGORIES_1 = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '環境清理及遊客宣導情形']  # 服勤照片(上)
 PHOTO_CATEGORIES_2 = ['自然資源狀況', '遊客違法情形', '其他']  # 服勤照片(下)
 TAB_BASIC = "基本資料"
-TAB_ROAD = "道路步道"
+TAB_ROAD = "道路/步道"
 TAB_FACILITY = "設施"
-TAB_NATURE = "自然資源與遊客"
-TAB_FEEDBACK = "意見與心得建議"
+TAB_NATURE = "自然資源/環境維護/遊客"
+TAB_FEEDBACK = "遊客意見/心得建議/疑問解答"
 # 文字欄位屬於哪個分頁（用於「產生前檢查未填欄位」）
 FIELD_TAB = {
     'road_status': TAB_ROAD, 'road_grass': TAB_ROAD, 'road_other': TAB_ROAD,
@@ -993,12 +993,11 @@ class ReportGeneratorGUI:
         if not os.path.exists(self.template_path):
             self.root.after(200, lambda: messagebox.showerror("錯誤", self._missing_template_message()))
 
-    def _photo_tabs_extra_height(self):
-        """服勤照片兩個分頁的內容比可視區域高出多少像素（0 表示放得下）。"""
+    def _tabs_extra_height(self):
+        """所有可捲動分頁中，內容比可視區域高出最多的像素數（0 表示每一頁都放得下）。"""
         current = self.notebook.select()
         extra = 0
-        for title in PHOTO_TAB_TITLES:
-            canvas, inner, _ = self._scroll_tabs[title]
+        for title, (canvas, inner, _) in self._scroll_tabs.items():
             self.notebook.select(self._tab_by_title(title))
             self.root.update()
             extra = max(extra, inner.winfo_reqheight() - canvas.winfo_height())
@@ -1018,17 +1017,25 @@ class ReportGeneratorGUI:
         return max(0, extra - grow)
 
     def _fit_window_height(self):
-        """讓「服勤照片」兩個分頁預設不需要捲動：先把視窗加高；螢幕不夠高時，再把照片清單縮成 3 列。"""
+        """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最多少 2 列）。"""
         self.root.update()
-        extra = self._photo_tabs_extra_height()
+        extra = self._tabs_extra_height()
         if extra > 0:
             self._grow_window(extra)
-            extra = self._photo_tabs_extra_height()
+            extra = self._tabs_extra_height()
         if extra > 0:  # 螢幕高度不夠：縮小每個照片清單的列數，省下空間
             for listbox in self.listboxes.values():
                 listbox.configure(height=PHOTO_LIST_ROWS_COMPACT)
             self.root.update()
-            extra = self._photo_tabs_extra_height()
+            extra = self._tabs_extra_height()
+            if extra > 0:
+                self._grow_window(extra)
+                extra = self._tabs_extra_height()
+        if extra > 0:  # 還是放不下：文字輸入區各少 2 列（最少 3 列）
+            for text in self.text_fields.values():
+                text.configure(height=max(3, int(text.cget('height')) - 2))
+            self.root.update()
+            extra = self._tabs_extra_height()
             if extra > 0:
                 self._grow_window(extra)
 
@@ -1128,7 +1135,7 @@ class ReportGeneratorGUI:
 
         row = 0
         notebook = ttk.Notebook(main_frame)
-        notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 2))
         main_frame.rowconfigure(row, weight=1)
 
         self.create_basic_info_tab(notebook)
@@ -1161,7 +1168,7 @@ class ReportGeneratorGUI:
 
         row += 1
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=row, column=0, columnspan=3, pady=10)
+        button_frame.grid(row=row, column=0, columnspan=3, pady=(6, 6))
 
         ttk.Button(button_frame, text="載入草稿", command=self.load_draft).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="儲存草稿", command=self.save_draft).pack(side=tk.LEFT, padx=5)

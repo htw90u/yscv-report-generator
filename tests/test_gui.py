@@ -793,19 +793,19 @@ class GuiTest(unittest.TestCase):
             listbox.configure(height=g.PHOTO_LIST_ROWS)
         self.root.geometry('1050x560')
         self.root.update()
-        before = self.app._photo_tabs_extra_height()
+        before = self.app._tabs_extra_height()
         self.assertGreater(before, 0)
         with mock.patch.object(self.root, 'winfo_screenheight', lambda: 700):  # 可用高度約 610
             self.app._fit_window_height()
         self.root.update()
         self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS_COMPACT for lb in self.app.listboxes.values()))
         self.assertLessEqual(self.root.winfo_height(), 700 - 90)
-        self.assertLess(self.app._photo_tabs_extra_height(), before)  # 比原本好（縮小清單 + 加高視窗）
+        self.assertLess(self.app._tabs_extra_height(), before)  # 比原本好（縮小清單 + 加高視窗）
     def test_lists_stay_normal_size_when_the_window_can_hold_everything(self):
         """視窗放得下兩個照片分頁時，不需要縮小照片清單。"""
         for lb in self.app.listboxes.values():
             lb.configure(height=g.PHOTO_LIST_ROWS)
-        with mock.patch.object(self.app, '_photo_tabs_extra_height', lambda: 0):
+        with mock.patch.object(self.app, '_tabs_extra_height', lambda: 0):
             self.app._fit_window_height()
         self.assertTrue(all(int(lb.cget('height')) == g.PHOTO_LIST_ROWS for lb in self.app.listboxes.values()))
 
@@ -827,7 +827,7 @@ class GuiTest(unittest.TestCase):
         nb = self.app.notebook
         long_titles = ('三、', '四、', '五、', '八、')
         found = []
-        for tab_index in (3, 4):  # 自然資源與遊客、意見與心得建議
+        for tab_index in (3, 4):  # 自然資源/環境維護/遊客、遊客意見/心得建議/疑問解答
             nb.select(tab_index)
             self.root.update()
             tab = nb.nametowidget(nb.tabs()[tab_index])
@@ -965,6 +965,55 @@ class GuiTest(unittest.TestCase):
         self.assertLessEqual(top, 10, f'分頁上方留白 {top}px 太多')
         self.assertGreaterEqual(top, 0)
 
+    # ---- 分頁改名
+    def test_tab_names(self):
+        titles = [self.app.notebook.tab(tab, 'text') for tab in self.app.notebook.tabs()]
+        self.assertEqual(titles, ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客',
+                                  '遊客意見/心得建議/疑問解答', '服勤照片(上)', '服勤照片(下)'])
+        self.assertEqual((g.TAB_ROAD, g.TAB_NATURE, g.TAB_FEEDBACK),
+                         ('道路/步道', '自然資源/環境維護/遊客', '遊客意見/心得建議/疑問解答'))
+
+    def test_all_tabs_fit_in_the_window_width(self):
+        self.root.update()
+        nb = self.app.notebook
+        last = len(nb.tabs()) - 1
+        x, y, w, h = nb.bbox(last)
+        self.assertLessEqual(x + w, nb.winfo_width(), '最後一個分頁被切掉了（分頁名稱太長、視窗太窄）')
+
+    # ---- 所有分頁預設都不用捲動、按鈕列間距
+    def test_every_tab_fits_without_scrollbar_when_the_screen_allows(self):
+        nb = self.app.notebook
+        if self.root.winfo_height() >= self.root.winfo_screenheight() - 100:
+            self.skipTest('螢幕高度不足，視窗已受限於螢幕')
+        for title, (canvas, inner, scrollbar) in self.app._scroll_tabs.items():
+            nb.select(self.app._tab_by_title(title))
+            self.root.update()
+            with self.subTest(tab=title):
+                self.assertLessEqual(inner.winfo_reqheight(), canvas.winfo_height(), f'{title} 內容放不下')
+                self.assertEqual(scrollbar.winfo_manager(), '', f'{title} 出現了捲動軸')
+
+    def test_facility_tab_has_no_scrollbar_by_default(self):
+        nb = self.app.notebook
+        nb.select(self.app._tab_by_title('設施'))
+        self.root.update()
+        canvas, inner, scrollbar = self.app._scroll_tabs['設施']
+        if self.root.winfo_height() >= self.root.winfo_screenheight() - 100:
+            self.skipTest('螢幕高度不足，視窗已受限於螢幕')
+        self.assertEqual(scrollbar.winfo_manager(), '')
+
+    def test_text_areas_shrink_only_as_a_last_resort(self):
+        """螢幕非常矮時，才會先縮清單、再縮文字區；平常文字區維持原本高度。"""
+        base = {k: int(w.cget('height')) for k, w in self.app.text_fields.items()}
+        self.assertTrue(all(v >= 5 for v in base.values()) or self.root.winfo_screenheight() < 900)
+
+    def test_small_gap_between_notebook_and_buttons(self):
+        self.root.update()
+        nb = self.app.notebook
+        buttons = self.app.generate_btn.master
+        gap = buttons.winfo_rooty() - (nb.winfo_rooty() + nb.winfo_height())
+        self.assertLessEqual(gap, 16, f'分頁框與按鈕列之間有 {gap}px 空白')
+        self.assertGreaterEqual(gap, 0)
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -1024,13 +1073,13 @@ class GuiTest(unittest.TestCase):
         self.fill_dates()
         data, _ = self.app.collect_data()
         blanks = self.app.find_blank_fields(data)
-        self.assertEqual(list(blanks), ['基本資料', '道路步道', '設施', '自然資源與遊客', '意見與心得建議',
+        self.assertEqual(list(blanks), ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客', '遊客意見/心得建議/疑問解答',
                                         '服勤照片(上)', '服勤照片(下)'])
         self.assertEqual(blanks['基本資料'], ['協勤人員姓名', '協勤地點'])
-        self.assertEqual(len(blanks['道路步道']), 3)
+        self.assertEqual(len(blanks['道路/步道']), 3)
         self.assertEqual(len(blanks['設施']), 4)
-        self.assertEqual(len(blanks['自然資源與遊客']), 3)
-        self.assertEqual(len(blanks['意見與心得建議']), 3)
+        self.assertEqual(len(blanks['自然資源/環境維護/遊客']), 3)
+        self.assertEqual(len(blanks['遊客意見/心得建議/疑問解答']), 3)
         self.assertEqual(len(blanks['服勤照片(上)']), 3)
         self.assertEqual(len(blanks['服勤照片(下)']), 3)
 
@@ -1043,7 +1092,7 @@ class GuiTest(unittest.TestCase):
         blanks = self.app.find_blank_fields(data)
         self.assertEqual(blanks, {
             '基本資料': ['協勤地點'],
-            '道路步道': ['2、道路、步道雜草情形'],
+            '道路/步道': ['2、道路、步道雜草情形'],
             '服勤照片(下)': ['其他（尚未選擇照片）'],
         })
 
@@ -1052,7 +1101,7 @@ class GuiTest(unittest.TestCase):
         self.app.text_fields['nature'].delete('1.0', tk.END)
         self.app.text_fields['nature'].insert('1.0', '   \n  ')
         data, _ = self.app.collect_data()
-        self.assertIn('三、自然資源狀況', self.app.find_blank_fields(data)['自然資源與遊客'])
+        self.assertIn('三、自然資源狀況', self.app.find_blank_fields(data)['自然資源/環境維護/遊客'])
 
     def test_generate_warns_about_blanks_with_default_yes_and_proceeds(self):
         self.fill_dates()
@@ -1401,7 +1450,7 @@ class GuiTest(unittest.TestCase):
         self.root.geometry('900x300')
         self.root.update()
         nb = next(w for w in self.root.winfo_children()[0].winfo_children() if isinstance(w, ttk.Notebook))
-        nb.select(1)  # 道路步道
+        nb.select(1)  # 道路/步道
         self.root.update()
         tab = nb.nametowidget(nb.tabs()[1])
         canvas = next(w for w in tab.winfo_children() if isinstance(w, tk.Canvas))

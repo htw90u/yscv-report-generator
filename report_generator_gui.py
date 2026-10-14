@@ -35,6 +35,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
+GUI_FONT_WEIGHT = 'bold'  # 介面字型粗細：'bold'（粗體）或 'normal'（一般）
 # 介面字型：霞鶩文楷等寬 TC（SIL OFL 授權，字型檔放在 fonts/ 資料夾，執行時私下載入、不安裝到系統）
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
 FONT_FILES = ('LXGWWenKaiMonoTC-Regular.ttf', 'LXGWWenKaiMonoTC-Bold.ttf')
@@ -901,7 +902,7 @@ def pick_font_family(root):
     return FALLBACK_FONT_FAMILY if FALLBACK_FONT_FAMILY in families else 'Arial'
 
 
-def scale_gui_fonts(root, delta, family=None):
+def scale_gui_fonts(root, delta, family=None, weight=None):
     """把 Tk 的預設字型（按鈕、輸入框、文字區、分頁等）加大 delta 點，並可一併換字型。"""
     for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont', 'TkHeadingFont',
                  'TkCaptionFont', 'TkSmallCaptionFont', 'TkIconFont', 'TkTooltipFont'):
@@ -913,6 +914,8 @@ def scale_gui_fonts(root, delta, family=None):
         font.configure(size=size + delta if size > 0 else size - delta)  # 負值代表像素
         if family:
             font.configure(family=family)
+        if weight:
+            font.configure(weight=weight)
 
 class ReportGeneratorGUI:
     def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
@@ -921,7 +924,7 @@ class ReportGeneratorGUI:
         self.root = root
         self.settings_path = settings_path
         self.font_family = pick_font_family(root)
-        scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family)
+        scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family, GUI_FONT_WEIGHT)
         self.theme_name = self._load_theme_setting()
         self.palette = THEMES[self.theme_name]
         self._setup_style()

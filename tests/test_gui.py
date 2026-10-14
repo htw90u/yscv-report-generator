@@ -861,6 +861,22 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(scaled, base + step)
         self.assertEqual(g.GUI_FONT_DELTA, 2)
 
+    def test_gui_fonts_use_configured_weight(self):
+        import tkinter.font as tkfont
+        self.assertEqual(g.GUI_FONT_WEIGHT, 'bold')
+        for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont'):
+            with self.subTest(font=name):
+                self.assertEqual(tkfont.nametofont(name, root=self.root).cget('weight'), g.GUI_FONT_WEIGHT)
+
+    def test_scale_gui_fonts_can_keep_normal_weight(self):
+        import tkinter.font as tkfont
+        probe = tk.Tk()
+        try:
+            g.scale_gui_fonts(probe, 0, None, 'normal')
+            self.assertEqual(tkfont.nametofont('TkDefaultFont', root=probe).cget('weight'), 'normal')
+        finally:
+            probe.destroy()
+
     def test_font_files_bundled_with_license(self):
         for name in g.FONT_FILES + ('OFL.txt',):
             self.assertTrue(os.path.exists(os.path.join(g.FONT_DIR, name)), name)

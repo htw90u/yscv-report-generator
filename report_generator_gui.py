@@ -142,7 +142,7 @@ FIELD_TAB = {
     'feedback': TAB_FEEDBACK, 'reflection': TAB_FEEDBACK, 'questions': TAB_FEEDBACK,
 }
 MARK_DONE = '✓'      # 已填說明／已填完的記號
-MARK_MISSING = '⚠'   # 還沒填的記號（同時搭配淡橘底與文字，不單靠顏色）
+MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
 PHOTO_TAB_HINT = "（點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明）"
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
 PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
@@ -1208,7 +1208,7 @@ class ReportGeneratorGUI:
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
         self._scroll_tabs = {}  # 分頁標題 -> (canvas, 內容框)
-        self._tab_frames = {}   # 分頁標題 -> 分頁的框架（分頁名稱後面會加 ⚠，不能靠名稱找）
+        self._tab_frames = {}   # 分頁標題 -> 分頁的框架（分頁名稱後面會加 ●，不能靠名稱找）
         self._tab_refits = {}   # 分頁標題 -> 重新量測內容高度、調整捲動範圍的函式
         self.category_labels = {}  # 照片分類 -> 表格上方的標題（帶張數與未填數量）
         self.previews = {}   # category -> PhotoPreview（所有分類共用同一個預覽區）
@@ -1313,7 +1313,7 @@ class ReportGeneratorGUI:
         self.generate_report()
 
     def _tab_by_title(self, title):
-        """用分頁的原始名稱找到分頁（分頁上顯示的文字可能多了「⚠」標記）。"""
+        """用分頁的原始名稱找到分頁（分頁上顯示的文字可能多了「●」標記）。"""
         if title in self._tab_frames:
             return str(self._tab_frames[title])
         for tab in self.notebook.tabs():
@@ -1748,7 +1748,7 @@ class ReportGeneratorGUI:
 
     # ---- 事件處理
     def _photo_label(self, category, filepath):
-        """表格「檔名」欄的文字：已填說明「✓ 檔名」，沒填「⚠ 檔名」。"""
+        """表格「檔名」欄的文字：已填說明「✓ 檔名」，沒填「● 檔名」。"""
         mark = MARK_DONE if self.photo_captions[category].get(filepath) else MARK_MISSING
         return f"{mark} {os.path.basename(filepath)}"
 
@@ -1798,7 +1798,7 @@ class ReportGeneratorGUI:
             refit()
 
     def _update_marks(self):
-        """分類標題帶張數、小分頁與「服勤照片」分頁標 ⚠ 或 ✓、跳到下一張的按鈕帶剩餘數量。"""
+        """分類標題帶張數、小分頁與「服勤照片」分頁標 ● 或 ✓、跳到下一張的按鈕帶剩餘數量。"""
         for category, label in self.category_labels.items():
             total = len(self.photo_files[category])
             missing = self.missing_caption_count(category)
@@ -1831,7 +1831,7 @@ class ReportGeneratorGUI:
         return blank
 
     def _refresh_tab_marks(self):
-        """有沒填的欄位，分頁名稱後面就加 ⚠（不顯示數量）；填完就恢復原本名稱。"""
+        """有沒填的欄位，分頁名稱後面就加 ●（不顯示數量）；填完就恢復原本名稱。"""
         if not hasattr(self, 'notebook'):
             return
         blank = self._tabs_with_blanks()
@@ -1839,7 +1839,7 @@ class ReportGeneratorGUI:
             self.notebook.tab(frame, text=f"{title} {MARK_MISSING}" if title in blank else title)
 
     def _watch(self, widget):
-        """欄位內容一改變就更新分頁上的 ⚠。"""
+        """欄位內容一改變就更新分頁上的 ●。"""
         for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
             widget.bind(sequence, lambda e: self._refresh_tab_marks(), add='+')
 

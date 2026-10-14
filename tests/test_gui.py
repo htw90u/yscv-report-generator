@@ -1790,7 +1790,9 @@ class GuiTest(unittest.TestCase):
         for n in ('z.jpg', 'm.bmp', 'skip.docx'):
             open(os.path.join(folder, n), 'wb').write(b'')
         images, ignored = g.collect_dropped_images([a, txt, folder, b])
-        self.assertEqual(images, [a, os.path.join(folder, 'm.bmp'), os.path.join(folder, 'z.jpg'), b])
+        # 整批依檔名排序（不分大小寫），與拖進來的順序、所在資料夾無關
+        self.assertEqual(images, sorted([a, b, os.path.join(folder, 'm.bmp'), os.path.join(folder, 'z.jpg')], key=lambda x: os.path.basename(x).lower()))
+        self.assertEqual([os.path.basename(x) for x in images], ['a.png', 'b.JPG', 'm.bmp', 'z.jpg'])
         self.assertEqual(ignored, 1)  # 只有直接拖進來的 note.txt 算略過
 
     def test_dropping_images_adds_them_to_the_current_category_and_shows_photo_tab(self):
@@ -1821,6 +1823,38 @@ class GuiTest(unittest.TestCase):
         self.app.handle_dropped_files(files, sx, sy)
         self.assertEqual(self.app.photo_files[g.PHOTO_CATEGORIES[target]], files)
         self.assertEqual(self.app._current_photo_category(), g.PHOTO_CATEGORIES[target])
+
+    def test_dropped_images_are_sorted_naturally_without_touching_existing_order(self):
+        existing = self._make_images(['z_old.jpg', 'a_old.jpg'])
+        cat = g.PHOTO_CATEGORIES[0]
+        self.app.photo_files[cat].extend(existing)
+        new = self._make_images(['IMG_10.jpg', 'img_2.jpg', 'IMG_1.jpg'])
+        self.app.photo_notebook.select(self.app.photo_pages[cat])
+        self.app.handle_dropped_files([new[0], new[1], new[2]])
+        names = [os.path.basename(f) for f in self.app.photo_files[cat]]
+        self.assertEqual(names, ['z_old.jpg', 'a_old.jpg', 'IMG_1.jpg', 'img_2.jpg', 'IMG_10.jpg'])
+
+    def test_busy_indicator_runs_while_generating_and_stops_afterwards(self):
+        self.fill_dates()
+        out = os.path.join(self.tmp.name, 'busy.docx')
+        started = {}
+        real_start = self.app._start_busy
+
+        def spy(message):
+            real_start(message)
+            started['bar'] = bool(self.app.busy_bar.place_info())
+            started['cursor'] = str(self.root.cget('cursor'))
+            started['text'] = self.app.status_label.cget('text')
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out),                 mock.patch.object(self.app, '_start_busy', spy),                 mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertTrue(started['bar'])
+        self.assertEqual(started['cursor'], 'watch')
+        self.assertIn('正在產生', started['text'])
+        self.assertFalse(self.app.busy_bar.place_info())
+        self.assertEqual(str(self.root.cget('cursor')), '')
+        self.assertIn('SUCCESS', self.app.status_label.cget('text'))  # 最後的狀態文字沒有被計時文字蓋掉
 
     @unittest.skipUnless(sys.platform == 'win32', '需要 Windows')
     def test_real_wm_dropfiles_message_adds_photos(self):

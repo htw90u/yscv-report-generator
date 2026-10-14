@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
@@ -1487,6 +1488,8 @@ class ReportGeneratorGUI:
         row += 1
         self.status_label = ttk.Label(main_frame, text="準備就緒", relief=tk.SUNKEN)
         self.status_label.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E))
+        # 產生報告時，狀態列右側顯示來回移動的進度條（平常不顯示）
+        self.busy_bar = ttk.Progressbar(self.status_label, mode='indeterminate', length=160)
         theme_frame = ttk.Frame(main_frame)
         theme_frame.grid(row=row, column=2, sticky=tk.E, padx=(10, 0))
         ttk.Label(theme_frame, text="外觀：").pack(side=tk.LEFT)
@@ -2389,10 +2392,35 @@ class ReportGeneratorGUI:
         self._last_dir = os.path.dirname(output_path)
 
         self.generate_btn.config(state=tk.DISABLED)
-        self.status_label.config(text="正在產生報告與 PDF...")
+        self._start_busy(BUSY_MESSAGE)
         threading.Thread(target=self._generate_report_worker,
                          args=(data, photo_files, captions, output_path),
                          daemon=True).start()
+
+    def _start_busy(self, message):
+        """狀態列顯示「message 已 N 秒」並出現來回移動的進度條，游標變成等待中。"""
+        self._busy_message = message
+        self._busy_started = time.monotonic()
+        self.busy_bar.place(relx=1.0, rely=0.5, anchor='e', x=-6)
+        self.busy_bar.start(15)
+        self.root.config(cursor='watch')
+        self._busy_tick()
+
+    def _busy_tick(self):
+        if not getattr(self, '_busy_message', None):
+            return
+        seconds = int(time.monotonic() - self._busy_started)
+        self.status_label.config(text=f"{self._busy_message} 已 {seconds} 秒")
+        self._busy_after = self.root.after(500, self._busy_tick)
+
+    def _stop_busy(self):
+        self._busy_message = None
+        after_id = getattr(self, '_busy_after', None)
+        if after_id:
+            self.root.after_cancel(after_id)
+        self.busy_bar.stop()
+        self.busy_bar.place_forget()
+        self.root.config(cursor='')
 
     def _post(self, func):
         """背景執行緒把 GUI 更新交給主執行緒執行（tkinter 不是 thread-safe）。"""
@@ -2421,6 +2449,7 @@ class ReportGeneratorGUI:
                 pdf_path = None
 
             # 產生後自動開啟檔案；本工具維持開啟，方便修改後再次產生
+            self._post(self._stop_busy)
             self._post(lambda: open_file(output_path))
             files = f"Word: {output_path}" + (f"\nPDF: {pdf_path}" if pdf_path else "")
             if warnings:
@@ -2431,22 +2460,34 @@ class ReportGeneratorGUI:
         except Exception as e:
             error_msg = f"✗ FAIL: {e}"
             logging.error(error_msg, exc_info=True)
+            self._post(self._stop_busy)
             self._post(lambda: messagebox.showerror("錯誤", error_msg))
             self._post(lambda: self.status_label.config(text=error_msg))
         finally:
+            self._post(self._stop_busy)
             self._post(lambda: self.generate_btn.config(state=tk.NORMAL))
 
 
+BUSY_MESSAGE = "正在產生報告與 PDF（轉成 PDF 需要幾十秒，請稍候）…"
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp')
 
 
+def natural_name_key(path):
+    """依檔名排序用的鍵：不分大小寫，數字照大小比（IMG_2 排在 IMG_10 前面）。"""
+    parts = re.split(r'(\d+)', os.path.basename(path).lower())
+    return [(0, int(part), '') if part.isdigit() else (1, 0, part) for part in parts], path.lower()
+
+
 def collect_dropped_images(paths):
-    """從拖進來的檔案／資料夾挑出圖片（資料夾只看第一層，依檔名排序）。回傳 (圖片清單, 略過的非圖片數)。"""
+    """從拖進來的檔案／資料夾挑出圖片（資料夾只看第一層），整批依檔名排序。回傳 (圖片清單, 略過的非圖片數)。
+
+    只排序「這一批新拖進來的」，加入後接在原本照片的後面，不會動到已經排好的順序。
+    """
     images, ignored = [], 0
     for path in paths:
         if os.path.isdir(path):
             try:
-                names = sorted(os.listdir(path), key=str.lower)
+                names = os.listdir(path)
             except OSError:
                 continue
             for name in names:
@@ -2457,6 +2498,7 @@ def collect_dropped_images(paths):
             images.append(path)
         else:
             ignored += 1
+    images.sort(key=natural_name_key)
     return images, ignored
 
 

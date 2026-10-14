@@ -120,7 +120,7 @@ PHOTO_CATEGORIES_2 = ['自然資源狀況', '遊客違法情形', '其他']  # �
 TAB_BASIC = "基本資料"
 TAB_ROAD = "道路/步道"
 TAB_FACILITY = "設施"
-TAB_NATURE = "自然資源/環境維護/遊客"
+TAB_NATURE = "自然資源/環境維護/遊客管理"
 TAB_FEEDBACK = "遊客意見/心得建議/疑問解答"
 # 文字欄位屬於哪個分頁（用於「產生前檢查未填欄位」）
 FIELD_TAB = {
@@ -1018,14 +1018,20 @@ class ReportGeneratorGUI:
         return max(0, extra - grow)
 
     def _fit_window_height(self):
-        """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最多少 2 列）。"""
-        self._set_visible(False)  # 量測時要逐一切換分頁；先讓視窗透明，使用者不會看到分頁一個個跑過
-        try:
-            self._fit_window_height_hidden()
-        finally:
-            self._set_visible(True)
+        """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最多少 2 列）。
 
-    def _fit_window_height_hidden(self):
+        量測時會逐一顯示每個分頁；視窗保持可見，並在狀態列說明，讓使用者知道程式正在準備，不是當掉。
+        """
+        status = getattr(self, 'status_label', None)
+        if status is not None:
+            status.config(text="正在準備畫面，請稍候…")
+        try:
+            self._measure_and_fit()
+        finally:
+            if status is not None:
+                status.config(text="準備就緒")
+
+    def _measure_and_fit(self):
         self.root.update()
         extra = self._tabs_extra_height()
         if extra > 0:
@@ -1048,8 +1054,8 @@ class ReportGeneratorGUI:
                 self._grow_window(extra)
 
     def _bind_shortcuts(self):
-        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告（大小寫都可以）。"""
-        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate}
+        """快捷鍵：Ctrl+S 儲存草稿、Ctrl+L 載入草稿、Ctrl+G 產生報告、Ctrl+E 離開（大小寫都可以）。"""
+        actions = {'s': self.save_draft, 'l': self.load_draft, 'g': self._shortcut_generate, 'e': self.on_close}
         for key, action in actions.items():
             for k in (key, key.upper()):
                 self.root.bind_all(f'<Control-{k}>', lambda e, f=action: self._run_shortcut(f))
@@ -1062,13 +1068,6 @@ class ReportGeneratorGUI:
         if str(self.generate_btn['state']) == 'disabled':  # 正在產生報告時，忽略重複觸發
             return
         self.generate_report()
-
-    def _set_visible(self, visible):
-        """用透明度顯示/隱藏整個視窗（不支援時略過）。"""
-        try:
-            self.root.attributes('-alpha', 1.0 if visible else 0.0)
-        except tk.TclError:
-            pass
 
     def _tab_by_title(self, title):
         for tab in self.notebook.tabs():
@@ -1208,7 +1207,7 @@ class ReportGeneratorGUI:
         self.generate_btn.pack(side=tk.LEFT, padx=5)
         self.clear_btn = ttk.Button(button_frame, text="清除", command=self.clear_all, style='Danger.TButton')
         self.clear_btn.pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="離開", command=self.on_close).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="離開(E)", command=self.on_close).pack(side=tk.LEFT, padx=5)
 
         row += 1
         self.status_label = ttk.Label(main_frame, text="準備就緒", relief=tk.SUNKEN)

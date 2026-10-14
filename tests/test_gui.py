@@ -150,7 +150,7 @@ class GuiTest(unittest.TestCase):
     def test_button_order_and_styles(self):
         frame = self.app.generate_btn.master
         labels = [w.cget('text') for w in frame.winfo_children() if isinstance(w, ttk.Button)]
-        self.assertEqual(labels, ['載入草稿(L)', '儲存草稿(S)', '產生報告(G)', '清除', '離開'])
+        self.assertEqual(labels, ['載入草稿(L)', '儲存草稿(S)', '產生報告(G)', '清除', '離開(E)'])
         self.assertEqual(str(self.app.clear_btn.cget('style')), 'Danger.TButton')
         self.assertEqual(str(self.app.generate_btn.cget('style')), 'Primary.TButton')
         palette = g.THEMES[g.DEFAULT_THEME]
@@ -159,7 +159,7 @@ class GuiTest(unittest.TestCase):
             self.assertEqual(style_lookup(self.root, style_name, 'foreground'), palette[f'{key}_fg'])
             self.assertEqual(style_lookup(self.root, style_name, 'background', ['active']), palette[f'{key}_active'])
         # 離開維持預設灰色，不上色
-        leave = [w for w in frame.winfo_children() if isinstance(w, ttk.Button) and w.cget('text') == '離開'][0]
+        leave = [w for w in frame.winfo_children() if isinstance(w, ttk.Button) and w.cget('text') == '離開(E)'][0]
         self.assertIn(str(leave.cget('style')), ('', 'TButton'))
 
     def test_open_file_failure_does_not_raise(self):
@@ -827,7 +827,7 @@ class GuiTest(unittest.TestCase):
         nb = self.app.notebook
         long_titles = ('三、', '四、', '五、', '八、')
         found = []
-        for tab_index in (3, 4):  # 自然資源/環境維護/遊客、遊客意見/心得建議/疑問解答
+        for tab_index in (3, 4):  # 自然資源/環境維護/遊客管理、遊客意見/心得建議/疑問解答
             nb.select(tab_index)
             self.root.update()
             tab = nb.nametowidget(nb.tabs()[tab_index])
@@ -968,10 +968,10 @@ class GuiTest(unittest.TestCase):
     # ---- 分頁改名
     def test_tab_names(self):
         titles = [self.app.notebook.tab(tab, 'text') for tab in self.app.notebook.tabs()]
-        self.assertEqual(titles, ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客',
+        self.assertEqual(titles, ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客管理',
                                   '遊客意見/心得建議/疑問解答', '服勤照片(上)', '服勤照片(下)'])
         self.assertEqual((g.TAB_ROAD, g.TAB_NATURE, g.TAB_FEEDBACK),
-                         ('道路/步道', '自然資源/環境維護/遊客', '遊客意見/心得建議/疑問解答'))
+                         ('道路/步道', '自然資源/環境維護/遊客管理', '遊客意見/心得建議/疑問解答'))
 
     def test_all_tabs_fit_in_the_window_width(self):
         self.root.update()
@@ -1028,36 +1028,54 @@ class GuiTest(unittest.TestCase):
             self.app.select_photos(cat, self.app.listboxes[cat])
         self.assertEqual(titles, [f'加入照片 - {cat}'])
 
-    # ---- 啟動時不要讓使用者看到分頁一個個跑過
-    def test_tab_cycling_during_startup_fit_is_invisible(self):
+    # ---- 啟動時量測分頁高度：視窗保持可見，讓使用者知道程式在準備（不是當掉）
+    def test_startup_measuring_keeps_window_visible_and_shows_progress(self):
         nb = self.app.notebook
         original = nb.index(nb.select())
-        seen_alpha = []
+        seen = []
         real_select = nb.select
 
         def spy(*args, **kwargs):
             if args or kwargs:  # 只記錄「切換分頁」的呼叫
-                seen_alpha.append(float(self.root.attributes('-alpha')))
+                seen.append((float(self.root.attributes('-alpha')), bool(self.root.winfo_viewable()),
+                             self.app.status_label.cget('text')))
             return real_select(*args, **kwargs)
 
         with mock.patch.object(nb, 'select', spy):
             self.app._fit_window_height()
-        self.assertTrue(seen_alpha, '量測時應該有切換分頁')
-        self.assertTrue(all(a == 0.0 for a in seen_alpha), f'切換分頁時視窗還看得到：{seen_alpha}')
-        self.assertEqual(float(self.root.attributes('-alpha')), 1.0)  # 量完要恢復可見
-        self.assertEqual(nb.index(nb.select()), original)             # 回到原本的分頁
+        self.assertTrue(seen, '量測時應該有切換分頁')
+        self.assertTrue(all(alpha == 1.0 for alpha, _, _ in seen), '量測期間視窗不可以是透明的')
+        self.assertTrue(all(viewable for _, viewable, _ in seen), '量測期間視窗要看得到')
+        self.assertTrue(all('準備' in text for _, _, text in seen), '量測期間狀態列要說明正在準備')
+        self.assertEqual(self.app.status_label.cget('text'), '準備就緒')   # 量完恢復
+        self.assertEqual(nb.index(nb.select()), original)                 # 回到原本的分頁
+
+    def test_status_restored_even_if_measuring_fails(self):
+        with mock.patch.object(self.app, '_measure_and_fit', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                self.app._fit_window_height()
+        self.assertEqual(self.app.status_label.cget('text'), '準備就緒')
+
+    def test_no_transparency_helpers_left(self):
+        self.assertFalse(hasattr(self.app, '_set_visible'))
+
+    def test_ctrl_e_exits_like_the_exit_button(self):
+        calls = []
+        with mock.patch.object(self.app, 'on_close', lambda: calls.append('close')):
+            self.app._bind_shortcuts()
+            self._press(self.app.personnel, 'e')
+            self._press(self.app.personnel, 'E')
+        self.assertEqual(calls, ['close', 'close'])
+
+    def test_exit_button_shows_shortcut_letter(self):
+        labels = {w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Button)}
+        self.assertIn('離開(E)', labels)
+        self.assertNotIn('離開', labels)
 
     def test_window_is_visible_and_on_first_tab_after_startup(self):
         self.assertEqual(float(self.root.attributes('-alpha')), 1.0)
         self.assertEqual(self.app.notebook.index(self.app.notebook.select()), 0)
 
-    def test_fit_restores_visibility_even_if_measuring_fails(self):
-        with mock.patch.object(self.app, '_fit_window_height_hidden', side_effect=RuntimeError('boom')):
-            with self.assertRaises(RuntimeError):
-                self.app._fit_window_height()
-        self.assertEqual(float(self.root.attributes('-alpha')), 1.0)
-
-    # ---- 快捷鍵
     def _press(self, widget, keysym):
         self.root.deiconify()
         self.root.update()
@@ -1167,12 +1185,12 @@ class GuiTest(unittest.TestCase):
         self.fill_dates()
         data, _ = self.app.collect_data()
         blanks = self.app.find_blank_fields(data)
-        self.assertEqual(list(blanks), ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客', '遊客意見/心得建議/疑問解答',
+        self.assertEqual(list(blanks), ['基本資料', '道路/步道', '設施', '自然資源/環境維護/遊客管理', '遊客意見/心得建議/疑問解答',
                                         '服勤照片(上)', '服勤照片(下)'])
         self.assertEqual(blanks['基本資料'], ['協勤人員姓名', '協勤地點'])
         self.assertEqual(len(blanks['道路/步道']), 3)
         self.assertEqual(len(blanks['設施']), 4)
-        self.assertEqual(len(blanks['自然資源/環境維護/遊客']), 3)
+        self.assertEqual(len(blanks['自然資源/環境維護/遊客管理']), 3)
         self.assertEqual(len(blanks['遊客意見/心得建議/疑問解答']), 3)
         self.assertEqual(len(blanks['服勤照片(上)']), 3)
         self.assertEqual(len(blanks['服勤照片(下)']), 3)
@@ -1195,7 +1213,7 @@ class GuiTest(unittest.TestCase):
         self.app.text_fields['nature'].delete('1.0', tk.END)
         self.app.text_fields['nature'].insert('1.0', '   \n  ')
         data, _ = self.app.collect_data()
-        self.assertIn('三、自然資源狀況', self.app.find_blank_fields(data)['自然資源/環境維護/遊客'])
+        self.assertIn('三、自然資源狀況', self.app.find_blank_fields(data)['自然資源/環境維護/遊客管理'])
 
     def test_generate_warns_about_blanks_with_default_yes_and_proceeds(self):
         self.fill_dates()

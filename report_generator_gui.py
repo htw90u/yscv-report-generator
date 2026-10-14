@@ -1751,7 +1751,7 @@ class ReportGeneratorGUI:
         sub.bind('<Map>', lambda e: self.root.after_idle(self._align_photo_notebook))
 
         right = ttk.Frame(inner)
-        right.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.W, tk.E), padx=(18, 0), pady=(34, 0))
+        right.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.W, tk.E), padx=(18, 0), pady=(0, 0))
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
         self.photo_right_panel = right

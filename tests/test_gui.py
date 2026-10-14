@@ -1979,6 +1979,12 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(g.normalize_rotation(-90), 270)
         self.assertEqual(g.normalize_rotation(450), 90)
 
+    def test_preview_top_is_level_with_the_sub_tab_strip(self):
+        self._show_photos_tab()
+        sub, preview = self.app.photo_notebook, self.app.photo_preview
+        self.assertLessEqual(abs(preview.winfo_rooty() - sub.winfo_rooty()), 4,
+                             '預覽框上緣應該和左邊小分頁列的上緣切齊，不要留空白')
+
     def test_preview_has_no_filename_label_and_uses_more_space(self):
         self._show_photos_tab()
         right, preview = self.app.photo_right_panel, self.app.photo_preview

@@ -504,10 +504,46 @@ class GuiTest(unittest.TestCase):
 
     def test_caption_hint_text(self):
         texts = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
-        self.assertIn('（雙擊照片檔名輸入說明）', texts)
+        self.assertIn('（雙擊檔名輸入照片說明）', texts)
         self.assertFalse(any('可留空' in t for t in texts))
 
     # ---- 分頁外觀
+    def test_window_title(self):
+        self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')
+        self.assertEqual(self.root.title(), '玉山保育巡查回報單生成器')
+
+    def test_date_entries_are_centered(self):
+        for name in ('year', 'month', 'day', 'start_year', 'start_month', 'start_day',
+                     'end_year', 'end_month', 'end_day'):
+            with self.subTest(name=name):
+                self.assertEqual(str(getattr(self.app, name).cget('justify')), 'center')
+
+    def test_selected_tab_is_not_smaller_than_other_tabs(self):
+        style = ttk.Style(self.root)
+        normal = [int(float(v)) for v in str(style.lookup('TNotebook.Tab', 'padding', [])).replace('{', '').replace('}', '').split()]
+        active = [int(float(v)) for v in str(style.lookup('TNotebook.Tab', 'padding', ['selected'])).replace('{', '').replace('}', '').split()]
+        self.assertGreaterEqual(active[0], normal[0])
+        self.assertGreaterEqual(active[1], normal[1])
+
+    def test_selected_tab_is_taller_and_not_narrower_on_screen(self):
+        nb = next(w for w in self.root.winfo_children()[0].winfo_children() if isinstance(w, ttk.Notebook))
+        self.root.update()
+        boxes = []
+        for i in range(len(nb.tabs())):
+            nb.select(i)
+            self.root.update()
+            boxes.append(nb.bbox(i))
+        for i, (x, y, w, h) in enumerate(boxes):
+            nb.select(i)
+            self.root.update()
+            x2, y2, w2, h2 = nb.bbox(i)
+            others = [nb.bbox(j) for j in range(len(boxes)) if j != i]
+            self.assertGreaterEqual(h2, max(b[3] for b in others), f'分頁 {i} 被選取時比其他分頁矮')
+            # 選取時的寬度不應比沒選取時小
+            nb.select((i + 1) % len(boxes))
+            self.root.update()
+            self.assertGreaterEqual(w2, nb.bbox(i)[2], f'分頁 {i} 選取時比沒選取時窄')
+
     def test_notebook_tabs_are_visually_separated(self):
         style = ttk.Style(self.root)
         self.assertEqual(style.theme_use(), 'clam')

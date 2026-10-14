@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-保育巡查回報單生成器 - GUI版本
+玉山保育巡查回報單生成器 - GUI版本
 提供圖形化介面供使用者輸入資料並選擇照片
 """
 
@@ -30,6 +30,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from PIL import Image, ImageOps, ImageTk
 
+APP_TITLE = '玉山保育巡查回報單生成器'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
@@ -67,6 +68,8 @@ PANEL_BG = '#f3f4f6'      # 表單背景
 TAB_ACTIVE_BG = '#1d4ed8'  # 目前分頁的底色
 TAB_IDLE_BG = '#d5dae3'    # 其他分頁的底色
 TAB_BORDER = '#8b95a7'
+TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
+TAB_PADDING_ACTIVE = (18, 12)  # 目前分頁：左右一樣、上下多一點，看起來比其他分頁更突出
 PREVIEW_SIZE = (360, 300)  # 照片預覽區大小（像素）
 MAX_IMAGE_WIDTH_PX = 1200  # 照片在文件中寬 2.8 吋，1200px 約 430dpi，已足夠清晰
 JPEG_QUALITY = 85
@@ -884,7 +887,7 @@ class ReportGeneratorGUI:
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.default_caption = tk.StringVar(master=root, value=DEFAULT_CAPTION)
-        self.root.title("保育巡查回報單生成器")
+        self.root.title(APP_TITLE)
         self.root.geometry("1050x820")
 
         self.template_path = template_path
@@ -922,12 +925,13 @@ class ReportGeneratorGUI:
         style.configure('.', background=PANEL_BG)
         style.configure('TNotebook', background=PANEL_BG, bordercolor=TAB_BORDER, lightcolor=TAB_BORDER,
                         darkcolor=TAB_BORDER, borderwidth=2, tabmargins=(4, 6, 4, 0), tabposition='nw')
-        style.configure('TNotebook.Tab', padding=(18, 9), background=TAB_IDLE_BG, foreground='#1f2937',
+        style.configure('TNotebook.Tab', padding=TAB_PADDING, background=TAB_IDLE_BG, foreground='#1f2937',
                         bordercolor=TAB_BORDER, lightcolor=TAB_BORDER, darkcolor=TAB_BORDER, borderwidth=2)
         style.map('TNotebook.Tab',
                   background=[('selected', TAB_ACTIVE_BG), ('active', '#b9c6e4')],
                   foreground=[('selected', '#ffffff')],
-                  expand=[('selected', (2, 2, 2, 0))])
+                  padding=[('selected', TAB_PADDING_ACTIVE)],
+                  expand=[('selected', (0, 0, 0, 0))])
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -1024,13 +1028,13 @@ class ReportGeneratorGUI:
         frame.columnconfigure(1, weight=1)
 
         def date_entries(parent, prefix, last_label):
-            y = ttk.Entry(parent, width=8)
+            y = ttk.Entry(parent, width=8, justify=tk.CENTER)
             y.pack(side=tk.LEFT)
             ttk.Label(parent, text="年").pack(side=tk.LEFT, padx=2)
-            m = ttk.Entry(parent, width=5)
+            m = ttk.Entry(parent, width=5, justify=tk.CENTER)
             m.pack(side=tk.LEFT)
             ttk.Label(parent, text="月").pack(side=tk.LEFT, padx=2)
-            d = ttk.Entry(parent, width=5)
+            d = ttk.Entry(parent, width=5, justify=tk.CENTER)
             d.pack(side=tk.LEFT)
             ttk.Label(parent, text=last_label).pack(side=tk.LEFT, padx=2 if last_label == "日" else 5)
             setattr(self, f'{prefix}year', y)
@@ -1140,7 +1144,7 @@ class ReportGeneratorGUI:
         caption_row.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
         ttk.Label(caption_row, text="未填說明時的預設字樣：").pack(side=tk.LEFT)
         ttk.Entry(caption_row, textvariable=self.default_caption, width=24).pack(side=tk.LEFT, padx=5)
-        ttk.Label(caption_row, text="（雙擊照片檔名輸入說明）", foreground="gray").pack(side=tk.LEFT)
+        ttk.Label(caption_row, text="（雙擊檔名輸入照片說明）", foreground="gray").pack(side=tk.LEFT)
 
         preview = PhotoPreview(inner, self.font_family)
         preview.grid(row=2, column=1, rowspan=len(categories) * 2, sticky=tk.N, padx=(10, 0), pady=(10, 0))
@@ -1597,7 +1601,7 @@ def main():
     ReportGeneratorGUI(root)
 
     logging.info("=" * 60)
-    logging.info("保育巡查回報單生成器 GUI 版本啟動")
+    logging.info(f"{APP_TITLE} 啟動")
     logging.info(f"執行命令: {sys.executable} {' '.join(sys.argv)}")
     logging.info("=" * 60)
 

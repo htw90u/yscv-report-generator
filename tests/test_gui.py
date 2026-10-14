@@ -251,13 +251,37 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(asked)
         self.assertFalse(closed)
 
-    def test_close_dirty_discard_closes_and_removes_autosave(self):
+    def test_close_dirty_discard_keeps_autosave_with_latest_content(self):
         self.app.personnel.insert(0, 'x')
         self.assertTrue(self.app.autosave_now())
-        self.assertTrue(os.path.exists(self.autosave))
+        self.app.personnel.insert(tk.END, 'y')  # 自動存檔之後又改了內容
+        closed, _ = self._close_with(False)
+        self.assertTrue(closed)
+        self.assertTrue(os.path.exists(self.autosave))  # 保留
+        import json
+        with open(self.autosave, encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['fields']['personnel'], 'xy')  # 離開前補存了最新內容
+
+    def test_close_dirty_discard_with_blank_screen_removes_stale_autosave(self):
+        self.app.personnel.insert(0, 'x')
+        self.app.autosave_now()
+        self.app._saved_signature = 'something else'  # 假裝上次存檔的內容和現在（空白）不同 -> 算有改動
+        self.app.personnel.delete(0, tk.END)
+        self.assertTrue(self.app.is_dirty())
         closed, _ = self._close_with(False)
         self.assertTrue(closed)
         self.assertFalse(os.path.exists(self.autosave))
+
+    def test_close_clean_removes_autosave(self):
+        with open(self.autosave, 'w', encoding='utf-8') as f:
+            f.write('{}')
+        closed, asked = self._close_with(None)
+        self.assertTrue(closed)
+        self.assertFalse(asked)
+        self.assertFalse(os.path.exists(self.autosave))
+
+    def test_autosave_interval_is_30_seconds(self):
+        self.assertEqual(g.AUTOSAVE_INTERVAL_MS, 30_000)
 
     def test_close_dirty_save_ok_closes_but_save_cancelled_stays(self):
         self.app.personnel.insert(0, 'x')

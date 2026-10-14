@@ -55,7 +55,7 @@ LINE_TWIPS = 440    # 固定行高 22pt（參考回報單）
 
 DRAFT_VERSION = 1
 DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'report_generator_autosave.json')
-AUTOSAVE_INTERVAL_MS = 60_000
+AUTOSAVE_INTERVAL_MS = 30_000  # 每 30 秒檢查一次，有變動才寫檔
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
 ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
                 'start_year', 'start_month', 'start_day',
@@ -1418,10 +1418,18 @@ class ReportGeneratorGUI:
         if self.is_dirty():
             answer = messagebox.askyesnocancel(
                 "尚未儲存", "有尚未儲存的內容，要先儲存草稿再離開嗎？\n\n"
-                           "是：儲存草稿後離開\n否：不儲存直接離開\n取消：回到程式")
+                           "是：儲存草稿後離開\n否：不儲存直接離開（下次開啟時可從自動存檔還原）\n取消：回到程式")
             if answer is None:
                 return
-            if answer and not self.save_draft():
+            if answer is False:
+                # 不存草稿離開：保留自動存檔（先補存最新內容；畫面已是空白就不留舊內容）
+                if self._signature() == self._blank_signature:
+                    self._remove_autosave()
+                else:
+                    self.autosave_now()
+                self.root.destroy()
+                return
+            if not self.save_draft():
                 return  # 取消存檔或存檔失敗，留在程式裡
         self._remove_autosave()
         self.root.destroy()

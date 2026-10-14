@@ -5,6 +5,7 @@
 提供圖形化介面供使用者輸入資料並選擇照片
 """
 
+import base64
 import copy
 import io
 import json
@@ -20,6 +21,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+from tkinter import font as tkfont
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -28,7 +30,11 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from PIL import Image, ImageOps
 
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'report_generator_gui.log')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 固定使用的模板（與程式放在同一個資料夾）
+TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
+GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
+LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -43,7 +49,7 @@ BODY_FONT_PT = 12   # 內容字級（與參考回報單相同，未特別指定�
 LINE_TWIPS = 440    # 固定行高 22pt（參考回報單）
 
 DRAFT_VERSION = 1
-DEFAULT_AUTOSAVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'report_generator_autosave.json')
+DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 60_000
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
 ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
@@ -97,17 +103,57 @@ FIELD_NAMES = {
 # ---------------------------------------------------------------- 文件處理（不依賴 tkinter）
 
 LIST_MARKER_RE = re.compile(r'^(?:[◆◇■□●○★☆•·‧▲△▼▽※＊*\-–—]|\d+\s*[.、)）]|[一二三四五六七八九十]+、)')
+NUMBER_MARKER_RE = re.compile(r'^\d+\s*[.、)）]')
+BULLET = '• '
 
 
 def content_lines(text):
-    """把使用者輸入拆成要寫入文件的行。沒有項目符號的行補上「• 」；空白行保留作為段落間隔。"""
-    lines = []
-    for raw in (text or '').split('\n'):
-        line = raw.strip()
-        if line and not LIST_MARKER_RE.match(line):
-            line = f'• {line}'
-        lines.append(line)
-    return lines
+    """把使用者輸入拆成要寫入文件的行。項目符號與編號由使用者在編輯區自行加入，這裡不再自動補。"""
+    return [line.strip() for line in (text or '').split('\n')]
+
+
+# ---- 編輯區的項目符號 / 編號（純文字處理，方便測試）
+_STRIP_MARKER_RE = re.compile(r'^(?:[•·‧◆◇■□●○★☆▲△▼▽※＊*\-–—]\s*|\d+\s*[.、)）]\s*)')
+
+
+def strip_list_marker(line):
+    return _STRIP_MARKER_RE.sub('', line.lstrip(), count=1)
+
+
+def toggle_bullets(lines):
+    """全部有內容的行都已是「• 」開頭就取消；否則全部加上「• 」。空白行不動。"""
+    filled = [ln for ln in lines if ln.strip()]
+    if filled and all(ln.lstrip().startswith('•') for ln in filled):
+        return [strip_list_marker(ln) if ln.strip() else ln for ln in lines]
+    return [BULLET + strip_list_marker(ln) if ln.strip() else ln for ln in lines]
+
+
+def toggle_numbers(lines):
+    """全部有內容的行都已有編號就取消；否則依序加上 1. 2. 3.（空白行不編號）。"""
+    filled = [ln for ln in lines if ln.strip()]
+    if filled and all(NUMBER_MARKER_RE.match(ln.lstrip()) for ln in filled):
+        return [strip_list_marker(ln) if ln.strip() else ln for ln in lines]
+    result, n = [], 1
+    for ln in lines:
+        if ln.strip():
+            result.append(f'{n}. {strip_list_marker(ln)}')
+            n += 1
+        else:
+            result.append(ln)
+    return result
+
+
+def continue_list(text_before_cursor):
+    """在項目符號/編號的行按 Enter：回傳 ('continue', 下一行前綴)、('end', '')（空項目，結束清單）或 (None, '')。"""
+    line = text_before_cursor.lstrip()
+    if line.startswith('•'):
+        rest, prefix = line[1:].strip(), BULLET
+    else:
+        m = re.match(r'^(\d+)\s*[.、)）]\s*', line)
+        if not m:
+            return None, ''
+        rest, prefix = line[m.end():].strip(), f'{int(m.group(1)) + 1}. '
+    return ('end', '') if not rest else ('continue', prefix)
 
 
 def set_cell_border(cell):
@@ -145,14 +191,20 @@ def _kai_rpr():
 
 
 def _build_content_paragraph(text):
-    """內容段落：標楷體 12pt、固定行高 22pt、項目符號懸掛縮排（格式依參考回報單）。"""
+    """內容段落：標楷體 12pt、固定行高 22pt（格式依參考回報單）。
+
+    開頭是項目符號或編號的行用懸掛縮排（換行後文字對齊在符號之後），其餘行直接縮排。
+    """
     p = OxmlElement('w:p')
     ppr = OxmlElement('w:pPr')
     spacing = OxmlElement('w:spacing')
     spacing.set(qn('w:line'), str(LINE_TWIPS))
     spacing.set(qn('w:lineRule'), 'exact')
     ind = OxmlElement('w:ind')
-    if text:
+    if text and NUMBER_MARKER_RE.match(text):
+        ind.set(qn('w:left'), '840')
+        ind.set(qn('w:hanging'), '360')
+    elif text and LIST_MARKER_RE.match(text):
         ind.set(qn('w:left'), '720')
         ind.set(qn('w:hanging'), '240')
     else:
@@ -616,6 +668,64 @@ def open_file(path):
         logging.error(f"無法自動開啟 {path}: {e}")
 
 
+_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
+
+
+def roc_date_range(data):
+    """協勤日期轉成檔名用的字串，例如 1150925-28（同月）、1150930-1002（跨月）。"""
+    y1, m1, d1 = int(data['start_year']), int(data['start_month']), int(data['start_day'])
+    y2, m2, d2 = int(data['end_year']), int(data['end_month']), int(data['end_day'])
+    start = f'{y1}{m1:02d}{d1:02d}'
+    if (y1, m1, d1) == (y2, m2, d2):
+        return start
+    if (y1, m1) == (y2, m2):
+        return f'{start}-{d2:02d}'
+    if y1 == y2:
+        return f'{start}-{m2:02d}{d2:02d}'
+    return f'{start}-{y2}{m2:02d}{d2:02d}'
+
+
+def default_output_name(data):
+    """<協勤地點>協勤回報單_<協勤日期>（不含副檔名）。"""
+    location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
+    return f"{location}協勤回報單_{roc_date_range(data)}"
+
+
+_PDF_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$word = $null
+try {
+    $word = New-Object -ComObject Word.Application
+    $word.Visible = $false
+    $word.DisplayAlerts = 0
+    $doc = $word.Documents.Open($env:REPORT_DOCX, $false, $true)
+    $doc.ExportAsFixedFormat($env:REPORT_PDF, 17)
+    $doc.Close($false)
+} finally {
+    # 只在沒有其他文件開著時才關閉 Word，避免影響使用者正在用的 Word
+    if ($word -ne $null -and $word.Documents.Count -eq 0) { $word.Quit() }
+}
+"""
+
+
+def export_pdf(docx_path, pdf_path, timeout=180):
+    """用 Word 把 docx 轉成 PDF（需要 Windows 與已安裝的 Word）。失敗時丟出 RuntimeError。"""
+    if sys.platform != 'win32':
+        raise RuntimeError("目前只支援在 Windows 上用 Word 轉換 PDF")
+    encoded = base64.b64encode(_PDF_SCRIPT.encode('utf-16-le')).decode('ascii')
+    env = dict(os.environ, REPORT_DOCX=os.path.abspath(docx_path), REPORT_PDF=os.path.abspath(pdf_path))
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+            env=env, capture_output=True, timeout=timeout,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"無法執行 Word 轉換：{e}")
+    if result.returncode != 0 or not os.path.exists(pdf_path):
+        detail = (result.stderr or result.stdout or b'').decode('utf-8', errors='replace').strip()
+        raise RuntimeError(f"Word 轉換 PDF 失敗（是否已安裝 Word？）{detail[:200]}")
+
+
 def build_report(template_path, data, photo_files, captions, output_path):
     """產生報告並存檔，回傳警告訊息清單。"""
     doc = Document(template_path)
@@ -631,18 +741,31 @@ def build_report(template_path, data, photo_files, captions, output_path):
 
 # ---------------------------------------------------------------- GUI
 
+def scale_gui_fonts(root, delta):
+    """把 Tk 的預設字型（按鈕、輸入框、文字區、分頁等）加大 delta 點。"""
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont', 'TkHeadingFont',
+                 'TkCaptionFont', 'TkSmallCaptionFont', 'TkIconFont', 'TkTooltipFont'):
+        try:
+            font = tkfont.nametofont(name, root=root)
+        except tk.TclError:
+            continue
+        size = font.cget('size')
+        font.configure(size=size + delta if size > 0 else size - delta)  # 負值代表像素
+
 class ReportGeneratorGUI:
     def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
-                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS):
+                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=TEMPLATE_PATH):
         self.root = root
+        scale_gui_fonts(root, GUI_FONT_DELTA)
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
         self.root.title("保育巡查回報單生成器")
-        self.root.geometry("900x700")
+        self.root.geometry("1050x820")
 
-        self.template_path = None
+        self.template_path = template_path
         self.photo_files = {c: [] for c in PHOTO_CATEGORIES_1 + PHOTO_CATEGORIES_2}
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
+        self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
         self.text_fields = {}
 
@@ -658,6 +781,11 @@ class ReportGeneratorGUI:
         self.root.after(self.autosave_interval_ms, self._autosave_tick)
         if restore_on_start:
             self.root.after(300, self.offer_restore)
+        if not os.path.exists(self.template_path):
+            self.root.after(200, lambda: messagebox.showerror("錯誤", self._missing_template_message()))
+
+    def _missing_template_message(self):
+        return f"找不到模板檔案：\n{self.template_path}\n\n請確認它和程式放在同一個資料夾。"
 
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -668,12 +796,6 @@ class ReportGeneratorGUI:
         main_frame.columnconfigure(1, weight=1)
 
         row = 0
-        ttk.Label(main_frame, text="模板檔案:", font=('Arial', 10, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
-        self.template_label = ttk.Label(main_frame, text="未選擇", foreground="red")
-        self.template_label.grid(row=row, column=1, sticky=tk.W, padx=5)
-        ttk.Button(main_frame, text="選擇模板", command=self.select_template).grid(row=row, column=2, padx=5)
-
-        row += 1
         notebook = ttk.Notebook(main_frame)
         notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
         main_frame.rowconfigure(row, weight=1)
@@ -774,25 +896,25 @@ class ReportGeneratorGUI:
             setattr(self, f'{prefix}day', d)
 
         row = 0
-        ttk.Label(frame, text="1. 年月日:", font=('Arial', 9, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="1. 年月日:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
         date_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_frame, '', "日")
 
         row += 1
-        ttk.Label(frame, text="2. 協勤人員姓名:", font=('Arial', 9, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="2. 協勤人員姓名:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         self.personnel = ttk.Entry(frame, width=50)
         self.personnel.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
         row += 1
-        ttk.Label(frame, text="3. 協勤日期:", font=('Arial', 9, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="3. 協勤日期:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         date_range_frame = ttk.Frame(frame)
         date_range_frame.grid(row=row, column=1, sticky=tk.W, padx=5)
         date_entries(date_range_frame, 'start_', "日 至")
         date_entries(date_range_frame, 'end_', "日")
 
         row += 1
-        ttk.Label(frame, text="4. 協勤地點:", font=('Arial', 9, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="4. 協勤地點:", font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(row=row, column=0, sticky=tk.W, pady=5)
         self.location = ttk.Entry(frame, width=50)
         self.location.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5)
 
@@ -801,27 +923,67 @@ class ReportGeneratorGUI:
         row_idx = 0
         for label, key in fields:
             if key is None:
-                ttk.Label(inner, text=label, font=('Arial', 10, 'bold'), wraplength=760).grid(
+                ttk.Label(inner, text=label, font=('Arial', 10 + GUI_FONT_DELTA, 'bold'), wraplength=880).grid(
                     row=row_idx, column=0, sticky=tk.W, pady=(15, 5))
                 row_idx += 1
                 continue
-            ttk.Label(inner, text=label, font=('Arial', 9, 'bold'), wraplength=760).grid(
-                row=row_idx, column=0, sticky=tk.W, pady=(10, 2))
-            text_widget = scrolledtext.ScrolledText(inner, height=height, width=70)
+            header = ttk.Frame(inner)
+            header.grid(row=row_idx, column=0, sticky=(tk.W, tk.E), pady=(10, 2))
+            header.columnconfigure(0, weight=1)
+            ttk.Label(header, text=label, font=('Arial', 9 + GUI_FONT_DELTA, 'bold'), wraplength=640).grid(
+                row=0, column=0, sticky=tk.W)
+            text_widget = scrolledtext.ScrolledText(inner, height=height, width=70, undo=True)
+            ttk.Button(header, text="• 項目符號", width=10,
+                       command=lambda w=text_widget: self.apply_list(w, toggle_bullets)).grid(row=0, column=1, padx=2)
+            ttk.Button(header, text="1. 編號", width=8,
+                       command=lambda w=text_widget: self.apply_list(w, toggle_numbers)).grid(row=0, column=2, padx=2)
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
+            text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
             row_idx += 2
 
+    def apply_list(self, widget, toggler):
+        """對選取的行（沒有選取就是游標所在行）加上/取消項目符號或編號。"""
+        try:
+            first = int(widget.index(tk.SEL_FIRST).split('.')[0])
+            last_index = widget.index(tk.SEL_LAST)
+            last = int(last_index.split('.')[0])
+            if last_index.endswith('.0') and last > first:
+                last -= 1  # 選取範圍結尾剛好在下一行開頭，不算那一行
+        except tk.TclError:
+            first = last = int(widget.index(tk.INSERT).split('.')[0])
+        old = widget.get(f'{first}.0', f'{last}.end')
+        new = '\n'.join(toggler(old.split('\n')))
+        widget.delete(f'{first}.0', f'{last}.end')
+        widget.insert(f'{first}.0', new)
+        end_line = first + new.count('\n')
+        widget.tag_remove(tk.SEL, '1.0', tk.END)
+        widget.tag_add(tk.SEL, f'{first}.0', f'{end_line}.end')
+        widget.mark_set(tk.INSERT, f'{end_line}.end')
+        widget.focus_set()
+
+    def _on_return(self, widget):
+        """在項目符號/編號的行按 Enter：自動接上下一個符號；空項目再按 Enter 則結束清單。"""
+        line_start = widget.index('insert linestart')
+        action, prefix = continue_list(widget.get(line_start, 'insert'))
+        if action is None:
+            return None
+        if action == 'end':
+            widget.delete(line_start, 'insert')
+        else:
+            widget.insert('insert', '\n' + prefix)
+        return 'break'
+
     def create_photo_tab(self, notebook, title, heading, categories):
         inner = self.make_scrollable_tab(notebook, title)
-        ttk.Label(inner, text=heading, font=('Arial', 11, 'bold')).grid(
+        ttk.Label(inner, text=heading, font=('Arial', 11 + GUI_FONT_DELTA, 'bold')).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
         ttk.Label(inner, text="（雙擊照片可編輯說明）", foreground="gray").grid(
             row=0, column=0, sticky=tk.E)
 
         for idx, category in enumerate(categories):
             row = idx * 2 + 1
-            ttk.Label(inner, text=category, font=('Arial', 9, 'bold')).grid(
+            ttk.Label(inner, text=category, font=('Arial', 9 + GUI_FONT_DELTA, 'bold')).grid(
                 row=row, column=0, sticky=tk.W, pady=(10, 5))
 
             list_frame = ttk.Frame(inner)
@@ -847,17 +1009,6 @@ class ReportGeneratorGUI:
             self.listboxes[category] = listbox
 
     # ---- 事件處理
-    def select_template(self):
-        filepath = filedialog.askopenfilename(
-            title="選擇模板檔案",
-            filetypes=[("Word文件", "*.docx"), ("所有檔案", "*.*")]
-        )
-        if filepath:
-            self.template_path = filepath
-            self.template_label.config(text=os.path.basename(filepath), foreground="green")
-            self.status_label.config(text=f"已選擇模板: {os.path.basename(filepath)}")
-            logging.info(f"選擇模板: {filepath}")
-
     def _photo_label(self, category, filepath):
         caption = self.photo_captions[category].get(filepath)
         name = os.path.basename(filepath)
@@ -939,7 +1090,6 @@ class ReportGeneratorGUI:
         return {
             'version': DRAFT_VERSION,
             'saved_at': datetime.now().isoformat(timespec='seconds'),
-            'template_path': self.template_path,
             'fields': {name: getattr(self, name).get() for name in ENTRY_FIELDS},
             'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
             'photos': {c: list(p) for c, p in self.photo_files.items()},
@@ -957,15 +1107,6 @@ class ReportGeneratorGUI:
             getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
-
-        # 已在本次手動選好模板時，以目前選擇為準；草稿記錄的模板只在尚未選擇時才帶入
-        template = draft.get('template_path')
-        if not self.template_path and template:
-            if os.path.exists(template):
-                self.template_path = template
-                self.template_label.config(text=os.path.basename(template), foreground="green")
-            else:
-                warnings.append(f"找不到草稿記錄的模板：{template}，請重新選擇模板")
 
         for category, paths in draft.get('photos', {}).items():
             if category not in self.photo_files:
@@ -985,7 +1126,7 @@ class ReportGeneratorGUI:
         path = filedialog.asksaveasfilename(
             title="儲存草稿",
             defaultextension=".json",
-            initialdir=os.path.dirname(self.template_path) if self.template_path else None,
+            initialdir=self._last_dir,
             initialfile=f"巡查回報單草稿_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             filetypes=[("草稿檔", "*.json")]
         )
@@ -1029,7 +1170,6 @@ class ReportGeneratorGUI:
         """目前內容的指紋（不含存檔時間與模板路徑），用來判斷內容是否改變。"""
         draft = self.build_draft()
         draft.pop('saved_at')
-        draft.pop('template_path')
         return json.dumps(draft, ensure_ascii=False, sort_keys=True)
 
     def is_dirty(self):
@@ -1134,8 +1274,8 @@ class ReportGeneratorGUI:
         return data, None
 
     def generate_report(self):
-        if not self.template_path:
-            messagebox.showerror("錯誤", "請先選擇模板檔案")
+        if not os.path.exists(self.template_path):
+            messagebox.showerror("錯誤", self._missing_template_message())
             return
 
         data, error = self.collect_data()
@@ -1151,21 +1291,21 @@ class ReportGeneratorGUI:
             return
 
         output_path = filedialog.asksaveasfilename(
-            title="儲存報告",
+            title="儲存報告（同時會產生同名的 PDF）",
             defaultextension=".docx",
-            initialdir=os.path.dirname(self.template_path),
-            initialfile=f"保育巡查回報單_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+            initialdir=self._last_dir,
+            initialfile=default_output_name(data) + ".docx",
             filetypes=[("Word文件", "*.docx")]
         )
         if not output_path:
             return
         if os.path.exists(output_path) and os.path.samefile(output_path, self.template_path):
-            messagebox.showerror("錯誤", "輸出檔案不能和模板是同一個檔案，否則會覆蓋模板，"
-                                         "下次再用它當模板時內容會重複疊加。\n請換一個檔名。")
+            messagebox.showerror("錯誤", "輸出檔案不能和模板是同一個檔案，否則會覆蓋模板。\n請換一個檔名。")
             return
+        self._last_dir = os.path.dirname(output_path)
 
         self.generate_btn.config(state=tk.DISABLED)
-        self.status_label.config(text="正在產生報告...")
+        self.status_label.config(text="正在產生報告與 PDF...")
         threading.Thread(target=self._generate_report_worker,
                          args=(data, photo_files, captions, output_path, self.auto_open.get()),
                          daemon=True).start()
@@ -1187,15 +1327,25 @@ class ReportGeneratorGUI:
             warnings = build_report(self.template_path, data, photo_files, captions, output_path)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
 
+            pdf_path = os.path.splitext(output_path)[0] + '.pdf'
+            try:
+                export_pdf(output_path, pdf_path)
+                logging.info(f"✓ SUCCESS: PDF 已產生 {pdf_path}")
+            except RuntimeError as e:
+                logging.error(f"PDF 轉換失敗: {e}")
+                warnings.append(f"PDF 未產生：{e}")
+                pdf_path = None
+
             if open_after:
                 # 只開啟檔案，本工具維持開啟，方便修改後再次產生
                 self._post(lambda: open_file(output_path))
+            files = f"Word: {output_path}" + (f"\nPDF: {pdf_path}" if pdf_path else "")
             if warnings:
-                message = f"報告已產生！\n\n檔案: {output_path}\n\n⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings)
+                message = f"報告已產生！\n\n{files}\n\n⚠ 注意：\n" + "\n".join(f"- {w}" for w in warnings)
                 logging.warning("警告: " + "; ".join(warnings))
                 self._post(lambda: messagebox.showinfo("成功（有警告）", message))
             elif not open_after:
-                self._post(lambda: messagebox.showinfo("成功", f"報告已產生！\n\n檔案: {output_path}"))
+                self._post(lambda: messagebox.showinfo("成功", f"報告已產生！\n\n{files}"))
             self._post(lambda: self.status_label.config(text=f"✓ SUCCESS: 已產生 {output_path}"))
         except Exception as e:
             error_msg = f"✗ FAIL: {e}"

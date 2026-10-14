@@ -23,9 +23,17 @@ class GuiTest(unittest.TestCase):
         self.app = g.ReportGeneratorGUI(self.root, autosave_path=self.autosave, restore_on_start=False)
         self.app.template_path = TEMPLATE
         self.shown = []
+        self.pdf_calls = []
+
+        def fake_pdf(docx, pdf):
+            self.pdf_calls.append((docx, pdf))
+            with open(pdf, 'wb') as f:
+                f.write(b'%PDF-fake')
+
         for p in (
             mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', m))),
             mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', m))),
+            mock.patch.object(g, 'export_pdf', fake_pdf),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -75,6 +83,39 @@ class GuiTest(unittest.TestCase):
             self.root.update()
             time.sleep(0.05)
         self.root.update()
+
+    def test_default_filename_and_pdf_generated(self):
+        self.fill_dates()
+        self.app.location.insert(0, '排雲山莊')
+        out = os.path.join(self.tmp.name, 'o.docx')
+        captured = {}
+
+        def ask(**kw):
+            captured.update(kw)
+            return out
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', ask), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertEqual(captured['initialfile'], '排雲山莊協勤回報單_1151001-02.docx')
+        self.assertEqual(self.pdf_calls, [(out, os.path.join(self.tmp.name, 'o.pdf'))])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, 'o.pdf')))
+
+    def test_pdf_failure_is_reported_but_docx_kept(self):
+        self.fill_dates()
+        out = os.path.join(self.tmp.name, 'o.docx')
+
+        def boom(docx, pdf):
+            raise RuntimeError('沒有 Word')
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', lambda **k: out), \
+                mock.patch.object(g, 'export_pdf', boom), \
+                mock.patch.object(g, 'open_file', lambda path: None):
+            self.app.generate_report()
+            self._wait_until_done()
+        self.assertTrue(os.path.exists(out))
+        self.assertTrue(any(k == 'info' and 'PDF 未產生' in m for k, m in self.shown))
 
     def test_auto_open_can_be_turned_off(self):
         self.fill_dates()
@@ -148,7 +189,6 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.photo_files[cat], [p])
         self.assertEqual(self.app.photo_captions[cat][p], '說明X')
         self.assertIn('說明X', self.app.listboxes[cat].get(0))
-        self.assertEqual(self.app.template_path, TEMPLATE)
 
     def test_draft_load_missing_photo_warns(self):
         cat, p = self._add_photo()
@@ -186,12 +226,12 @@ class GuiTest(unittest.TestCase):
         """模擬按下關閉，回傳 (是否關閉視窗, 提示是否出現)。"""
         asked = []
         destroyed = []
-        self.app.root.destroy = lambda: destroyed.append(True)
-        self.app.save_draft = lambda: save_ok
+
         def ask(*a, **k):
             asked.append(True)
             return answer
-        with mock.patch.object(messagebox, 'askyesnocancel', ask):
+
+        with mock.patch.object(self.app.root, 'destroy', lambda: destroyed.append(True)),                 mock.patch.object(self.app, 'save_draft', lambda: save_ok),                 mock.patch.object(messagebox, 'askyesnocancel', ask):
             self.app.on_close()
         return bool(destroyed), bool(asked)
 
@@ -199,10 +239,6 @@ class GuiTest(unittest.TestCase):
         closed, asked = self._close_with(None)
         self.assertTrue(closed)
         self.assertFalse(asked)
-
-    def test_template_only_change_is_not_dirty(self):
-        self.app.template_path = None
-        self.assertFalse(self.app.is_dirty())
 
     def test_close_dirty_cancel_stays(self):
         self.app.personnel.insert(0, 'x')
@@ -282,26 +318,31 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.autosave))
         after.assert_called_once()
 
-    def test_draft_does_not_override_chosen_template(self):
+    def test_draft_does_not_store_template_and_ignores_old_template_path(self):
         draft = os.path.join(self.tmp.name, 'd.json')
         self._save_draft_to(draft)
         import json
         with open(draft, encoding='utf-8') as f:
             data = json.load(f)
-        other = os.path.join(self.tmp.name, 'other.docx')
-        open(other, 'wb').close()
-        data['template_path'] = other
+        self.assertNotIn('template_path', data)
+        data['template_path'] = os.path.join(self.tmp.name, 'old.docx')  # 舊版草稿帶有這個欄位
         with open(draft, 'w', encoding='utf-8') as f:
             json.dump(data, f)
         self._load_draft_from(draft)
-        self.assertEqual(self.app.template_path, TEMPLATE)  # 保留手動選的模板
-
-    def test_draft_restores_template_when_none_chosen(self):
-        draft = os.path.join(self.tmp.name, 'd.json')
-        self._save_draft_to(draft)
-        self.app.template_path = None
-        self._load_draft_from(draft)
         self.assertEqual(self.app.template_path, TEMPLATE)
+
+    def test_template_is_fixed_no_selection_ui(self):
+        self.assertEqual(g.TEMPLATE_PATH, TEMPLATE)
+        self.assertFalse(hasattr(self.app, 'select_template'))
+        self.assertFalse(hasattr(self.app, 'template_label'))
+        self.assertTrue(os.path.exists(g.TEMPLATE_PATH))
+
+    def test_missing_template_blocks_generation(self):
+        self.app.template_path = os.path.join(self.tmp.name, 'missing.docx')
+        self.fill_dates()
+        self.app.generate_report()
+        self.assertEqual(self.shown[-1][0], 'err')
+        self.assertIn('找不到模板', self.shown[-1][1])
 
     def test_output_same_as_template_rejected(self):
         import shutil
@@ -314,6 +355,55 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.shown[-1][0], 'err')
         self.assertIn('模板', self.shown[-1][1])
         self.assertEqual(str(self.app.generate_btn['state']), 'normal')
+
+    # ---- 編輯區項目符號 / 編號、字體
+    def test_bullet_and_number_buttons_on_selection(self):
+        w = self.app.text_fields['nature']
+        w.insert('1.0', 'a\nb\nc')
+        w.tag_add(tk.SEL, '1.0', '2.end')
+        self.app.apply_list(w, g.toggle_bullets)
+        self.assertEqual(w.get('1.0', 'end-1c'), '• a\n• b\nc')
+        self.app.apply_list(w, g.toggle_numbers)
+        self.assertEqual(w.get('1.0', 'end-1c'), '1. a\n2. b\nc')
+        self.app.apply_list(w, g.toggle_numbers)  # 再按一次取消
+        self.assertEqual(w.get('1.0', 'end-1c'), 'a\nb\nc')
+
+    def test_buttons_apply_to_current_line_without_selection(self):
+        w = self.app.text_fields['nature']
+        w.insert('1.0', 'a\nb')
+        w.mark_set(tk.INSERT, '2.1')
+        self.app.apply_list(w, g.toggle_bullets)
+        self.assertEqual(w.get('1.0', 'end-1c'), 'a\n• b')
+
+    def test_enter_continues_list_and_ends_on_empty_item(self):
+        w = self.app.text_fields['nature']
+        w.insert('1.0', '1. 第一項')
+        w.mark_set(tk.INSERT, 'end-1c')
+        self.assertEqual(self.app._on_return(w), 'break')
+        self.assertEqual(w.get('1.0', 'end-1c'), '1. 第一項\n2. ')
+        self.assertEqual(self.app._on_return(w), 'break')  # 空項目再按 Enter：移除編號、結束清單
+        self.assertEqual(w.get('1.0', 'end-1c'), '1. 第一項\n')
+        self.assertIsNone(self.app._on_return(w))  # 一般文字維持預設行為
+
+    def test_list_markers_flow_into_report(self):
+        self.fill_dates()
+        w = self.app.text_fields['nature']
+        w.insert('1.0', '山羌\n水鹿')
+        w.tag_add(tk.SEL, '1.0', 'end-1c')
+        self.app.apply_list(w, g.toggle_numbers)
+        data, err = self.app.collect_data()
+        self.assertIsNone(err)
+        self.assertEqual(data['nature'], '1. 山羌\n2. 水鹿')
+
+    def test_gui_fonts_are_enlarged_by_two(self):
+        import tkinter.font as tkfont
+        probe = tk.Tk()
+        base = tkfont.nametofont('TkDefaultFont', root=probe).cget('size')
+        probe.destroy()
+        scaled = tkfont.nametofont('TkDefaultFont', root=self.root).cget('size')
+        step = 2 if base > 0 else -2
+        self.assertEqual(scaled, base + step)
+        self.assertEqual(g.GUI_FONT_DELTA, 2)
 
     def test_mousewheel_scrolls_tab_from_child_widget(self):
         self.root.geometry('900x300')

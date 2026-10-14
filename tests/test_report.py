@@ -260,10 +260,61 @@ class DocumentStructureTest(BuildReportTest):
 
 
 class ContentLinesTest(unittest.TestCase):
-    def test_lines(self):
+    def test_lines_are_kept_as_typed(self):
+        # 項目符號/編號由使用者在編輯區自己加，填表時不再自動補符號
         self.assertEqual(g.content_lines(''), [''])
-        self.assertEqual(g.content_lines('a\n\n• b\n◆ c\n■ d\n1. e\n2、f\n一、g'),
-                         ['• a', '', '• b', '◆ c', '■ d', '1. e', '2、f', '一、g'])
+        self.assertEqual(g.content_lines(' a \n\n• b\n1. c'), ['a', '', '• b', '1. c'])
+
+
+class ListToolsTest(unittest.TestCase):
+    def test_toggle_bullets_add_and_remove(self):
+        lines = ['a', '', 'b']
+        added = g.toggle_bullets(lines)
+        self.assertEqual(added, ['• a', '', '• b'])
+        self.assertEqual(g.toggle_bullets(added), ['a', '', 'b'])
+
+    def test_toggle_bullets_mixed_selection_adds_to_all(self):
+        self.assertEqual(g.toggle_bullets(['• a', 'b']), ['• a', '• b'])
+
+    def test_toggle_numbers_sequence_skips_blank_lines(self):
+        numbered = g.toggle_numbers(['a', '', 'b', 'c'])
+        self.assertEqual(numbered, ['1. a', '', '2. b', '3. c'])
+        self.assertEqual(g.toggle_numbers(numbered), ['a', '', 'b', 'c'])
+
+    def test_switch_between_bullets_and_numbers(self):
+        self.assertEqual(g.toggle_numbers(['• a', '• b']), ['1. a', '2. b'])
+        self.assertEqual(g.toggle_bullets(['1. a', '2. b']), ['• a', '• b'])
+
+    def test_continue_list(self):
+        self.assertEqual(g.continue_list('• 山屋正常'), ('continue', '• '))
+        self.assertEqual(g.continue_list('2. 水塔滿水'), ('continue', '3. '))
+        self.assertEqual(g.continue_list('• '), ('end', ''))
+        self.assertEqual(g.continue_list('3. '), ('end', ''))
+        self.assertEqual(g.continue_list('一般文字'), (None, ''))
+
+
+class OutputNameTest(unittest.TestCase):
+    BASE = dict(start_year='115', start_month='9', start_day='25',
+                end_year='115', end_month='9', end_day='28', location='排雲山莊')
+
+    def test_roc_date_range(self):
+        d = dict(self.BASE)
+        self.assertEqual(g.roc_date_range(d), '1150925-28')
+        d.update(end_day='25')
+        self.assertEqual(g.roc_date_range(d), '1150925')
+        d.update(end_month='10', end_day='2')
+        self.assertEqual(g.roc_date_range(d), '1150925-1002')
+        d.update(end_year='116', end_month='1', end_day='3')
+        self.assertEqual(g.roc_date_range(d), '1150925-1160103')
+
+    def test_default_output_name(self):
+        self.assertEqual(g.default_output_name(self.BASE), '排雲山莊協勤回報單_1150925-28')
+
+    def test_invalid_filename_chars_removed_and_empty_location(self):
+        d = dict(self.BASE, location='排雲/山:莊?')
+        self.assertEqual(g.default_output_name(d), '排雲山莊協勤回報單_1150925-28')
+        d = dict(self.BASE, location='')
+        self.assertEqual(g.default_output_name(d), '協勤回報單_1150925-28')
 
 
 class FormattingTest(BuildReportTest):
@@ -298,7 +349,7 @@ class FormattingTest(BuildReportTest):
         self.assertEqual(run.font.size.pt, 14)
 
     def test_content_paragraph_format(self):
-        _, p = self._paragraphs('• 內容_road_status')
+        _, p = self._paragraphs('• 第二行_road_status')  # 使用者自己加的項目符號
         run = p.runs[0]
         self.assertEqual(run.font.size.pt, 12)
         self.assertEqual(run._r.rPr.rFonts.get(self.W + 'eastAsia'), '標楷體')
@@ -307,6 +358,18 @@ class FormattingTest(BuildReportTest):
         self.assertEqual(spacing.get(self.W + 'lineRule'), 'exact')
         ind = p._p.pPr.find(self.W + 'ind')
         self.assertEqual(ind.get(self.W + 'hanging'), '240')
+
+    def test_plain_line_has_no_hanging_indent_and_no_auto_bullet(self):
+        _, p = self._paragraphs('內容_road_status')  # 使用者沒加符號 -> 不會被自動加上「• 」
+        self.assertFalse(p.text.startswith('•'))
+        ind = p._p.pPr.find(self.W + 'ind')
+        self.assertEqual(ind.get(self.W + 'left'), '480')
+        self.assertIsNone(ind.get(self.W + 'hanging'))
+
+    def test_numbered_line_hanging_indent(self):
+        doc_p = g._build_content_paragraph('1. 項目')
+        ind = doc_p.find(self.W + 'pPr').find(self.W + 'ind')
+        self.assertEqual(ind.get(self.W + 'hanging'), '360')
 
     def test_content_is_inserted_right_after_label(self):
         _, label = self._paragraphs('1、道路、步道狀況及維護情形：')

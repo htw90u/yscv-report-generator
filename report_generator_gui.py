@@ -37,7 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
 LIST_MENU_EXTRA_PT = 1  # 「項目符號/編號」下拉選單比其他介面文字再大幾點
-GUI_FONT_WEIGHT = 'normal'  # 介面字型粗細。介面不使用粗體（邊緣不好看），強調改用字級與顏色
+GUI_FONT_WEIGHT = 'normal'  # 一般介面字型粗細；只有分頁標題與各頁標題用粗體（見 _apply_theme）
 # 介面字型：芫荽 Iansui（SIL OFL 授權，字型檔與授權文字放在 fonts/，執行時私下載入、不安裝到系統）
 # 只有 Regular 一個字重；介面不使用粗體（模擬的粗體邊緣不好看），強調改用字級與顏色
 FONT_DIR = os.path.join(BASE_DIR, 'fonts')
@@ -1353,7 +1353,7 @@ class ReportGeneratorGUI:
         style.configure('Hint.TLabel', foreground=p['muted'])
         style.configure('Sub.TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=1, tabmargins=(2, 4, 2, 0))
-        style.configure('Sub.TNotebook.Tab', padding=(16, 6), background=p['tab_idle'], foreground=p['tab_idle_fg'],
+        style.configure('Sub.TNotebook.Tab', padding=(16, 6), font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'), background=p['tab_idle'], foreground=p['tab_idle_fg'],
                         bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'])
         style.map('Sub.TNotebook.Tab', background=[('selected', '#ffffff'), ('active', p['tab_hover'])],
                   foreground=[('selected', p['heading_fg'])], padding=[('selected', (16, 9))])
@@ -1364,14 +1364,14 @@ class ReportGeneratorGUI:
         style.configure('List.TMenubutton', foreground=p['text'], font=(self.font_family, self._list_menu_pt()))
         style.configure('TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=2, tabmargins=(4, 4, 4, 0), tabposition='nw')
-        style.configure('TNotebook.Tab', padding=TAB_PADDING, background=p['tab_idle'], foreground=p['tab_idle_fg'],
+        style.configure('TNotebook.Tab', padding=TAB_PADDING, font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'), background=p['tab_idle'], foreground=p['tab_idle_fg'],
                         bordercolor=p['border'], lightcolor=p['border'], darkcolor=p['border'], borderwidth=2)
         style.map('TNotebook.Tab',
                   background=[('selected', p['tab_active']), ('active', p['tab_hover'])],
                   foreground=[('selected', p['tab_active_fg'])],
                   padding=[('selected', TAB_PADDING_ACTIVE)],
                   expand=[('selected', (0, 0, 0, 0))])
-        style.configure('Heading.TLabel', font=(self.font_family, 12 + GUI_FONT_DELTA), foreground=p['heading_fg'])
+        style.configure('Heading.TLabel', font=(self.font_family, 12 + GUI_FONT_DELTA, 'bold'), foreground=p['heading_fg'])
         style.configure('Field.TLabel', font=(self.font_family, 10 + GUI_FONT_DELTA), foreground=p['field_fg'])
         dialog_font = (self.font_family, 9 + GUI_FONT_DELTA + DIALOG_FONT_EXTRA_PT)
         style.configure('Dialog.TButton', font=dialog_font, padding=(18, 6))

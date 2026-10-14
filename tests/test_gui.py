@@ -1785,20 +1785,20 @@ class GuiTest(unittest.TestCase):
         font = tkfont.nametofont('TkDefaultFont', root=self.root)
         self.assertLessEqual(font.metrics('linespace'), 30)
 
-    def test_form_uses_no_bold_anywhere(self):
-        """表單不使用粗體：所有標籤樣式與介面字型都是一般字重，強調改用字級與顏色。"""
+    def test_only_tab_titles_and_page_headings_are_bold(self):
+        """只有分頁標題與各頁標題用粗體；一般介面字型與欄位標籤維持一般字重。"""
         import tkinter.font as tkfont
         for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont', 'TkMenuFont'):
             self.assertEqual(tkfont.nametofont(name, root=self.root).cget('weight'), 'normal')
-        for style_name in ('Heading.TLabel', 'Field.TLabel'):
+        for style_name, weight in (('Heading.TLabel', 'bold'), ('TNotebook.Tab', 'bold'),
+                                   ('Sub.TNotebook.Tab', 'bold'), ('Field.TLabel', 'normal')):
             font = tkfont.Font(root=self.root, font=style_lookup(self.root, style_name, 'font'))
-            self.assertEqual(font.cget('weight'), 'normal', style_name)
+            self.assertEqual(font.cget('weight'), weight, style_name)
         for w in self._all_widgets(self.root):
-            if isinstance(w, ttk.Label):
-                font = str(w.cget('font'))
-                self.assertNotIn('bold', font, f'{w.cget("text")[:10]} 使用了粗體')
+            if isinstance(w, ttk.Label) and str(w.cget('style')) == 'Field.TLabel':
+                self.assertNotIn('bold', str(w.cget('font')))
 
-    def test_headings_are_distinguished_by_size_and_color_instead_of_bold(self):
+    def test_headings_are_distinguished_by_size_and_color(self):
         import tkinter.font as tkfont
         palette = g.THEMES[g.DEFAULT_THEME]
         heading = tkfont.Font(root=self.root, font=style_lookup(self.root, 'Heading.TLabel', 'font'))

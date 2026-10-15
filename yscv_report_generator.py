@@ -904,7 +904,7 @@ def roc_date_parts(day=None):
     return str(day.year - ROC_YEAR_OFFSET), str(day.month), str(day.day)
 
 
-_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
+_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
 NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
@@ -983,6 +983,7 @@ try {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
     $word.DisplayAlerts = 0
+    $word.AutomationSecurity = 3   # 強制停用巨集（只轉換自己產生的檔案，不需要任何巨集）
     $doc = $word.Documents.Open($env:REPORT_DOCX, $false, $true)
     $doc.ExportAsFixedFormat($env:REPORT_PDF, 17)
     $doc.Close($false)
@@ -993,6 +994,12 @@ try {
 """
 
 
+def _powershell_path():
+    """PowerShell 用系統資料夾裡的完整路徑啟動，不讓目前資料夾裡同名的 powershell.exe 被執行到。"""
+    path = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    return path if os.path.exists(path) else 'powershell'
+
+
 def export_pdf(docx_path, pdf_path, timeout=180):
     """用 Word 把 docx 轉成 PDF（需要 Windows 與已安裝的 Word）。失敗時丟出 RuntimeError。"""
     if sys.platform != 'win32':
@@ -1001,7 +1008,7 @@ def export_pdf(docx_path, pdf_path, timeout=180):
     env = dict(os.environ, REPORT_DOCX=os.path.abspath(docx_path), REPORT_PDF=os.path.abspath(pdf_path))
     try:
         result = subprocess.run(
-            ['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+            [_powershell_path(), '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
             env=env, capture_output=True, timeout=timeout,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -1020,8 +1027,24 @@ def _describe_pdf_failure(raw):
     return f"Word 轉換 PDF 失敗{detail}"
 
 
+_XML_ILLEGAL_CHARS = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]')
+
+
+def xml_safe(text):
+    """拿掉 Word（XML）不能存的控制字元（例如從 PDF 或網頁貼上帶進來的空字元、垂直定位字元）；
+    不處理的話 python-docx 會直接報錯，產生不出報告。"""
+    return _XML_ILLEGAL_CHARS.sub('', text) if isinstance(text, str) else text
+
+
+def xml_safe_inputs(data, captions):
+    """回傳 (資料, 圖說) 的副本，所有文字都先拿掉 XML 不接受的字元。"""
+    return ({k: xml_safe(v) for k, v in data.items()},
+            {cat: {path: xml_safe(text) for path, text in items.items()} for cat, items in (captions or {}).items()})
+
+
 def build_report(template_path, data, photo_files, captions, output_path, rotations=None, crops=None):
     """產生報告並存檔，回傳警告訊息清單。"""
+    data, captions = xml_safe_inputs(data, captions)
     doc = Document(template_path)
     if len(doc.tables) < 1:
         raise ValueError("模板格式錯誤：找不到表格")
@@ -1527,8 +1550,10 @@ def save_settings(settings_path, **changes):
     data = load_settings(settings_path)
     data.update(changes)
     try:
-        with open(settings_path, 'w', encoding='utf-8') as f:
+        tmp_path = settings_path + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, settings_path)       # 原子替換，寫到一半當機不會留下壞掉的設定檔
     except OSError as e:
         logging.error(f"無法儲存設定: {e}")
         return False
@@ -3600,7 +3625,7 @@ def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT, reply_to=''
                                      headers={'Content-Type': 'application/json'})
     try:
         # Apps Script 會 302 轉址到 googleusercontent 取回結果，urllib 會自動跟隨
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with yscv_updates.urlopen_safe(request, timeout) as response:
             result = json.loads(response.read().decode('utf-8', errors='replace'))
     except urllib.error.HTTPError as e:
         e.close()

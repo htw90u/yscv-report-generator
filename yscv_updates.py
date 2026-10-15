@@ -43,6 +43,20 @@ class UpdateResult:
     message: str = ''
 
 
+class _NoDowngradeRedirect(urllib.request.HTTPRedirectHandler):
+    """https 的請求被轉址到 http／ftp／file 時直接拒絕（避免被降級成明文連線）。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if req.full_url.lower().startswith('https://') and not newurl.lower().startswith('https://'):
+            raise urllib.error.URLError("不接受轉址到非 https 的網址")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def urlopen_safe(request, timeout):
+    """urllib.request.urlopen 的版本：轉址不能從 https 降級。"""
+    return urllib.request.build_opener(_NoDowngradeRedirect).open(request, timeout=timeout)
+
+
 def parse_version(text):
     """「v0.9」「0.9.1」→ (0, 9, 1, 0)；格式不是單純的數字版本（例如 v1.0-rc1）回傳 None。"""
     match = re.fullmatch(r'[vV]?([0-9]{1,6}(?:\.[0-9]{1,6}){0,3})', str(text or '').strip())
@@ -111,7 +125,7 @@ def fetch_latest_release(repo, api_base=API_BASE, timeout=TIMEOUT, user_agent='y
         headers={'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
                  'User-Agent': user_agent})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen_safe(request, timeout) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as e:
         code = e.code

@@ -281,5 +281,69 @@ class DependencyTest(unittest.TestCase):
         self.assertGreaterEqual(version('Pillow'), (10, 3, 0))
 
 
+class RobustnessTest(unittest.TestCase):
+    """第二輪檢查補上的項目：貼上的控制字元、https 轉址降級、設定檔寫入、PowerShell 啟動方式。"""
+
+    BAD = 'a\x00b\x08c\x0bd\x1fe\ufffe'
+
+    def build(self, which):
+        import yscv_reports as r
+        from test_reports import TATAKA_DATA, ECO_DATA
+        from _common import TEMPLATE, TATAKA_TEMPLATE, ECO_TEMPLATE
+        data, template, fn = {'tataka': (TATAKA_DATA, TATAKA_TEMPLATE, r.build_tataka_report),
+                              'eco': (ECO_DATA, ECO_TEMPLATE, r.build_ecotoilet_report),
+                              'patrol': (None, TEMPLATE, g.build_report)}[which]
+        if data is None:
+            data = dict(year='115', month='10', day='15', personnel='王小明', location='玉山', start_year='115',
+                        start_month='10', start_day='15', end_year='115', end_month='10', end_day='15')
+        data = {k: (self.BAD if isinstance(v, str) else v) for k, v in data.items()}
+        out = os.path.join(tempfile.mkdtemp(), 'x.docx')
+        self.addCleanup(shutil.rmtree, os.path.dirname(out), True)
+        fn(template, data, {}, {'cat': {'p': self.BAD}}, out)
+        return out
+
+    def test_control_characters_do_not_break_report_generation(self):
+        for which in ('tataka', 'eco', 'patrol'):
+            with self.subTest(which):
+                self.assertTrue(os.path.exists(self.build(which)))
+
+    def test_xml_safe_keeps_normal_text(self):
+        self.assertEqual(g.xml_safe('第一行\n第二行\t中文 abc'), '第一行\n第二行\t中文 abc')
+        self.assertEqual(g.xml_safe(self.BAD), 'abcde')
+        self.assertEqual(g.xml_safe(5), 5)
+
+    def test_control_characters_are_removed_from_file_names(self):
+        name = g.default_output_name(dict(year='115', month='10', day='15', start_year='115', start_month='10',
+                                          start_day='15', end_year='115', end_month='10', end_day='15',
+                                          location='玉山\x00主峰\x0b線', personnel='王\x1f小明'))
+        self.assertFalse(any(ord(c) < 32 for c in name), repr(name))
+
+    def test_https_redirect_to_http_is_refused(self):
+        import urllib.error
+        import urllib.request
+        import yscv_updates
+        handler = yscv_updates._NoDowngradeRedirect()
+        request = urllib.request.Request('https://example.com/a')
+        for target in ('http://example.com/b', 'ftp://example.com/b', 'file:///C:/x'):
+            with self.assertRaises(urllib.error.URLError, msg=target):
+                handler.redirect_request(request, None, 302, 'Found', {}, target)
+        self.assertIsNotNone(handler.redirect_request(request, None, 302, 'Found', {}, 'https://other.example/b'))
+
+    def test_settings_are_written_atomically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'settings.json')
+            self.assertTrue(g.save_settings(path, theme='x'))
+            with mock.patch.object(g.json, 'dump', side_effect=OSError('disk full')):
+                self.assertFalse(g.save_settings(path, theme='y'))
+            self.assertEqual(g.load_settings(path), {'theme': 'x'})                    # 寫失敗不會弄壞原本的檔案
+
+    def test_powershell_is_started_from_the_system_folder(self):
+        if sys.platform != 'win32':
+            self.skipTest('只在 Windows')
+        path = g._powershell_path()
+        self.assertTrue(os.path.isabs(path) and os.path.exists(path), path)
+        self.assertIn('AutomationSecurity = 3', g._PDF_SCRIPT)                          # 轉 PDF 時 Word 強制停用巨集
+
+
 if __name__ == '__main__':
     unittest.main()

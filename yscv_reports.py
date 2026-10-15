@@ -220,6 +220,7 @@ def _add_incident_records(paragraph_el, records):
 
 def build_tataka_report(template_path, data, photo_files, captions, output_path, rotations=None, crops=None):
     """依塔塔加保育宣導回報單範本產生報告並存檔，回傳警告訊息清單。"""
+    data, captions = g.xml_safe_inputs(data, captions)
     doc = Document(template_path)
     if not doc.tables or len(doc.tables[0].rows) < 10 or len(doc.tables[0].columns) < 4:
         raise ValueError("模板格式錯誤：塔塔加保育宣導回報單範本的表格需要 10 列、4 欄")
@@ -355,6 +356,7 @@ TOILET_FIELD_NAMES = [f'{prefix}_{spec[0]}' for prefix, _ in TOILETS for spec in
 
 def build_ecotoilet_report(template_path, data, photo_files, captions, output_path, rotations=None, crops=None):
     """依生態廁所回報單範本產生報告並存檔，回傳警告訊息清單。"""
+    data, captions = g.xml_safe_inputs(data, captions)
     doc = Document(template_path)
     if len(doc.tables) < 4:
         raise ValueError("模板格式錯誤：生態廁所回報單範本需要 4 個表格（基本資料、兩份記錄表、照片）")

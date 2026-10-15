@@ -175,6 +175,7 @@ def _grid_widths(table):
 TATAKA_PHOTO_CATEGORY = '相片記錄'
 TATAKA_WEATHERS = ('晴', '陰', '雨')
 NEWLINE = chr(10)
+TAB_ICON_PX = 22        # 分頁標籤上的圖示大小（96 dpi 時的像素）
 NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
 HAN = re.compile('[' + chr(0x3400) + '-' + chr(0x4dbf) + chr(0x4e00) + '-' + chr(0x9fff) + chr(0xf900) + '-' + chr(0xfaff) + ']')
 
@@ -813,6 +814,19 @@ class EcoToiletReportGUI(_FormGUI):
         ], height=6)
         self.create_text_tab(notebook, self.TAB_REFLECT, [("四、協勤心得與建議：", 'reflection')], height=10)
         self.create_photo_tab(notebook, self.TAB_PHOTO)
+        self._add_toilet_icons(notebook)
+
+    def _add_toilet_icons(self, notebook):
+        """兩座廁所的分頁標籤前面放廁所圖示（找不到彩色表情符號字型就不放，標籤文字不變）。"""
+        self._tab_icons = []        # 要保留參照，圖片才不會被回收
+        pixels = round(self.root.winfo_fpixels('1i') / 96 * TAB_ICON_PX)
+        for _, name in TOILETS:
+            icon = g.emoji_image(g.REPORT_ICONS['ecotoilet'], pixels)
+            if icon is None:
+                continue
+            photo = g.ImageTk.PhotoImage(icon, master=self.root)
+            self._tab_icons.append(photo)
+            notebook.tab(self._tab_frames[name], image=photo, compound=tk.LEFT)
 
     def _toilet_tab(self, notebook, prefix, name):
         inner = self.make_scrollable_tab(notebook, name)

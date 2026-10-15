@@ -557,6 +557,25 @@ class EcoToiletGuiTest(FormGuiTest):
         titles = [self.app.notebook.tab(t, 'text').replace(' ' + g.MARK_MISSING, '') for t in self.app.notebook.tabs()]
         self.assertEqual(titles, ['基本資料', '孟祿亭', '白木林', '自然資源/環境清理', '協勤心得與建議', '監測及維護照片'])
 
+    @unittest.skipUnless(os.path.exists(g.EMOJI_FONT), '需要 Windows 的彩色表情符號字型')
+    def test_toilet_tabs_have_a_toilet_icon(self):
+        nb = self.app.notebook
+        for _, name in r.TOILETS:
+            self.assertTrue(str(nb.tab(self.app._tab_by_title(name), 'image')), name)
+        for title in ('基本資料', self.app.TAB_NATURE, self.app.TAB_REFLECT, self.app.TAB_PHOTO):
+            self.assertEqual(str(nb.tab(self.app._tab_by_title(title), 'image')), '', title)
+        # 標籤文字（含未填的 ●）不受圖示影響，仍能用名稱找到分頁
+        self.assertEqual(nb.tab(self.app._tab_by_title('孟祿亭'), 'text'), '孟祿亭 ' + g.MARK_MISSING)
+
+    def test_toilet_tabs_still_work_without_the_emoji_font(self):
+        self.root.destroy()
+        self.root = tk.Tk()
+        with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):
+            app = r.EcoToiletReportGUI(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                       settings_path=os.path.join(self.tmp.name, 's2.json'))
+        self.assertEqual(str(app.notebook.tab(app._tab_by_title('白木林'), 'image')), '')
+        self.assertEqual(app._tab_icons, [])
+
     def test_blank_fields_are_grouped_by_toilet_and_remarks_are_optional(self):
         blanks = self.app.find_blank_fields({})
         self.assertIn('本次收集桶總量（kg）', blanks['孟祿亭'])

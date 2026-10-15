@@ -2650,13 +2650,42 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.root.title(), f'{g.APP_TITLE}－保育巡查回報單　{g.version_label()}')
         self.assertIn(f'　v{g.VERSION}', self.root.title())
 
-    def test_version_label_shows_version_and_git_revision(self):
-        with mock.patch.object(g, 'git_revision', return_value='abc1234'):
+    def test_version_label_shows_tag_commits_since_tag_and_sha(self):
+        with mock.patch.object(g, 'git_describe', return_value=('v0.5', 0, 'abc1234')):      # 剛好在 tag 上
+            self.assertEqual(g.version_label(), 'v0.5-abc1234')
+        with mock.patch.object(g, 'git_describe', return_value=('v0.5', 12, 'abc1234')):     # tag 之後第 12 個 commit
+            self.assertEqual(g.version_label(), 'v0.5.12-abc1234')
+        with mock.patch.object(g, 'git_describe', return_value=None), \
+                mock.patch.object(g, 'git_revision', return_value='abc1234'):                # 還沒有 tag：用程式裡的版本
             self.assertEqual(g.version_label(), f'v{g.VERSION}-abc1234')
-        with mock.patch.object(g, 'git_revision', return_value=''):    # 不是 git 倉庫：只顯示版本
+        with mock.patch.object(g, 'git_describe', return_value=None), \
+                mock.patch.object(g, 'git_revision', return_value=''):                       # 不是 git 倉庫：只有版本
             self.assertEqual(g.version_label(), f'v{g.VERSION}')
         self.assertEqual(g.git_revision(self.tmp.name), '')            # 暫存資料夾不是 git 倉庫
+        self.assertIsNone(g.git_describe(self.tmp.name))
+        self.assertEqual(g.version_label(self.tmp.name), f'v{g.VERSION}')
         self.assertRegex(g.git_revision(), r'^[0-9a-f]{7,}$')            # 本專案是 git 倉庫
+        self.assertRegex(g.version_label(), r'^v[\d.]+-[0-9a-f]{7}$|^v[\d.]+\.\d+-[0-9a-f]{7}$')
+
+    def test_version_label_with_a_real_git_repository(self):
+        import subprocess
+        repo = os.path.join(self.tmp.name, 'repo')
+        os.makedirs(repo)
+
+        def git(*args):
+            subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.com', *args], cwd=repo,
+                           check=True, capture_output=True)
+
+        git('init', '-q')
+        git('commit', '-q', '--allow-empty', '-m', 'one')
+        self.assertEqual(g.version_label(repo), f'v{g.VERSION}-{g.git_revision(repo)}')        # 還沒有 tag
+        git('tag', '-a', 'v1.2', '-m', 'v1.2')
+        self.assertEqual(g.version_label(repo), f'v1.2-{g.git_revision(repo)}')                 # 剛好在 tag 上
+        git('commit', '-q', '--allow-empty', '-m', 'two')
+        git('commit', '-q', '--allow-empty', '-m', 'three')
+        self.assertEqual(g.version_label(repo), f'v1.2.2-{g.git_revision(repo)}')               # tag 之後第 2 個 commit
+        git('tag', '-a', 'v1.3', '-m', 'v1.3')
+        self.assertEqual(g.version_label(repo), f'v1.3-{g.git_revision(repo)}')                 # 新 tag 之後歸零
 
     def test_date_entries_are_centered(self):
         for name in ('year', 'month', 'day', 'start_year', 'start_month', 'start_day',

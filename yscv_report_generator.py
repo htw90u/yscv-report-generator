@@ -845,20 +845,39 @@ def open_file(path):
         logging.error(f"無法自動開啟 {path}: {e}")
 
 
-def git_revision(directory=None):
-    """程式所在 git 倉庫目前的簡短 commit 編號；不是 git 倉庫、或沒有安裝 git 時回傳空字串。"""
+def _git(args, directory=None):
+    """執行 git 指令，回傳輸出文字；不是 git 倉庫、沒有安裝 git、或指令失敗時回傳空字串。"""
     try:
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        out = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=directory or BASE_DIR,
-                             capture_output=True, text=True, timeout=3, creationflags=flags)
+        out = subprocess.run(['git', *args], cwd=directory or BASE_DIR, capture_output=True, text=True, timeout=3,
+                             creationflags=flags)
     except (OSError, subprocess.SubprocessError):
         return ''
     return out.stdout.strip() if out.returncode == 0 else ''
 
 
-def version_label():
-    """顯示在視窗標題的版本：「v0.5-b8a61a0」；沒有 git 時只有「v0.5」。"""
-    revision = git_revision()
+def git_revision(directory=None):
+    """程式所在 git 倉庫目前的簡短 commit 編號；不是 git 倉庫、或沒有安裝 git 時回傳空字串。"""
+    return _git(['rev-parse', '--short', 'HEAD'], directory)
+
+
+def git_describe(directory=None):
+    """回傳 (最近的 tag, 這個 tag 之後的 commit 數, 簡短 commit 編號)；倉庫裡還沒有 tag 或不是 git 倉庫回傳 None。"""
+    match = re.match(r'^(.+)-(\d+)-g([0-9a-f]+)$', _git(['describe', '--tags', '--long', '--abbrev=7'], directory))
+    return (match.group(1), int(match.group(2)), match.group(3)) if match else None
+
+
+def version_label(directory=None):
+    """顯示在視窗標題的版本：「<tag>.<tag 之後第幾個 commit>-<sha>」。
+
+    剛好在 tag 上就是「v0.5-b8a61a0」；tag 之後又有 12 個 commit 是「v0.5.12-b8a61a0」。
+    倉庫裡沒有 tag 就用程式裡的 VERSION；不是 git 倉庫（例如單獨複製出去的檔案）就只有「v0.5」。
+    """
+    described = git_describe(directory)
+    if described:
+        tag, count, sha = described
+        return f"{tag}{f'.{count}' if count else ''}-{sha}"
+    revision = git_revision(directory)
     return f'v{VERSION}-{revision}' if revision else f'v{VERSION}'
 
 

@@ -2231,7 +2231,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(table.row_text(0), '● (橫) r.jpg')
         self._crop_with((0.0, 0.0, 0.25, 1.0), cat, table)             # 只留左邊 1/4：100×200 → 直式
         self.assertEqual(self.app.photo_crops[cat][a], (0.0, 0.0, 0.25, 1.0))
-        self.assertEqual(table.row_text(0), '● (直) r.jpg')
+        self.assertEqual(table.row_text(0), '● (直) ✂ r.jpg')
         preview = self.app.photo_preview
         self.assertGreater(preview.image.height(), preview.image.width())
         with Image.open(a) as original:
@@ -2239,6 +2239,16 @@ class GuiTest(unittest.TestCase):
         self._crop_with((0.0, 0.0, 1.0, 1.0), cat, table)              # 選取整張＝還原
         self.assertNotIn(a, self.app.photo_crops[cat])
         self.assertEqual(table.row_text(0), '● (橫) r.jpg')
+
+    def test_cropped_photos_are_marked_in_the_table_and_button_has_no_ellipsis(self):
+        self.assertEqual(self.app.crop_btn.cget('text'), '✂ 裁切')
+        cat, table, (a, b) = self._photos(names=('a.jpg', 'b.jpg'), size=(400, 200))
+        self._select_first(cat, table)
+        self._crop_with((0.0, 0.0, 0.25, 1.0), cat, table)
+        self.assertEqual(table.row_text(0), '● (直) ✂ a.jpg')   # 裁切過的有 ✂
+        self.assertEqual(table.row_text(1), '● (橫) b.jpg')      # 沒裁切的沒有
+        self._crop_with((0.0, 0.0, 1.0, 1.0), cat, table)
+        self.assertEqual(table.row_text(0), '● (橫) a.jpg')      # 還原後記號消失
 
     def test_cancelling_the_crop_dialog_changes_nothing(self):
         cat, table, (a,) = self._photos(names=('r.jpg',))

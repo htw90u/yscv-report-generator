@@ -145,6 +145,7 @@ FIELD_TAB = {
     'feedback': TAB_FEEDBACK, 'reflection': TAB_FEEDBACK, 'questions': TAB_FEEDBACK,
 }
 MARK_DONE = '✓'      # 已填說明／已填完的記號
+MARK_CROPPED = '✂'    # 已裁切的照片，檔名前面的記號
 MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
 PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明；按 Delete 移除所選照片）"
 TEXT_MIN_LINES = 2      # 填寫框最少／最多幾行（可用下方的拉桿調整）
@@ -2069,7 +2070,7 @@ class ReportGeneratorGUI:
         caption_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 2))
         caption_bar.columnconfigure(0, weight=1)
         ttk.Label(caption_bar, text="說明：", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W)
-        self.crop_btn = ttk.Button(caption_bar, text="✂ 裁切…", state='disabled', command=self.crop_current_photo)
+        self.crop_btn = ttk.Button(caption_bar, text="✂ 裁切", state='disabled', command=self.crop_current_photo)
         self.crop_btn.grid(row=0, column=1, padx=(0, 6))
         self.rotate_left_btn = ttk.Button(caption_bar, text="↺ 向左轉 90°", state='disabled',
                                           command=lambda: self.rotate_current_photo(-90))
@@ -2114,9 +2115,10 @@ class ReportGeneratorGUI:
         return '橫' if width >= height else '直'
 
     def _photo_label(self, category, filepath):
-        """表格「檔名」欄的文字：「記號 (橫) 檔名」；已填說明記號是 ✓，沒填是 ●。"""
+        """表格「檔名」欄的文字：「記號 (橫) 檔名」；已填說明記號是 ✓，沒填是 ●；已裁切的在 (橫)/(直) 後面加 ✂。"""
         mark = MARK_DONE if self.photo_captions[category].get(filepath) else MARK_MISSING
-        return f"{mark} ({self._photo_orientation(category, filepath)}) {os.path.basename(filepath)}"
+        cropped = f" {MARK_CROPPED}" if self.photo_crops[category].get(filepath) else ""
+        return f"{mark} ({self._photo_orientation(category, filepath)}){cropped} {os.path.basename(filepath)}"
 
     def missing_caption_count(self, category):
         return sum(1 for p in self.photo_files[category] if not self.photo_captions[category].get(p))
@@ -2287,7 +2289,7 @@ class ReportGeneratorGUI:
             return
         if result:
             self.photo_crops[category][path] = result
-            self.status_label.config(text="已裁切照片（原檔不會被改動；再按一次「裁切…」可以調整或還原）")
+            self.status_label.config(text="已裁切照片（原檔不會被改動；再按一次「裁切」可以調整或還原）")
         else:
             self.photo_crops[category].pop(path, None)
             self.status_label.config(text="已還原成整張照片")

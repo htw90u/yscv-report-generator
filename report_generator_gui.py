@@ -2069,7 +2069,7 @@ class ReportGeneratorGUI:
         caption_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 2))
         caption_bar.columnconfigure(0, weight=1)
         ttk.Label(caption_bar, text="說明：", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W)
-        self.crop_btn = ttk.Button(caption_bar, text="裁切…", state='disabled', command=self.crop_current_photo)
+        self.crop_btn = ttk.Button(caption_bar, text="✂ 裁切…", state='disabled', command=self.crop_current_photo)
         self.crop_btn.grid(row=0, column=1, padx=(0, 6))
         self.rotate_left_btn = ttk.Button(caption_bar, text="↺ 向左轉 90°", state='disabled',
                                           command=lambda: self.rotate_current_photo(-90))

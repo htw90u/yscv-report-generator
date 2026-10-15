@@ -2647,8 +2647,24 @@ class GuiTest(unittest.TestCase):
 
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育志工回報單生成器')
-        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－保育巡查回報單　{g.version_label()}')
-        self.assertRegex(self.root.title(), r'　v\d+\.\d+(\.\d+)?(-[0-9a-f]{7})?$')   # 版本由 git tag 推算，不寫死
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－保育巡查回報單')          # 版本不放標題，放在右下角
+        self.assertNotIn('v0', self.root.title())
+
+    def test_version_is_a_small_gray_label_in_the_corner(self):
+        label = self.app.version_label_widget
+        self.assertEqual(label.cget('text'), g.version_label())
+        self.assertRegex(label.cget('text'), r'^v\d+\.\d+(\.\d+)?-[0-9a-f]{7}$')   # 版本由 git tag 推算，不寫死
+        self.assertEqual(str(label.cget('foreground')), g.VERSION_COLOR)
+        self.assertEqual(label.winfo_class(), 'TLabel')
+        self.assertEqual(label.master, self.app.theme_box.master)                       # 和「外觀」同一排的最右邊
+
+    def test_build_info_overrides_git_when_packaged(self):
+        import types
+        fake = types.ModuleType('yscv_build_info')
+        fake.LABEL = 'v1.0-abcdef0'
+        with mock.patch.dict(sys.modules, {'yscv_build_info': fake}):
+            self.assertEqual(g.version_label(), 'v1.0-abcdef0')
+            self.assertNotEqual(g.version_label(self.tmp.name), 'v1.0-abcdef0')           # 指定資料夾時不用烙入的值
 
     def test_version_label_shows_tag_commits_since_tag_and_sha(self):
         with mock.patch.object(g, 'git_describe', return_value=('v0.5', 0, 'abc1234')):      # 剛好在 tag 上

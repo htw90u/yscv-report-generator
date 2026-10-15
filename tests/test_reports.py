@@ -364,7 +364,7 @@ class TatakaGuiTest(FormGuiTest):
             self.set_text(key, f'{key}內容')
 
     def test_window_title_names_the_report(self):
-        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－塔塔加保育宣導回報單　{g.version_label()}')
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－塔塔加保育宣導回報單')
 
     def test_tabs_and_default_date(self):
         titles = [self.app.notebook.tab(t, 'text').replace(' ' + g.MARK_MISSING, '') for t in self.app.notebook.tabs()]
@@ -556,7 +556,7 @@ class EcoToiletGuiTest(FormGuiTest):
             self.set_text(key, f'{key}內容')
 
     def test_window_title_and_tabs(self):
-        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－生態廁所回報單　{g.version_label()}')
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－生態廁所回報單')
         titles = [self.app.notebook.tab(t, 'text').replace(' ' + g.MARK_MISSING, '') for t in self.app.notebook.tabs()]
         self.assertEqual(titles, ['基本資料', '孟祿亭', '白木林', '自然資源/環境清理', '協勤心得與建議', '監測及維護照片'])
 
@@ -1225,8 +1225,9 @@ class LauncherTest(unittest.TestCase):
         launcher = self.launcher()
         self.assertEqual(list(launcher.buttons), ['patrol', 'tataka', 'ecotoilet'])
         self.assertEqual([c[1] for c in g.REPORT_CHOICES], ['保育巡查回報單', '塔塔加保育宣導回報單', '生態廁所回報單'])
-        self.assertIn(g.version_label(), self.root.title())
-        self.assertTrue(self.root.title().startswith(g.APP_TITLE))
+        self.assertEqual(self.root.title(), g.APP_TITLE)                                 # 版本不放標題
+        self.assertEqual(launcher.version_label_widget.cget('text'), g.version_label())
+        self.assertEqual(str(launcher.version_label_widget.cget('foreground')), g.VERSION_COLOR)
 
     def test_clicking_a_button_chooses_and_closes(self):
         launcher = self.launcher()

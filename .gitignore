@@ -22,3 +22,4 @@ yscv_*_autosave.json*
 yscv_feedback_endpoint.py
 build/
 dist/
+yscv_build_info.py

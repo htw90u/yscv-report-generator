@@ -23,10 +23,16 @@ def main():
     work = os.path.join(ROOT, 'build')
     for path in (os.path.join(dist, NAME), work):
         shutil.rmtree(path, ignore_errors=True)
+    info_path = os.path.join(ROOT, 'yscv_build_info.py')
+    label = g.version_label()
+    with open(info_path, 'w', encoding='utf-8') as f:
+        f.write(f'LABEL = {label!r}' + chr(10))          # 打包後的 .exe 沒有 git，把版本標籤（tag.次數-sha）烙進去
+    print('烙入版本：', label)
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--windowed',
                '--name', NAME, '--icon', os.path.join(ROOT, 'icons', 'yscv.ico'),
                '--distpath', dist, '--workpath', work, '--specpath', work,
-               '--hidden-import', 'yscv_reports', '--hidden-import', 'yscv_updates']
+               '--hidden-import', 'yscv_reports', '--hidden-import', 'yscv_updates',
+               '--hidden-import', 'yscv_build_info']
     if os.path.exists(os.path.join(ROOT, 'yscv_feedback_endpoint.py')):
         command += ['--hidden-import', 'yscv_feedback_endpoint']
     else:
@@ -34,7 +40,11 @@ def main():
     for item in DATA:
         command += ['--add-data', f"{os.path.join(ROOT, item)}{os.pathsep}{item if os.path.isdir(os.path.join(ROOT, item)) else '.'}"]
     command.append(os.path.join(ROOT, 'yscv_report_generator.py'))
-    subprocess.run(command, check=True, cwd=ROOT)
+    try:
+        subprocess.run(command, check=True, cwd=ROOT)
+    finally:
+        if os.path.exists(info_path):
+            os.remove(info_path)               # 烙入檔只給打包用，開發環境走 git describe
 
     folder = os.path.join(dist, NAME)
     for extra in ('README.md', 'LICENSE'):

@@ -909,12 +909,24 @@ def git_describe(directory=None):
     return (match.group(1), int(match.group(2)), match.group(3)) if match else None
 
 
+VERSION_COLOR = '#8a8f98'    # 版本標籤：灰色小字，放在視窗右下角
+VERSION_FONT_PT = 9
+
+
 def version_label(directory=None):
     """顯示在視窗標題的版本：「<tag>.<tag 之後第幾個 commit>-<sha>」。
 
     剛好在 tag 上就是「v0.5-b8a61a0」；tag 之後又有 12 個 commit 是「v0.5.12-b8a61a0」。
     倉庫裡沒有 tag 就用程式裡的 VERSION；不是 git 倉庫（例如單獨複製出去的檔案）就只有「v0.5」。
+    打包成 .exe 時沒有 git：build_exe.py 會在打包當下產生 yscv_build_info.py，把這個標籤烙進去，直接用它。
     """
+    if directory is None:
+        try:
+            from yscv_build_info import LABEL
+            if isinstance(LABEL, str) and LABEL.strip():
+                return clean_line(LABEL, 60)
+        except ImportError:
+            pass
     described = git_describe(directory)
     if described:
         tag, count, sha = described
@@ -1738,7 +1750,7 @@ class ReportGeneratorGUI:
             self.root.after(200, lambda: messagebox.showerror("錯誤", self._missing_template_message()))
 
     def window_title(self):
-        return f'{APP_TITLE}－{self.REPORT_NAME}　{version_label()}'
+        return f'{APP_TITLE}－{self.REPORT_NAME}'
 
     def _tabs_extra_height(self):
         """所有可捲動分頁中，內容比可視區域高出最多的像素數（0 表示每一頁都放得下）。"""
@@ -1972,6 +1984,9 @@ class ReportGeneratorGUI:
         theme_box.pack(side=tk.LEFT)
         theme_box.bind('<<ComboboxSelected>>', lambda e: self.apply_theme(self.theme_var.get()))
         self.theme_box = theme_box
+        self.version_label_widget = ttk.Label(theme_frame, text=version_label(), foreground=VERSION_COLOR,
+                                              font=(self.font_family, VERSION_FONT_PT))
+        self.version_label_widget.pack(side=tk.LEFT, padx=(12, 0))      # 版本放在右下角，灰色小字
         self._center_theme_dropdown()
         self._recolor(self.root)
         for name in self.ENTRY_FIELDS:
@@ -3915,7 +3930,7 @@ class ReportLauncher:
         style.map('DialogDefault.TButton', background=[('active', palette['primary_active'])],
                   foreground=[('active', palette['primary_fg'])])
         self.palette, self.font_family = palette, family     # 讓 messagebox（程式自己畫的訊息視窗）可以綁定到選單
-        root.title(f'{APP_TITLE}　{version_label()}')
+        root.title(APP_TITLE)
         set_window_icon(root)
         frame = ttk.Frame(root, padding=(28, 22))
         self.frame = frame
@@ -3947,6 +3962,9 @@ class ReportLauncher:
             self.check_button.grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         self.feedback_button = ttk.Button(footer, text="意見反應", command=self.open_feedback)
         self.feedback_button.grid(row=0, column=3, sticky=tk.E)      # 右下角
+        self.version_label_widget = ttk.Label(frame, text=version_label(), foreground=VERSION_COLOR,
+                                              font=(family, VERSION_FONT_PT))
+        self.version_label_widget.grid(row=len(REPORT_CHOICES) + 4, column=0, sticky=tk.E, pady=(10, 0))   # 右下角，灰色小字
         messagebox.attach(self)
         root.bind('<Escape>', lambda e: root.destroy())
         root.update_idletasks()

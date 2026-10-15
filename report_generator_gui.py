@@ -384,17 +384,75 @@ def rotate_clockwise(img, degrees):
     return img.transpose(_CLOCKWISE_TRANSPOSE[degrees]) if degrees else img
 
 
-def prepare_image(path, rotation=0):
+CROP_MIN_FRACTION = 0.03   # 裁切範圍的寬、高至少要占原圖的 3%，太小視為沒有裁切
+
+
+def normalize_crop(crop):
+    """裁切範圍 (左, 上, 右, 下)，都是占「轉正後、未旋轉的原圖」的比例（0~1）。
+    不合法、太小、或幾乎等於整張圖時回傳 None（＝不裁切）；否則回傳整理好的 4 個 float。"""
+    if not crop:
+        return None
+    try:
+        left, top, right, bottom = (min(1.0, max(0.0, float(v))) for v in crop)
+    except (TypeError, ValueError):
+        return None
+    left, right = sorted((left, right))
+    top, bottom = sorted((top, bottom))
+    if right - left < CROP_MIN_FRACTION or bottom - top < CROP_MIN_FRACTION:
+        return None
+    if left <= 0.002 and top <= 0.002 and right >= 0.998 and bottom >= 0.998:
+        return None
+    return (left, top, right, bottom)
+
+
+def _bounding_rect(points):
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+_TO_DISPLAY = {0: lambda x, y: (x, y), 90: lambda x, y: (1 - y, x),
+               180: lambda x, y: (1 - x, 1 - y), 270: lambda x, y: (y, 1 - x)}
+_FROM_DISPLAY = {0: lambda u, v: (u, v), 90: lambda u, v: (v, 1 - u),
+                 180: lambda u, v: (1 - u, 1 - v), 270: lambda u, v: (1 - v, u)}
+
+
+def crop_to_display(crop, rotation):
+    """把「原圖座標」的裁切範圍換成「套用使用者旋轉後畫面」上的範圍（比例）。"""
+    left, top, right, bottom = crop
+    convert = _TO_DISPLAY[normalize_rotation(rotation)]
+    return _bounding_rect([convert(x, y) for x, y in ((left, top), (right, top), (right, bottom), (left, bottom))])
+
+
+def crop_from_display(rect, rotation):
+    """crop_to_display 的反向：把旋轉後畫面上選的範圍換回原圖座標（裁切固定記在原圖座標，之後再旋轉也不會錯位）。"""
+    left, top, right, bottom = rect
+    convert = _FROM_DISPLAY[normalize_rotation(rotation)]
+    return _bounding_rect([convert(u, v) for u, v in ((left, top), (right, top), (right, bottom), (left, bottom))])
+
+
+def apply_crop(img, crop):
+    """依比例裁切 PIL 圖片；crop 為 None 時回傳原圖。"""
+    crop = normalize_crop(crop)
+    if crop is None:
+        return img
+    width, height = img.size
+    left, top = min(width - 1, round(crop[0] * width)), min(height - 1, round(crop[1] * height))
+    right, bottom = max(left + 1, round(crop[2] * width)), max(top + 1, round(crop[3] * height))
+    return img.crop((left, top, right, bottom))
+
+
+def prepare_image(path, rotation=0, crop=None):
     """回傳 (來源, (寬px, 高px))；來源可直接給 add_picture 使用。
 
-    有 EXIF 旋轉時先轉正，再套用使用者在預覽旋轉的角度（順時針）；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
-    不需要處理時來源直接是原檔路徑（不重新壓縮）。回傳的尺寸是處理後（轉正後）的尺寸。
+    處理順序：EXIF 轉正 → 使用者的裁切 → 使用者旋轉（順時針）；寬度超過 MAX_IMAGE_WIDTH_PX 時縮小，避免 docx 過大。
+    不需要處理時來源直接是原檔路徑（不重新壓縮）。回傳的尺寸是處理後的尺寸。
     """
     rotation = normalize_rotation(rotation)
+    crop = normalize_crop(crop)
     with Image.open(path) as img:
-        needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1) or rotation != 0
+        needs_rotate = img.getexif().get(0x0112, 1) not in (0, 1) or rotation != 0 or crop is not None
         if needs_rotate:
-            img = rotate_clockwise(ImageOps.exif_transpose(img), rotation)
+            img = rotate_clockwise(apply_crop(ImageOps.exif_transpose(img), crop), rotation)
         needs_resize = img.width > MAX_IMAGE_WIDTH_PX
         if not needs_rotate and not needs_resize:
             return path, (img.width, img.height)
@@ -652,7 +710,7 @@ def _mark_row(row, *flags):
         trPr.append(OxmlElement(flag))
 
 
-def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations=None):
+def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations=None, crops=None):
     """載入照片並計算尺寸。載入失敗的照片以文字佔位，不中斷整份報告。"""
     categories = {}
     for category, paths in photo_files.items():
@@ -662,7 +720,8 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rot
             item = PhotoItem(path=path, caption=caption)
             name = os.path.basename(path)
             try:
-                item.source, (item.px_w, item.px_h) = prepare_image(path, (rotations or {}).get(category, {}).get(path, 0))
+                item.source, (item.px_w, item.px_h) = prepare_image(
+                    path, (rotations or {}).get(category, {}).get(path, 0), (crops or {}).get(category, {}).get(path))
                 size_photo(item, fit_width, max_portrait_h)
             except Exception as e:
                 logging.error(f"無法載入照片 {name}: {e}")
@@ -673,7 +732,7 @@ def _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rot
     return categories
 
 
-def _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations=None):
+def _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations=None, crops=None):
     body = doc.element.body
 
     # 只刪除內容含「照片」的舊照片表格，避免誤刪其他表格
@@ -723,7 +782,7 @@ def _add_photo_section(doc, main_table, photo_files, captions, warnings, rotatio
         set_font_kai(heading_run)
         start_y = HEADING_H
 
-    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations)
+    categories = _load_photos(photo_files, captions, fit_width, max_portrait_h, warnings, rotations, crops)
     sequence = plan_layout(categories, page_h, start_y, line_chars)
 
     # 連續同分類的列合成一張表格（跨頁時由 tblHeader 重複標題列）
@@ -897,7 +956,7 @@ def _describe_pdf_failure(raw):
     return f"Word 轉換 PDF 失敗{detail}"
 
 
-def build_report(template_path, data, photo_files, captions, output_path, rotations=None):
+def build_report(template_path, data, photo_files, captions, output_path, rotations=None, crops=None):
     """產生報告並存檔，回傳警告訊息清單。"""
     doc = Document(template_path)
     if len(doc.tables) < 1:
@@ -905,7 +964,7 @@ def build_report(template_path, data, photo_files, captions, output_path, rotati
     main_table = doc.tables[0]
 
     warnings = _fill_main_table(main_table, data)
-    _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations)
+    _add_photo_section(doc, main_table, photo_files, captions, warnings, rotations, crops)
     doc.save(output_path)
     return warnings
 
@@ -1160,11 +1219,13 @@ class PhotoPreview(ttk.Frame):
         self._rendered_size = size
         self.picture.config(image=self.image, text='')
 
-    def show(self, category, path, rotation=0):
+    def show(self, category, path, rotation=0, crop=None):
+        crop = normalize_crop(crop)
         try:
             with Image.open(path) as img:
-                img.draft('RGB', (PREVIEW_SOURCE_MAX[0] * 2, PREVIEW_SOURCE_MAX[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
-                source = ImageOps.exif_transpose(img)
+                if crop is None:  # 有裁切時要用完整解析度，裁出來的小範圍才不會糊
+                    img.draft('RGB', (PREVIEW_SOURCE_MAX[0] * 2, PREVIEW_SOURCE_MAX[1] * 2))  # JPEG 先縮小再解碼，大圖也很快
+                source = apply_crop(ImageOps.exif_transpose(img), crop)
                 source.thumbnail(PREVIEW_SOURCE_MAX, Image.LANCZOS)
                 source = rotate_clockwise(source.copy(), rotation)
         except Exception as e:
@@ -1173,6 +1234,204 @@ class PhotoPreview(ttk.Frame):
         self._source = source
         self.current = (category, path)
         self._render(force=True)
+
+
+class CropDialog(tk.Toplevel):
+    """裁切照片的對話框：拖曳選取要保留的範圍（框的邊或角可以調整、框內可以移動）。
+
+    result：False＝取消；None＝整張（不裁切）；(左, 上, 右, 下)＝裁切範圍（原圖座標的比例）。
+    顯示的是套用旋轉後的樣子，選好之後才換算回原圖座標，所以之後再旋轉也不會錯位。
+    """
+
+    MAX_CANVAS = (920, 600)
+    PAD = 14
+    GRAB = 9           # 距離邊或角幾像素內算點到
+    MIN_PX = 14        # 框的最小邊長（像素）
+
+    def __init__(self, parent, path, rotation, crop, palette, font_family):
+        super().__init__(parent, background=palette['bg'])
+        self.withdraw()
+        self.title("裁切照片")
+        self.transient(parent)
+        self.result = False
+        self._parent = parent
+        self.rotation = normalize_rotation(rotation)
+        with Image.open(path) as img:
+            base = ImageOps.exif_transpose(img)
+            self.full_size = base.size
+            base.thumbnail((1800, 1400), Image.LANCZOS)
+            base = rotate_clockwise(base.copy(), self.rotation)
+        if self.rotation in (90, 270):
+            self.full_size = (self.full_size[1], self.full_size[0])
+        scale = min(self.MAX_CANVAS[0] / base.width, self.MAX_CANVAS[1] / base.height)
+        self.view_w, self.view_h = max(40, round(base.width * scale)), max(40, round(base.height * scale))
+        self._photo = ImageTk.PhotoImage(base.resize((self.view_w, self.view_h), Image.LANCZOS))
+
+        pad = self.PAD
+        self.canvas = tk.Canvas(self, width=self.view_w + 2 * pad, height=self.view_h + 2 * pad,
+                                background='#2b2b2b', highlightthickness=0, cursor='crosshair')
+        self.canvas.grid(row=0, column=0, columnspan=4, padx=10, pady=(10, 6))
+        self.canvas.create_image(pad, pad, image=self._photo, anchor='nw')
+        self._dims = [self.canvas.create_rectangle(0, 0, 0, 0, fill='black', stipple='gray50', outline='')
+                      for _ in range(4)]
+        self._outline_dark = self.canvas.create_rectangle(0, 0, 0, 0, outline='#000000', width=3)
+        self._outline = self.canvas.create_rectangle(0, 0, 0, 0, outline='#ffffff', width=1)
+        self._handles = [self.canvas.create_rectangle(0, 0, 0, 0, fill='#ffffff', outline='#000000') for _ in range(8)]
+
+        self.info = ttk.Label(self, text='', style='Hint.TLabel')
+        self.info.grid(row=1, column=0, sticky='w', padx=12)
+        ttk.Label(self, text="拖曳選取要保留的範圍；拖曳框的邊或角可以調整，拖曳框內可以移動",
+                  style='Hint.TLabel').grid(row=2, column=0, sticky='w', padx=12, pady=(0, 8))
+        self.whole_btn = ttk.Button(self, text="選取整張（不裁切）", command=self.select_whole)
+        self.whole_btn.grid(row=1, column=1, rowspan=2, padx=4, pady=(0, 10))
+        self.ok_btn = ttk.Button(self, text="確定", command=self.ok)
+        self.ok_btn.grid(row=1, column=2, rowspan=2, padx=4, pady=(0, 10))
+        self.cancel_btn = ttk.Button(self, text="取消", command=self.cancel)
+        self.cancel_btn.grid(row=1, column=3, rowspan=2, padx=(4, 12), pady=(0, 10))
+        self.columnconfigure(0, weight=1)
+
+        self.canvas.bind('<ButtonPress-1>', self._press)
+        self.canvas.bind('<B1-Motion>', self._drag)
+        self.canvas.bind('<ButtonRelease-1>', self._release)
+        self.canvas.bind('<Motion>', self._hover)
+        self.bind('<Return>', lambda e: self.ok())
+        self.bind('<Escape>', lambda e: self.cancel())
+        self.protocol('WM_DELETE_WINDOW', self.cancel)
+
+        saved = normalize_crop(crop)
+        self.set_selection(*(crop_to_display(saved, self.rotation) if saved else (0.0, 0.0, 1.0, 1.0)))
+        self._mode = None
+
+    # ---- 範圍（以占畫面的比例表示）
+    def selection(self):
+        left, top, right, bottom = self._rect
+        pad = self.PAD
+        return ((left - pad) / self.view_w, (top - pad) / self.view_h,
+                (right - pad) / self.view_w, (bottom - pad) / self.view_h)
+
+    def set_selection(self, left, top, right, bottom):
+        pad = self.PAD
+        left, right = sorted((min(1.0, max(0.0, left)), min(1.0, max(0.0, right))))
+        top, bottom = sorted((min(1.0, max(0.0, top)), min(1.0, max(0.0, bottom))))
+        self._rect = [pad + left * self.view_w, pad + top * self.view_h, pad + right * self.view_w, pad + bottom * self.view_h]
+        self._draw()
+
+    def select_whole(self):
+        self.set_selection(0.0, 0.0, 1.0, 1.0)
+
+    def kept_size(self):
+        """目前選取範圍在原圖上的像素大小。"""
+        left, top, right, bottom = self.selection()
+        return round((right - left) * self.full_size[0]), round((bottom - top) * self.full_size[1])
+
+    def _draw(self):
+        pad, canvas = self.PAD, self.canvas
+        left, top, right, bottom = self._rect
+        x0, y0, x1, y1 = pad, pad, pad + self.view_w, pad + self.view_h
+        for item, box in zip(self._dims, ((x0, y0, x1, top), (x0, bottom, x1, y1), (x0, top, left, bottom), (right, top, x1, bottom))):
+            canvas.coords(item, *box)
+        canvas.coords(self._outline_dark, left, top, right, bottom)
+        canvas.coords(self._outline, left, top, right, bottom)
+        mx, my = (left + right) / 2, (top + bottom) / 2
+        for item, (hx, hy) in zip(self._handles, ((left, top), (mx, top), (right, top), (right, my),
+                                                 (right, bottom), (mx, bottom), (left, bottom), (left, my))):
+            canvas.coords(item, hx - 4, hy - 4, hx + 4, hy + 4)
+        width, height = self.kept_size()
+        self.info.config(text=f"保留範圍：{width} × {height} 像素")
+
+    # ---- 滑鼠
+    def _hit(self, x, y):
+        left, top, right, bottom = self._rect
+        g = self.GRAB
+        sides = set()
+        if abs(x - left) <= g and top - g <= y <= bottom + g:
+            sides.add('l')
+        elif abs(x - right) <= g and top - g <= y <= bottom + g:
+            sides.add('r')
+        if abs(y - top) <= g and left - g <= x <= right + g:
+            sides.add('t')
+        elif abs(y - bottom) <= g and left - g <= x <= right + g:
+            sides.add('b')
+        if sides:
+            return 'resize', sides
+        if left < x < right and top < y < bottom:
+            return 'move', set()
+        return 'new', set()
+
+    _CURSORS = {frozenset('l'): 'sb_h_double_arrow', frozenset('r'): 'sb_h_double_arrow',
+                frozenset('t'): 'sb_v_double_arrow', frozenset('b'): 'sb_v_double_arrow',
+                frozenset('lt'): 'size_nw_se', frozenset('rb'): 'size_nw_se',
+                frozenset('rt'): 'size_ne_sw', frozenset('lb'): 'size_ne_sw'}
+
+    def _hover(self, event):
+        mode, sides = self._hit(event.x, event.y)
+        cursor = 'fleur' if mode == 'move' else self._CURSORS.get(frozenset(sides), 'crosshair') if sides else 'crosshair'
+        self.canvas.configure(cursor=cursor)
+
+    def _clamp(self, x, y):
+        pad = self.PAD
+        return min(pad + self.view_w, max(pad, x)), min(pad + self.view_h, max(pad, y))
+
+    def _press(self, event):
+        self._mode, self._sides = self._hit(event.x, event.y)
+        self._start = self._clamp(event.x, event.y)
+        self._before = list(self._rect)
+
+    def _drag(self, event):
+        if not self._mode:
+            return
+        x, y = self._clamp(event.x, event.y)
+        left, top, right, bottom = self._before
+        if self._mode == 'new':
+            self._rect = [min(self._start[0], x), min(self._start[1], y), max(self._start[0], x), max(self._start[1], y)]
+        elif self._mode == 'move':
+            dx = min(max(x - self._start[0], self.PAD - left), self.PAD + self.view_w - right)
+            dy = min(max(y - self._start[1], self.PAD - top), self.PAD + self.view_h - bottom)
+            self._rect = [left + dx, top + dy, right + dx, bottom + dy]
+        else:
+            new = [left, top, right, bottom]
+            if 'l' in self._sides:
+                new[0] = x
+            if 'r' in self._sides:
+                new[2] = x
+            if 't' in self._sides:
+                new[1] = y
+            if 'b' in self._sides:
+                new[3] = y
+            self._rect = [min(new[0], new[2]), min(new[1], new[3]), max(new[0], new[2]), max(new[1], new[3])]
+        self._draw()
+
+    def _release(self, event):
+        if not self._mode:
+            return
+        left, top, right, bottom = self._rect
+        if right - left < self.MIN_PX or bottom - top < self.MIN_PX:  # 只是點一下或框太小：還原成拖曳前的範圍
+            self._rect = list(self._before)
+            self._draw()
+        self._mode = None
+
+    # ---- 結束
+    def ok(self):
+        crop = normalize_crop(crop_from_display(self.selection(), self.rotation))
+        self.result = crop  # None＝整張
+        self.destroy()
+
+    def cancel(self):
+        self.result = False
+        self.destroy()
+
+    def run(self):
+        """顯示對話框（置中於主視窗、強制回應）並回傳 result。"""
+        self.update_idletasks()
+        parent = self._parent
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - self.winfo_reqwidth()) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - self.winfo_reqheight()) // 2)
+        self.geometry(f"+{x}+{y}")
+        self.deiconify()
+        self.grab_set()
+        self.focus_force()
+        self.wait_window(self)
+        return self.result
 
 
 def load_private_fonts():
@@ -1235,6 +1494,7 @@ class ReportGeneratorGUI:
         self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
         self._size_cache = {}  # (路徑, 修改時間) -> (寬, 高)，表格顯示橫／直用
+        self.photo_crops = {c: {} for c in self.photo_files}  # category -> {path: (左, 上, 右, 下) 占原圖的比例}（不改原檔）
         self.photo_rotations = {c: {} for c in self.photo_files}  # category -> {path: 順時針角度 90/180/270}（不改原檔）
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
@@ -1809,12 +2069,14 @@ class ReportGeneratorGUI:
         caption_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 2))
         caption_bar.columnconfigure(0, weight=1)
         ttk.Label(caption_bar, text="說明：", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W)
+        self.crop_btn = ttk.Button(caption_bar, text="裁切…", state='disabled', command=self.crop_current_photo)
+        self.crop_btn.grid(row=0, column=1, padx=(0, 6))
         self.rotate_left_btn = ttk.Button(caption_bar, text="↺ 向左轉 90°", state='disabled',
                                           command=lambda: self.rotate_current_photo(-90))
-        self.rotate_left_btn.grid(row=0, column=1)
+        self.rotate_left_btn.grid(row=0, column=2)
         self.rotate_right_btn = ttk.Button(caption_bar, text="向右轉 90° ↻", state='disabled',
                                            command=lambda: self.rotate_current_photo(90))
-        self.rotate_right_btn.grid(row=0, column=2, padx=(6, 0))
+        self.rotate_right_btn.grid(row=0, column=3, padx=(6, 0))
         self.caption_var = tk.StringVar(master=self.root)
         entry = ttk.Entry(right, textvariable=self.caption_var, state='disabled')
         entry.grid(row=2, column=0, sticky=(tk.W, tk.E))
@@ -1844,6 +2106,9 @@ class ReportGeneratorGUI:
                 return '？'
             size = self._size_cache[key] = (width, height)
         width, height = size
+        crop = self.photo_crops[category].get(filepath)
+        if crop:  # 裁切後的比例才是報告裡實際的方向
+            width, height = width * (crop[2] - crop[0]), height * (crop[3] - crop[1])
         if self.photo_rotations[category].get(filepath, 0) in (90, 270):
             width, height = height, width
         return '橫' if width >= height else '直'
@@ -1971,6 +2236,7 @@ class ReportGeneratorGUI:
         self.caption_entry.config(state='disabled')
         self.rotate_left_btn.config(state='disabled')
         self.rotate_right_btn.config(state='disabled')
+        self.crop_btn.config(state='disabled')
         self.photo_preview.clear()
 
     def _on_photo_select(self, category, table):
@@ -1979,7 +2245,9 @@ class ReportGeneratorGUI:
         if not selected:
             return
         path = self.photo_files[category][selected[0]]
-        self.photo_preview.show(category, path, self.photo_rotations[category].get(path, 0))
+        self.photo_preview.show(category, path, self.photo_rotations[category].get(path, 0),
+                                self.photo_crops[category].get(path))
+        self.crop_btn.config(state='normal')
         self.rotate_left_btn.config(state='normal')
         self.rotate_right_btn.config(state='normal')
         self._caption_target = (category, path)
@@ -1997,9 +2265,34 @@ class ReportGeneratorGUI:
             self.photo_rotations[category][path] = angle
         else:
             self.photo_rotations[category].pop(path, None)
-        self.photo_preview.show(category, path, angle)
+        self.photo_preview.show(category, path, angle, self.photo_crops[category].get(path))
         self._render_list(category)  # 表格上的 (橫)/(直) 跟著變
         self.status_label.config(text=f"已旋轉照片（目前 {angle}°）")
+
+    def crop_current_photo(self):
+        """開啟裁切對話框，裁切預覽中的這張照片；只記錄範圍，不改原檔，報告也會照這個範圍放。"""
+        target = self.photo_preview.current
+        if not target:
+            return
+        category, path = target
+        rotation = self.photo_rotations[category].get(path, 0)
+        try:
+            dialog = CropDialog(self.root, path, rotation, self.photo_crops[category].get(path),
+                                self.palette, self.font_family)
+        except Exception as e:
+            messagebox.showerror("無法裁切", f"這張照片無法開啟：{e}")
+            return
+        result = dialog.run()
+        if result is False:  # 取消
+            return
+        if result:
+            self.photo_crops[category][path] = result
+            self.status_label.config(text="已裁切照片（原檔不會被改動；再按一次「裁切…」可以調整或還原）")
+        else:
+            self.photo_crops[category].pop(path, None)
+            self.status_label.config(text="已還原成整張照片")
+        self.photo_preview.show(category, path, rotation, result or None)
+        self._render_list(category)
 
     def _commit_caption(self):
         """把說明輸入框目前的文字存到對應的照片（沒有變動就什麼都不做）。"""
@@ -2200,6 +2493,7 @@ class ReportGeneratorGUI:
             filepath = self.photo_files[category].pop(idx)
             self.photo_captions[category].pop(filepath, None)
             self.photo_rotations[category].pop(filepath, None)
+            self.photo_crops[category].pop(filepath, None)
         self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已移除 {len(selected)} 張照片")
@@ -2208,6 +2502,7 @@ class ReportGeneratorGUI:
         self.photo_files[category].clear()
         self.photo_captions[category].clear()
         self.photo_rotations[category].clear()
+        self.photo_crops[category].clear()
         self._render_list(category)
         self._refresh_previews()
         self.status_label.config(text=f"已清除 {category} 的所有照片")
@@ -2221,6 +2516,7 @@ class ReportGeneratorGUI:
             self.photo_files[category].clear()
             self.photo_captions[category].clear()
             self.photo_rotations[category].clear()
+            self.photo_crops[category].clear()
             self._render_list(category)
         self._reset_caption_panel()
         self._refresh_tab_marks()
@@ -2250,6 +2546,7 @@ class ReportGeneratorGUI:
             'photos': {c: list(p) for c, p in self.photo_files.items()},
             'captions': {c: dict(v) for c, v in self.photo_captions.items()},
             'rotations': {c: dict(v) for c, v in self.photo_rotations.items()},
+            'crops': {c: {p: list(box) for p, box in v.items()} for c, v in self.photo_crops.items()},
         }
 
     def apply_draft(self, draft):
@@ -2271,6 +2568,7 @@ class ReportGeneratorGUI:
                 continue
             captions = draft.get('captions', {}).get(saved_category, {})
             rotations = draft.get('rotations', {}).get(saved_category, {})
+            crops = draft.get('crops', {}).get(saved_category, {})
             for path in paths:
                 if not os.path.exists(path):
                     warnings.append(f"找不到照片，已略過：{path}")
@@ -2284,6 +2582,9 @@ class ReportGeneratorGUI:
                     angle = 0
                 if angle:
                     self.photo_rotations[category][path] = angle
+                crop = normalize_crop(crops.get(path)) if isinstance(crops, dict) else None
+                if crop:
+                    self.photo_crops[category][path] = crop
             self._render_list(category)
         self._refresh_tab_marks()
         return warnings
@@ -2536,6 +2837,7 @@ class ReportGeneratorGUI:
         photo_files = {c: list(p) for c, p in self.photo_files.items()}
         captions = {c: dict(v) for c, v in self.photo_captions.items()}
         rotations = {c: dict(v) for c, v in self.photo_rotations.items()}
+        crops = {c: dict(v) for c, v in self.photo_crops.items()}
         missing = [p for photos in photo_files.values() for p in photos if not os.path.exists(p)]
         if missing:
             messagebox.showerror("錯誤", "以下照片檔案不存在：\n" + "\n".join(missing[:10]))
@@ -2568,7 +2870,7 @@ class ReportGeneratorGUI:
         self.generate_btn.config(state=tk.DISABLED)
         self._start_busy(BUSY_MESSAGE)
         threading.Thread(target=self._generate_report_worker,
-                         args=(data, photo_files, captions, output_path, rotations),
+                         args=(data, photo_files, captions, output_path, rotations, crops),
                          daemon=True).start()
 
     def _start_busy(self, message):
@@ -2608,9 +2910,9 @@ class ReportGeneratorGUI:
             pass
         self.root.after(100, self._drain_ui_queue)
 
-    def _generate_report_worker(self, data, photo_files, captions, output_path, rotations=None):
+    def _generate_report_worker(self, data, photo_files, captions, output_path, rotations=None, crops=None):
         try:
-            warnings = build_report(self.template_path, data, photo_files, captions, output_path, rotations)
+            warnings = build_report(self.template_path, data, photo_files, captions, output_path, rotations, crops)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
 
             pdf_path = os.path.splitext(output_path)[0] + '.pdf'

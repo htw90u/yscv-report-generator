@@ -2168,6 +2168,185 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.photo_captions['遊客宣導與違法情形'], {b: '亂丟'})
         self.assertEqual(self.app.photo_rotations['遊客宣導與違法情形'], {b: 90})
 
+    # ---- 照片裁切（只記錄範圍，不改原檔；預覽、報告、草稿都會套用）
+    def test_normalize_crop_rejects_bad_tiny_and_full_ranges(self):
+        self.assertIsNone(g.normalize_crop(None))
+        self.assertIsNone(g.normalize_crop('abc'))
+        self.assertIsNone(g.normalize_crop((0, 0, 1, 1)))                 # 整張＝不裁切
+        self.assertIsNone(g.normalize_crop((0.2, 0.2, 0.21, 0.9)))        # 太窄
+        self.assertEqual(g.normalize_crop((0.6, 0.9, 0.2, 0.1)), (0.2, 0.1, 0.6, 0.9))  # 左右上下顛倒會自動排好
+        self.assertEqual(g.normalize_crop((-1, 0.1, 0.5, 2)), (0.0, 0.1, 0.5, 1.0))      # 超出範圍會夾在 0~1
+
+    def test_crop_coordinates_convert_back_and_forth_with_rotation(self):
+        crop = (0.1, 0.2, 0.5, 0.9)
+        for angle in (0, 90, 180, 270):
+            shown = g.crop_to_display(crop, angle)
+            back = g.crop_from_display(shown, angle)
+            for a, b in zip(back, crop):
+                self.assertAlmostEqual(a, b, places=9, msg=f'{angle}°')
+        # 順時針 90°：原圖左上角的框，轉過去之後在畫面右上角
+        left, top, right, bottom = g.crop_to_display((0.0, 0.0, 0.5, 0.25), 90)
+        self.assertAlmostEqual(right, 1.0)
+        self.assertAlmostEqual(top, 0.0)
+        self.assertAlmostEqual(left, 0.75)
+        self.assertAlmostEqual(bottom, 0.5)
+
+    def test_prepare_image_crops_before_rotating(self):
+        path = os.path.join(self.tmp.name, 'c.png')
+        im = Image.new('RGB', (400, 200), 'white')
+        for x in range(0, 100):
+            for y in range(0, 200):
+                im.putpixel((x, y), (255, 0, 0))       # 左邊 1/4 是紅色
+        im.save(path)
+        src, size = g.prepare_image(path, 0, (0.0, 0.0, 0.25, 1.0))
+        self.assertEqual(size, (100, 200))
+        with Image.open(src) as out:
+            r, g_, b_ = out.getpixel((50, 100))
+            self.assertTrue(r > 240 and g_ < 15 and b_ < 15)         # 裁出來的全是紅色（JPEG 壓縮可能差 1~2）
+        src, size = g.prepare_image(path, 90, (0.0, 0.0, 0.25, 1.0))
+        self.assertEqual(size, (200, 100))                            # 裁完再旋轉，寬高互換
+        self.assertEqual(g.prepare_image(path)[1], (400, 200))        # 沒給裁切就是原樣
+        with Image.open(path) as original:
+            self.assertEqual(original.size, (400, 200))               # 原檔沒被改動
+
+    def test_crop_button_disabled_until_a_photo_is_selected(self):
+        self.assertEqual(str(self.app.crop_btn.cget('state')), 'disabled')
+        cat, table, (a,) = self._photos(names=('r.jpg',))
+        self._select_first(cat, table)
+        self.assertEqual(str(self.app.crop_btn.cget('state')), 'normal')
+
+    def _crop_with(self, selection, cat, table):
+        """用假的對話框流程：開啟裁切對話框，把選取範圍設成 selection（畫面比例），按確定。"""
+        def fake_run(dialog):
+            dialog.set_selection(*selection)
+            dialog.ok()
+            return dialog.result
+        with mock.patch.object(g.CropDialog, 'run', fake_run):
+            self.app.crop_btn.invoke()
+        self.root.update()
+
+    def test_cropping_updates_preview_table_and_keeps_original_file(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self._select_first(cat, table)
+        self.assertEqual(table.row_text(0), '● (橫) r.jpg')
+        self._crop_with((0.0, 0.0, 0.25, 1.0), cat, table)             # 只留左邊 1/4：100×200 → 直式
+        self.assertEqual(self.app.photo_crops[cat][a], (0.0, 0.0, 0.25, 1.0))
+        self.assertEqual(table.row_text(0), '● (直) r.jpg')
+        preview = self.app.photo_preview
+        self.assertGreater(preview.image.height(), preview.image.width())
+        with Image.open(a) as original:
+            self.assertEqual(original.size, (400, 200))
+        self._crop_with((0.0, 0.0, 1.0, 1.0), cat, table)              # 選取整張＝還原
+        self.assertNotIn(a, self.app.photo_crops[cat])
+        self.assertEqual(table.row_text(0), '● (橫) r.jpg')
+
+    def test_cancelling_the_crop_dialog_changes_nothing(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',))
+        self._select_first(cat, table)
+
+        def fake_run(dialog):
+            dialog.set_selection(0.1, 0.1, 0.5, 0.5)
+            dialog.cancel()
+            return dialog.result
+        with mock.patch.object(g.CropDialog, 'run', fake_run):
+            self.app.crop_btn.invoke()
+        self.assertEqual(self.app.photo_crops[cat], {})
+
+    def test_crop_dialog_converts_selection_with_the_current_rotation(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self.app.photo_rotations[cat][a] = 90
+        self._select_first(cat, table)
+        # 畫面（轉 90° 後是 200×400 直式）上選「右上角的 1/2 寬 × 1/4 高」，對應原圖「左上角 1/4 寬 × 1/2 高」
+        self._crop_with((0.5, 0.0, 1.0, 0.25), cat, table)
+        l, t, r, b = self.app.photo_crops[cat][a]
+        self.assertAlmostEqual(l, 0.0)
+        self.assertAlmostEqual(t, 0.0)
+        self.assertAlmostEqual(r, 0.25)
+        self.assertAlmostEqual(b, 0.5)
+        # 之後把旋轉改回 0°，裁切範圍仍是同一塊原圖區域
+        self.app.rotate_left_btn.invoke()
+        self.assertEqual(self.app.photo_crops[cat][a], (l, t, r, b))
+
+    def test_crop_dialog_reopens_with_the_saved_selection_and_mouse_drag_works(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self.app.photo_crops[cat][a] = (0.25, 0.25, 0.75, 0.75)
+        dialog = g.CropDialog(self.root, a, 0, self.app.photo_crops[cat][a], self.app.palette, self.app.font_family)
+        try:
+            dialog.deiconify()  # 沒顯示出來的元件收不到滑鼠事件
+            dialog.update()
+            for got, want in zip(dialog.selection(), (0.25, 0.25, 0.75, 0.75)):
+                self.assertAlmostEqual(got, want, places=2)
+            self.assertEqual(dialog.kept_size(), (200, 100))
+            pad = dialog.PAD
+            # 在框外按下並拖曳，畫一個新的框（左上 10%,10% 到 40%,60%）
+            x0, y0 = pad + 0.10 * dialog.view_w, pad + 0.10 * dialog.view_h
+            x1, y1 = pad + 0.40 * dialog.view_w, pad + 0.60 * dialog.view_h
+            dialog.canvas.event_generate('<ButtonPress-1>', x=int(x0), y=int(y0))
+            dialog.canvas.event_generate('<B1-Motion>', x=int(x1), y=int(y1))
+            dialog.canvas.event_generate('<ButtonRelease-1>', x=int(x1), y=int(y1))
+            dialog.update()
+            for got, want in zip(dialog.selection(), (0.10, 0.10, 0.40, 0.60)):
+                self.assertAlmostEqual(got, want, delta=0.02)
+            # 拖曳框內部可以移動，不會超出照片
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            dialog.canvas.event_generate('<ButtonPress-1>', x=int(cx), y=int(cy))
+            dialog.canvas.event_generate('<B1-Motion>', x=int(cx + 5000), y=int(cy))
+            dialog.canvas.event_generate('<ButtonRelease-1>', x=int(cx + 5000), y=int(cy))
+            dialog.update()
+            left, top, right, bottom = dialog.selection()
+            self.assertAlmostEqual(right, 1.0, delta=0.01)
+            self.assertAlmostEqual(right - left, 0.30, delta=0.02)
+            # 只點一下（框太小）不會把框弄不見
+            dialog.canvas.event_generate('<ButtonPress-1>', x=pad + 3, y=pad + 3)
+            dialog.canvas.event_generate('<ButtonRelease-1>', x=pad + 3, y=pad + 3)
+            dialog.update()
+            self.assertAlmostEqual(dialog.selection()[2] - dialog.selection()[0], 0.30, delta=0.02)
+            dialog.select_whole()
+            dialog.ok()
+            self.assertIsNone(dialog.result)   # 選整張＝不裁切
+        finally:
+            if dialog.winfo_exists():
+                dialog.destroy()
+
+    def test_crop_survives_draft_roundtrip_and_is_dropped_with_the_photo(self):
+        cat, table, (a, b, c) = self._photos()
+        self.app.photo_crops[cat][b] = (0.1, 0.2, 0.6, 0.9)
+        draft = self.app.build_draft()
+        self.assertEqual(draft['crops'][cat], {b: [0.1, 0.2, 0.6, 0.9]})
+        self.assertTrue(self.app.is_dirty())
+        import json
+        draft = json.loads(json.dumps(draft))      # 真的經過 JSON 存檔再讀回來
+        self.app.apply_draft(draft)
+        self.assertEqual(self.app.photo_crops[cat], {b: (0.1, 0.2, 0.6, 0.9)})
+        table.set_selection([1])
+        self.app.remove_photos(cat, table)
+        self.assertEqual(self.app.photo_crops[cat], {})
+        self.app.photo_crops[cat][a] = (0.1, 0.1, 0.5, 0.5)
+        self.app.clear_photos(cat, table)
+        self.assertEqual(self.app.photo_crops[cat], {})
+
+    def test_old_draft_without_crops_and_garbage_crops_still_load(self):
+        cat, table, (a,) = self._photos(names=('o.jpg',))
+        draft = self.app.build_draft()
+        draft.pop('crops')
+        self.assertEqual(self.app.apply_draft(draft), [])
+        self.assertEqual(self.app.photo_crops[cat], {})
+        draft['crops'] = {cat: {a: 'bad'}}
+        self.assertEqual(self.app.apply_draft(draft), [])
+        self.assertEqual(self.app.photo_crops[cat], {})
+
+    def test_crop_is_applied_in_the_report(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        out = os.path.join(self.tmp.name, 'crop.docx')
+        self.fill_dates()
+        data, error = self.app.collect_data()
+        self.assertIsNone(error)
+        files = {c: list(v) for c, v in self.app.photo_files.items()}
+        g.build_report(TEMPLATE, data, files, {}, out, crops={cat: {a: (0.0, 0.0, 0.25, 1.0)}})
+        shapes = Document(out).inline_shapes
+        self.assertGreaterEqual(len(shapes), 1)
+        self.assertGreater(shapes[0].height, shapes[0].width)  # 裁成 100×200 之後是直式
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))

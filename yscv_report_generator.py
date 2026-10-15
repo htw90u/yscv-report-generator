@@ -3448,6 +3448,137 @@ class LauncherCard(tk.Frame):
         self.command()
 
 
+FEEDBACK_TIMEOUT = 15        # 秒；Apps Script 第一次呼叫可能要幾秒
+
+
+def feedback_endpoint_url():
+    """意見反應的 Google Apps Script 端點網址（放在 git 忽略的 yscv_feedback_endpoint.py，範本見
+    yscv_feedback_endpoint.example.py）；沒有設定回傳空字串。收件信箱只存在 Google 端的 Apps Script 裡。"""
+    try:
+        import yscv_feedback_endpoint
+    except ImportError:
+        return ''
+    return str(getattr(yscv_feedback_endpoint, 'URL', '') or '').strip()
+
+
+def feedback_message(title, content, version):
+    """意見反應信件的 (主旨, 內文)：主旨與內文最後都自動加上版本。"""
+    title = (title or '').strip() or '意見反應'
+    subject = f"[{version}] {title}"
+    body = f"{(content or '').strip()}\n\n----\n{APP_TITLE}　{version}"
+    return subject, body
+
+
+def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT):
+    """把意見 POST（JSON）到 Apps Script 端點，由 Google 端用部署者的帳號寄信（郵件帳號密碼不進程式，
+    也不管使用者有沒有郵件程式）。回傳 (成功與否, 失敗原因)。"""
+    import urllib.error
+    import urllib.request
+    url = feedback_endpoint_url() if url is None else url
+    if not url:
+        return False, "這個版本沒有設定意見反應的寄送功能"
+    payload = json.dumps({'subject': subject, 'body': body, 'app': APP_TITLE}).encode('utf-8')
+    request = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    try:
+        # Apps Script 會 302 轉址到 googleusercontent 取回結果，urllib 會自動跟隨
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read().decode('utf-8', errors='replace'))
+    except urllib.error.HTTPError as e:
+        e.close()
+        return False, f"伺服器回應錯誤（{e.code}）"
+    except (urllib.error.URLError, OSError) as e:
+        return False, f"無法連線到伺服器（{getattr(e, 'reason', e)}）"
+    except ValueError:
+        return False, "伺服器的回應格式不正確"
+    if isinstance(result, dict) and result.get('ok'):
+        return True, ''
+    return False, (result.get('error') if isinstance(result, dict) else '') or "伺服器回報寄送失敗"
+
+
+class FeedbackDialog(tk.Toplevel):
+    """意見反應：填標題與內容，按「寄出」就在背景送出，版本自動加在信裡。不顯示收件人，也不依賴使用者的郵件程式。"""
+
+    def __init__(self, parent, palette, family, version):
+        super().__init__(parent)
+        self.version = version
+        self.sending = False
+        self._results = queue.Queue()
+        self.title("意見反應")
+        self.configure(background=palette['bg'])
+        self.transient(parent)
+        frame = ttk.Frame(self, padding=(22, 18, 22, 14))
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text="標題:", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W, pady=4, padx=(0, 10))
+        self.title_entry = ttk.Entry(frame, width=52)
+        self.title_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+        ttk.Label(frame, text="內容:", style='Field.TLabel').grid(row=1, column=0, sticky=(tk.W, tk.N), pady=4,
+                                                                  padx=(0, 10))
+        self.content_text = tk.Text(frame, width=52, height=10, wrap='word', font=(family, 10 + GUI_FONT_DELTA),
+                                    undo=True, foreground=palette['text'], relief='solid', borderwidth=1,
+                                    highlightthickness=0, padx=6, pady=4)
+        self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=4)
+        ttk.Label(frame, text=f"寄出時會自動加上版本：{version}", style='Hint.TLabel').grid(
+            row=2, column=1, sticky=tk.W, pady=(4, 0))
+        bar = ttk.Frame(frame)
+        bar.grid(row=3, column=0, columnspan=2, pady=(14, 0))
+        self.send_button = ttk.Button(bar, text="寄出(Ctrl+Enter)", style='DialogDefault.TButton', command=self.send)
+        self.send_button.pack(side=tk.LEFT, padx=8)
+        self.cancel_button = ttk.Button(bar, text="取消", style='Dialog.TButton', command=self.cancel)
+        self.cancel_button.pack(side=tk.LEFT, padx=8)
+        self.bind('<Control-Return>', lambda e: self.send())
+        self.bind('<Escape>', lambda e: self.cancel())
+        self.protocol('WM_DELETE_WINDOW', self.cancel)
+        self.title_entry.focus_set()
+        self.update_idletasks()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - self.winfo_width()) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - self.winfo_height()) // 4)
+        self.geometry(f'+{x}+{y}')
+
+    def run(self):
+        self.grab_set()
+        self.focus_force()
+        self.wait_window()
+
+    def cancel(self):
+        if not self.sending:        # 寄送中不能取消，免得信已經寄出卻以為取消了
+            self.destroy()
+
+    def send(self):
+        """檢查後在背景送出（畫面不會卡住）；結果由 _poll 處理。回傳是否開始送出。"""
+        if self.sending:
+            return False
+        content = self.content_text.get('1.0', tk.END).strip()
+        if not content:
+            messagebox.showerror("意見反應", "請先填寫內容")
+            self.content_text.focus_set()
+            return False
+        subject, body = feedback_message(self.title_entry.get(), content, self.version)
+        self.sending = True
+        self.send_button.config(state=tk.DISABLED, text="寄送中…")
+        self.cancel_button.config(state=tk.DISABLED)
+        threading.Thread(target=lambda: self._results.put(send_feedback(subject, body)), daemon=True).start()
+        self.after(100, self._poll)
+        return True
+
+    def _poll(self):
+        try:
+            ok, error = self._results.get_nowait()
+        except queue.Empty:
+            self.after(100, self._poll)
+            return
+        self.sending = False
+        self.send_button.config(state=tk.NORMAL, text="寄出(Ctrl+Enter)")
+        self.cancel_button.config(state=tk.NORMAL)
+        if ok:
+            logging.info("意見反應已寄出")
+            messagebox.showinfo("意見反應", "已寄出，謝謝你的意見！")
+            self.destroy()
+        else:
+            logging.warning(f"意見反應寄出失敗: {error}")
+            messagebox.showerror("寄送失敗", f"{error}\n\n請檢查網路連線後再試一次。你填的內容還在，可以直接重新寄出。")
+
+
 class ReportLauncher:
     """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。"""
 
@@ -3463,6 +3594,15 @@ class ReportLauncher:
         style.configure('.', background=palette['bg'], foreground=palette['text'])
         style.configure('Heading.TLabel', font=(family, 14 + GUI_FONT_DELTA, 'bold'), foreground=palette['heading_fg'])
         style.configure('Hint.TLabel', foreground=palette['muted'])
+        style.configure('Field.TLabel', font=(family, 10 + GUI_FONT_DELTA), foreground=palette['field_fg'])
+        dialog_font = (family, 9 + GUI_FONT_DELTA + DIALOG_FONT_EXTRA_PT)     # 意見反應與訊息視窗用的按鈕樣式
+        style.configure('Dialog.TButton', font=dialog_font, padding=(18, 6))
+        style.configure('DialogDefault.TButton', font=dialog_font, padding=(18, 6), background=palette['primary'],
+                        foreground=palette['primary_fg'], bordercolor=palette['primary_border'], lightcolor=BEVEL_LIGHT,
+                        darkcolor=mix_color(palette['primary'], '#000000', BEVEL_DARK_RATIO))
+        style.map('DialogDefault.TButton', background=[('active', palette['primary_active'])],
+                  foreground=[('active', palette['primary_fg'])])
+        self.palette, self.font_family = palette, family     # 讓 messagebox（程式自己畫的訊息視窗）可以綁定到選單
         root.title(f'{APP_TITLE}　{version_label()}')
         set_window_icon(root)
         frame = ttk.Frame(root, padding=(28, 22))
@@ -3478,8 +3618,13 @@ class ReportLauncher:
             button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=7)
             self.buttons[report_id] = button
             root.bind(str(row), lambda e, r=report_id: self.pick(r))
-        ttk.Label(frame, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=len(REPORT_CHOICES) + 1,
-                                                                                         column=0, pady=(10, 0))
+        footer = ttk.Frame(frame)
+        footer.grid(row=len(REPORT_CHOICES) + 1, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(footer, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=0, column=0)
+        self.feedback_button = ttk.Button(footer, text="意見反應", command=self.open_feedback)
+        self.feedback_button.grid(row=0, column=1, sticky=tk.E)      # 右下角
+        messagebox.attach(self)
         root.bind('<Escape>', lambda e: root.destroy())
         root.update_idletasks()
         width, height = max(740, frame.winfo_reqwidth()), frame.winfo_reqheight()
@@ -3487,6 +3632,13 @@ class ReportLauncher:
         y = max(0, (root.winfo_screenheight() - height) // 3)
         root.geometry(f"{width}x{height}+{x}+{y}")
         self.buttons[REPORT_CHOICES[0][0]].focus_set()   # Enter 直接進入第一個
+
+    def open_feedback(self):
+        """開啟意見反應視窗（標題、內容；寄出時自動加上版本）。"""
+        dialog = FeedbackDialog(self.root, self.palette, self.font_family, version_label())
+        self.last_feedback_dialog = dialog
+        dialog.run()
+        return dialog
 
     def pick(self, report_id):
         self.choice = report_id
@@ -3498,6 +3650,7 @@ def choose_report():
     root = tk.Tk()
     launcher = ReportLauncher(root)
     root.mainloop()
+    messagebox.attach(None)         # 選單關了，之後由各回報單視窗重新綁定
     return launcher.choice
 
 

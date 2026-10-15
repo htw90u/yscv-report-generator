@@ -15,6 +15,7 @@
 - 依固定範本填入基本資料與各項內容（範本放在程式旁邊，要更新表單格式直接換掉範本檔）
 - 服勤照片：從檔案總管拖進視窗、拖曳調整順序、拖到其他分類、旋轉、裁切（不改原檔）、填寫說明
 - 報告裡的照片依你排的順序放置（橫式與直式不並排），並放大到填滿儲存格
+- 入口選單右下角的「意見反應」：填標題與內容，按寄出就直接送出（版本自動加在主旨與內文），不用使用者的郵件程式；做法是 POST 到 Google Apps Script，由 Google 端寄信，設定方式見下方「意見反應的設定」
 - 草稿存檔／載入、每 30 秒自動存檔（三種回報單各自存檔，草稿也不會載入到別種回報單）
 - 視窗標題顯示版本與 git 編號：`<tag>.<tag 之後第幾個 commit>-<sha>`，剛好在 tag 上是 `v0.5-76b5acc`，之後第 12 個 commit 是 `v0.5.12-3c1f9ab`
 - 產生前檢查未填欄位；產生後自動開啟檔案
@@ -48,6 +49,15 @@ python -m unittest discover -s tests
 ## 字型
 
 介面使用「芫荽 Iansui」（`fonts/Iansui-Regular.ttf`，SIL Open Font License，授權文字見 `fonts/OFL-Iansui.txt`），只在程式執行期間載入，不會安裝到系統。
+
+## 意見反應的設定
+
+意見反應是 POST 到一個 Google Apps Script 網頁應用程式，由它用部署者的帳號寄信，所以程式裡沒有任何郵件帳號密碼，收件信箱也只設定在 Apps Script 裡。
+
+1. 部署 `apps_script_feedback.gs`（步驟寫在檔案開頭的註解，約 5 分鐘），拿到網頁應用程式網址。
+2. 複製 `yscv_feedback_endpoint.example.py` 為 `yscv_feedback_endpoint.py`，把 `URL` 換成那個網址（這個檔案已被 `.gitignore` 排除）。
+
+沒有設定時，按「寄出」會提示這個版本沒有設定寄送功能，其他功能不受影響。
 
 ## 授權
 

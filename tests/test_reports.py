@@ -802,6 +802,273 @@ class DebugLogTest(unittest.TestCase):
         self.assertEqual([n for n in os.listdir(copy) if n.endswith('.log')], [])
 
 
+class FakeFeedbackServer:
+    """本機假的 Apps Script 端點（只在 127.0.0.1，不連外網）：記下收到的 JSON，依 mode 回應。
+    mode：ok、fail（ok=false）、redirect（先 302 再回結果，和真的 Apps Script 一樣）、http500、garbage。"""
+
+    def __init__(self, mode='ok'):
+        import http.server
+        import threading
+        outer = self
+        self.mode = mode
+        self.received = []
+        self.methods = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _reply(self, code, payload, ctype='application/json'):
+                data = payload if isinstance(payload, bytes) else json.dumps(payload).encode('utf-8')
+                self.send_response(code)
+                self.send_header('Content-Type', ctype)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                outer.methods.append('POST')
+                length = int(self.headers.get('Content-Length', 0))
+                outer.received.append(json.loads(self.rfile.read(length).decode('utf-8')))
+                if outer.mode == 'redirect':
+                    self.send_response(302)
+                    self.send_header('Location', f'http://127.0.0.1:{outer.port}/result')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                elif outer.mode == 'fail':
+                    self._reply(200, {'ok': False, 'error': 'Service invoked too many times'})
+                elif outer.mode == 'http500':
+                    self._reply(500, {'ok': False})
+                elif outer.mode == 'garbage':
+                    self._reply(200, '<html>不是 JSON</html>'.encode('utf-8'), 'text/html')
+                else:
+                    self._reply(200, {'ok': True})
+
+            def do_GET(self):
+                outer.methods.append('GET')
+                self._reply(200, {'ok': True})
+
+        self.server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        self.port = self.server.server_address[1]
+        self.url = f'http://127.0.0.1:{self.port}/exec'
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class FeedbackSendTest(unittest.TestCase):
+    """send_feedback：POST 到端點（不管使用者的郵件程式），各種結果都要有清楚的回應。"""
+
+    def server(self, mode='ok'):
+        server = FakeFeedbackServer(mode)
+        self.addCleanup(server.close)
+        return server
+
+    def test_posts_json_with_subject_body_and_app(self):
+        server = self.server()
+        ok, error = g.send_feedback('[v1] 標題', '內容\n第二行', url=server.url)
+        self.assertEqual((ok, error), (True, ''))
+        self.assertEqual(server.received, [{'subject': '[v1] 標題', 'body': '內容\n第二行', 'app': g.APP_TITLE}])
+
+    def test_follows_the_redirect_like_apps_script(self):
+        server = self.server('redirect')
+        self.assertEqual(g.send_feedback('s', 'b', url=server.url), (True, ''))
+        self.assertEqual(server.methods, ['POST', 'GET'])                         # 302 之後用 GET 取結果
+
+    def test_reports_the_error_from_the_endpoint(self):
+        ok, error = g.send_feedback('s', 'b', url=self.server('fail').url)
+        self.assertFalse(ok)
+        self.assertIn('too many times', error)
+
+    def test_http_error_unreachable_and_bad_response(self):
+        ok, error = g.send_feedback('s', 'b', url=self.server('http500').url)
+        self.assertEqual((ok, error), (False, '伺服器回應錯誤（500）'))
+        ok, error = g.send_feedback('s', 'b', url=self.server('garbage').url)
+        self.assertEqual((ok, error), (False, '伺服器的回應格式不正確'))
+        closed = self.server()
+        closed.close()                                                            # 連不上
+        ok, error = g.send_feedback('s', 'b', url=closed.url, timeout=3)
+        self.assertFalse(ok)
+        self.assertIn('無法連線', error)
+
+    def test_no_endpoint_configured(self):
+        with mock.patch.object(g, 'feedback_endpoint_url', return_value=''):
+            ok, error = g.send_feedback('s', 'b')
+        self.assertFalse(ok)
+        self.assertIn('沒有設定', error)
+
+    def test_endpoint_url_comes_from_the_ignored_config_module(self):
+        import sys
+        import types
+        fake = types.ModuleType('yscv_feedback_endpoint')
+        fake.URL = '  https://script.google.com/macros/s/ABC/exec  '
+        with mock.patch.dict(sys.modules, {'yscv_feedback_endpoint': fake}):
+            self.assertEqual(g.feedback_endpoint_url(), 'https://script.google.com/macros/s/ABC/exec')
+        with mock.patch.dict(sys.modules, {'yscv_feedback_endpoint': None}):      # 沒有這個檔案
+            self.assertEqual(g.feedback_endpoint_url(), '')
+
+    def test_no_mail_client_or_recipient_is_involved(self):
+        self.assertFalse(hasattr(g, 'open_mailto'))                               # 不再有 mailto 備援
+        source = open(os.path.join(g.BASE_DIR, 'yscv_report_generator.py'), encoding='utf-8').read()
+        self.assertNotIn('mailto', source)
+        self.assertNotRegex(source, r'[\w.]+@[\w.]+\.(io|com|tw|org)')            # 程式碼裡沒有任何信箱
+
+
+class FeedbackTest(unittest.TestCase):
+    """入口選單的「意見反應」視窗（寄送一律用假的，不會真的送出）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = tk.Tk()
+        self.launcher = g.ReportLauncher(self.root, settings_path=os.path.join(self.tmp.name, 's.json'))
+        self.sent, self.shown = [], []
+        self.gate = None                                    # 讓假的寄送卡住，測試「寄送中」的畫面
+        self.result = (True, '')
+
+        def fake_send(subject, body):
+            if self.gate:
+                self.gate.wait(5)
+            self.sent.append((subject, body))
+            return self.result
+
+        for p in (mock.patch.object(g, 'send_feedback', fake_send),
+                  mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', t, m))),
+                  mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', t, m)))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(lambda: messagebox.attach(None))
+        self.addCleanup(gc.collect)
+        self.addCleanup(self.root.destroy)
+
+    def dialog(self, title='', content=''):
+        dialog = g.FeedbackDialog(self.root, self.launcher.palette, self.launcher.font_family, 'v9.9.3-abc1234')
+        self.addCleanup(lambda: dialog.winfo_exists() and dialog.destroy())
+        dialog.title_entry.insert(0, title)
+        dialog.content_text.insert('1.0', content)
+        return dialog
+
+    def finish(self, dialog, timeout=5):
+        t0 = time.time()
+        while time.time() - t0 < timeout and dialog.winfo_exists() and dialog.sending:
+            self.root.update()
+            time.sleep(0.02)
+        self.root.update()
+
+    def test_feedback_button_is_at_the_bottom_right(self):
+        self.root.update()
+        button = self.launcher.feedback_button
+        self.assertEqual(button.cget('text'), '意見反應')
+        cards = list(self.launcher.buttons.values())
+        self.assertGreater(button.winfo_rooty(), max(card.winfo_rooty() + card.winfo_height() - 1 for card in cards))
+        self.assertGreaterEqual(button.winfo_rootx() + button.winfo_width(),
+                                max(card.winfo_rootx() + card.winfo_width() for card in cards) - 12)   # 靠右對齊卡片的右緣
+        self.assertGreater(button.winfo_rootx(), self.root.winfo_rootx() + self.root.winfo_width() // 2)
+
+    def test_message_carries_the_version_in_subject_and_body(self):
+        subject, body = g.feedback_message('希望新增功能', '請加上九宮格', 'v0.5.16-ca25953')
+        self.assertEqual(subject, '[v0.5.16-ca25953] 希望新增功能')
+        self.assertTrue(body.startswith('請加上九宮格'))
+        self.assertIn('v0.5.16-ca25953', body)
+        self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[v1] 意見反應')        # 沒填標題用預設
+
+    def test_dialog_does_not_show_a_recipient(self):
+        dialog = self.dialog()
+
+        def texts(widget):
+            found = [str(widget.cget('text'))] if 'text' in widget.keys() else []
+            for child in widget.winfo_children():
+                found += texts(child)
+            return found
+
+        everything = '\n'.join(texts(dialog))
+        self.assertNotIn('@', everything)
+        self.assertNotIn('收件人', everything)
+        self.assertIn('v9.9.3-abc1234', everything)                                 # 但會說明會附上版本
+
+    def test_sending_posts_in_the_background_and_closes_on_success(self):
+        dialog = self.dialog('照片太小', '預覽可以再大一點\n謝謝')
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        self.assertEqual(len(self.sent), 1)
+        subject, body = self.sent[0]
+        self.assertEqual(subject, '[v9.9.3-abc1234] 照片太小')
+        self.assertIn('預覽可以再大一點\n謝謝', body)
+        self.assertIn('v9.9.3-abc1234', body)
+        self.assertEqual(self.shown[-1], ('info', '意見反應', '已寄出，謝謝你的意見！'))
+        self.assertFalse(dialog.winfo_exists())                                   # 成功後關閉視窗
+
+    def test_buttons_are_locked_while_sending(self):
+        import threading
+        self.gate = threading.Event()
+        dialog = self.dialog('慢', '網路很慢')
+        self.assertTrue(dialog.send())
+        self.root.update()
+        self.assertTrue(dialog.sending)
+        self.assertTrue(dialog.send_button.instate(['disabled']))
+        self.assertEqual(dialog.send_button.cget('text'), '寄送中…')
+        self.assertTrue(dialog.cancel_button.instate(['disabled']))
+        self.assertFalse(dialog.send())                                           # 重複按不會寄第二封
+        dialog.cancel()                                                           # 寄送中取消無效
+        self.assertTrue(dialog.winfo_exists())
+        self.gate.set()
+        self.finish(dialog)
+        self.assertEqual(len(self.sent), 1)
+        self.assertFalse(dialog.winfo_exists())
+
+    def test_empty_content_is_refused(self):
+        dialog = self.dialog('只有標題', '   ')
+        self.assertFalse(dialog.send())
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.shown[-1], ('err', '意見反應', '請先填寫內容'))
+        self.assertTrue(dialog.winfo_exists())
+
+    def test_failure_keeps_the_text_and_allows_a_retry(self):
+        self.result = (False, '無法連線到伺服器（timed out）')
+        dialog = self.dialog('失敗', '網路不通')
+        dialog.send()
+        self.finish(dialog)
+        kind, title, message = self.shown[-1]
+        self.assertEqual((kind, title), ('err', '寄送失敗'))
+        self.assertIn('無法連線到伺服器', message)
+        self.assertTrue(dialog.winfo_exists())
+        self.assertEqual(dialog.content_text.get('1.0', tk.END).strip(), '網路不通')          # 內容還在
+        self.assertFalse(dialog.send_button.instate(['disabled']))
+        self.result = (True, '')                                                  # 網路恢復後可以重寄
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        self.assertEqual(len(self.sent), 2)
+        self.assertFalse(dialog.winfo_exists())
+
+    def test_end_to_end_with_a_local_server(self):
+        server = FakeFeedbackServer('redirect')
+        self.addCleanup(server.close)
+        mock.patch.stopall()                                                        # 這個測試用真的 send_feedback（只連本機）
+        dialog = self.dialog('完整流程', '從畫面一路送到假伺服器')
+        with mock.patch.object(g, 'feedback_endpoint_url', return_value=server.url), \
+                mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', t, m))):
+            dialog.send()
+            self.finish(dialog, timeout=10)
+        self.assertEqual(len(server.received), 1)
+        self.assertEqual(server.received[0]['subject'], '[v9.9.3-abc1234] 完整流程')
+        self.assertIn('從畫面一路送到假伺服器', server.received[0]['body'])
+        self.assertEqual(self.shown[-1][0], 'info')
+
+    def test_open_feedback_uses_the_current_version(self):
+        with mock.patch.object(g.FeedbackDialog, 'run', lambda self: None):
+            dialog = self.launcher.open_feedback()
+        try:
+            self.assertEqual(dialog.version, g.version_label())
+        finally:
+            dialog.destroy()
+
+    def test_launcher_binds_the_themed_message_boxes(self):
+        self.assertIs(messagebox.app, self.launcher)
+
+
 class LauncherTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

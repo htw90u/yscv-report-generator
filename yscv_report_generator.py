@@ -3570,7 +3570,7 @@ class FeedbackDialog(tk.Toplevel):
         self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=4)
         ttk.Label(frame, text="聯絡 Email:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
                                                                         padx=(0, 10))
-        self.email_entry = PlaceholderEntry(frame, "選填", normal_color=palette['text'], width=52)
+        self.email_entry = PlaceholderEntry(frame, "(選填)", normal_color=palette['text'], width=52)
         self.email_entry.grid(row=2, column=1, sticky=(tk.W, tk.E))
         bar = ttk.Frame(frame)
         bar.grid(row=3, column=0, columnspan=2, pady=(14, 0))

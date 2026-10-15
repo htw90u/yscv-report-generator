@@ -999,7 +999,7 @@ class FeedbackTest(unittest.TestCase):
         self.assertNotIn('版本', everything)
         self.assertIn('聯絡 Email', everything)                                      # 使用者可以留下自己的聯絡信箱
         self.assertNotIn('選填', everything)                                         # 「選填」只是輸入框裡的灰色淡字
-        self.assertEqual(ttk.Entry.get(dialog.email_entry), '選填')
+        self.assertEqual(ttk.Entry.get(dialog.email_entry), '(選填)')
 
     def test_sending_posts_in_the_background_and_closes_on_success(self):
         dialog = self.dialog('照片太小', '預覽可以再大一點\n謝謝')
@@ -1030,7 +1030,7 @@ class FeedbackTest(unittest.TestCase):
         entry = dialog.email_entry
         self.root.deiconify()
         self.root.update()
-        self.assertEqual(ttk.Entry.get(entry), '選填')                              # 畫面上看到的提示
+        self.assertEqual(ttk.Entry.get(entry), '(選填)')                              # 畫面上看到的提示
         self.assertEqual(entry.get(), '')                                          # 但欄位沒有值
         self.assertEqual(str(entry.cget('foreground')), g.PlaceholderEntry.PLACEHOLDER_COLOR)     # 灰色淡字
         self.assertTrue(dialog.send() is False)                                    # 空內容擋下；提示文字不會被當成 Email
@@ -1055,7 +1055,7 @@ class FeedbackTest(unittest.TestCase):
         self.root.update()
         self.assertEqual(ttk.Entry.get(entry), 'me@example.com')                   # 有填內容，離開後不會被提示蓋掉
         entry.delete(0, tk.END)
-        self.assertEqual(ttk.Entry.get(entry), '選填')                              # 清空後（沒有在輸入）又顯示提示
+        self.assertEqual(ttk.Entry.get(entry), '(選填)')                              # 清空後（沒有在輸入）又顯示提示
         self.assertEqual(entry.get(), '')
 
     def test_invalid_contact_email_is_refused(self):

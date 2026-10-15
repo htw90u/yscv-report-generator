@@ -501,7 +501,7 @@ class LauncherUpdateTest(unittest.TestCase):
         self.root.update()
         hint = launcher.hint_label
         first_card = launcher.buttons[g.REPORT_CHOICES[0][0]]
-        self.assertIn('按數字鍵 1～3', hint.cget('text'))
+        self.assertIn('點選或按數字鍵 1～3選擇；按 Esc 離開', hint.cget('text'))
         self.assertLess(hint.winfo_rooty(), first_card.winfo_rooty())                       # 在卡片上方（標題下面）
         self.assertGreater(hint.winfo_rooty(), self.root.winfo_rooty())
         footer_labels = [w for w in launcher.check_button.master.winfo_children() if w.winfo_class() == 'TLabel']

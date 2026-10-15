@@ -3846,7 +3846,7 @@ class ReportLauncher:
         root.columnconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0)
-        self.hint_label = ttk.Label(frame, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel')
+        self.hint_label = ttk.Label(frame, text="點選或按數字鍵 1～3選擇；按 Esc 離開", style='Hint.TLabel')
         self.hint_label.grid(row=1, column=0, pady=(2, 12))
         self.buttons = {}
         for number, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):

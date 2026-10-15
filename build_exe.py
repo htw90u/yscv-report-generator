@@ -49,6 +49,11 @@ def main():
     folder = os.path.join(dist, NAME)
     for extra in ('README.md', 'LICENSE'):
         shutil.copy(os.path.join(ROOT, extra), folder)
+    manual = os.path.join(ROOT, 'docs', '使用說明.pdf')            # 給使用者的 PDF 使用說明（python tools/make_manual.py 產生）
+    if os.path.exists(manual):
+        shutil.copy(manual, folder)
+    else:
+        print('注意：沒有 docs/使用說明.pdf，zip 裡不會有使用說明')
     zip_path = os.path.join(dist, f"{NAME}-v{g.VERSION}-win64.zip")
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         for base, _, files in os.walk(folder):

@@ -38,6 +38,9 @@ def checked_symbols(paragraph_el):
     return [sym.get(qn('w:char')) == r.CHECKED_SYMBOL for sym in paragraph_el.iter(qn('w:sym'))]
 
 
+nl = chr(10)
+
+
 TATAKA_DATA = dict(
     year='115', month='10', day='15', volunteer='王小明', time_text='09:00～16:00', weather='陰',
     guide_booked='1', guide_walkin='', center_on='', center_text='櫃檯諮詢', other_on='', other_text='',
@@ -101,11 +104,29 @@ class ReportBuildTest(unittest.TestCase):
         paragraphs = r._cell(table, 2, 1)._tc.findall(qn('w:p'))
         self.assertEqual(checked_symbols(paragraphs[0]), [True, False])    # 預約打勾、散客沒有
         self.assertEqual(checked_symbols(paragraphs[2]), [True])           # 有填遊客中心的文字，自動打勾
-        self.assertIn('櫃檯諮詢', ''.join(paragraphs[2].itertext()))
+        self.assertIn('櫃檯諮詢', g._paragraph_text(paragraphs[2]))
         self.assertEqual(checked_symbols(paragraphs[3]), [False])          # 其他：沒填
         incident = r._cell(table, 3, 1)._tc.findall(qn('w:p'))[0]
         self.assertEqual(checked_symbols(incident), [False, True])         # 無／有：選「有」
-        self.assertIn('遊客扭傷腳踝', ''.join(incident.itertext()))
+        self.assertIn('遊客扭傷腳踝', g._paragraph_text(incident))
+
+    def test_tataka_several_incidents_are_numbered_under_the_yes_box(self):
+        records = nl.join(['遊客扭傷腳踝', '山屋停水', '有人違規露營'])
+        doc, _ = self.tataka(dict(TATAKA_DATA, incident_text=records))
+        paragraphs = r._cell(doc.tables[0], 3, 1)._tc.findall(qn('w:p'))
+        self.assertEqual(len(paragraphs), 4)                              # 「有：」那行＋三筆
+        self.assertEqual(checked_symbols(paragraphs[0]), [False, True])
+        self.assertNotIn('遊客扭傷腳踝', g._paragraph_text(paragraphs[0]))
+        texts = [g._paragraph_text(p).replace(' ', '').replace(chr(0x3000), '') for p in paragraphs[1:]]
+        self.assertEqual(texts, ['1.遊客扭傷腳踝', '2.山屋停水', '3.有人違規露營'])
+        height = doc.tables[0]._tbl.tr_lst[3].trPr.find(qn('w:trHeight'))
+        self.assertNotEqual(height.get(qn('w:hRule')), 'exact')
+
+    def test_tataka_incident_records_ignored_unless_yes(self):
+        doc, _ = self.tataka(dict(TATAKA_DATA, incident='無', incident_text=nl.join(['甲', '乙'])))
+        paragraphs = r._cell(doc.tables[0], 3, 1)._tc.findall(qn('w:p'))
+        self.assertEqual(len(paragraphs), 1)
+        self.assertNotIn('甲', g._paragraph_text(paragraphs[0]))
 
     def test_tataka_no_incident_checks_none_box(self):
         doc, _ = self.tataka(dict(TATAKA_DATA, incident='無', incident_text=''))
@@ -383,6 +404,54 @@ class TatakaGuiTest(FormGuiTest):
                           self.app.incident.get()), ('1', '1', '晴', '無'))
         self.assertEqual(self.app.photo_captions[category][a], '名稱\n地點')
         self.assertEqual(self.app.text_fields['facility'].get('1.0', tk.END).strip(), 'facility內容')
+
+    def test_plus_button_adds_incident_records(self):
+        box = self.app.incident_text
+        self.assertEqual(len(box.rows), 1)
+        self.assertTrue(box.rows[0][2].instate(['disabled']))             # 只有一筆時不能刪
+        box.add_button.invoke()
+        box.add_button.invoke()
+        self.assertEqual(len(box.rows), 3)
+        self.assertFalse(box.rows[0][2].instate(['disabled']))
+        for (frame, entry, button), text in zip(box.rows, ('甲', '', '丙')):
+            entry.insert(0, text)
+        self.assertEqual(box.get(), '甲' + nl + '丙')                       # 空白筆不算
+        before = self.app._signature()
+        box.rows[1][2].invoke()                                           # 刪掉中間（空白）那筆
+        self.assertEqual(len(box.rows), 2)
+        box.rows[0][2].invoke()
+        self.assertEqual(box.get(), '丙')
+        self.assertNotEqual(self.app._signature(), before)
+        self.assertTrue(box.rows[0][2].instate(['disabled']))             # 只剩一筆：刪除鈕停用
+        box.remove_row(box.rows[0])                                       # 硬要刪就只是清空文字
+        self.assertEqual((len(box.rows), box.get()), (1, ''))
+
+    def test_incident_records_survive_draft_and_mark_the_tab(self):
+        self.fill('incident', '有')
+        self.assertIn('偶發事件的說明', self.app.find_blank_fields({})['服務項目'])
+        self.fill('incident_text', '甲' + nl + '乙')
+        self.assertEqual(len(self.app.incident_text.rows), 2)
+        self.assertNotIn('偶發事件的說明', self.app.find_blank_fields({}).get('服務項目', []))
+        draft = json.loads(json.dumps(self.app.build_draft()))
+        self.assertEqual(draft['fields']['incident_text'], '甲' + nl + '乙')
+        self.app._clear_widgets()
+        self.assertEqual((len(self.app.incident_text.rows), self.app.incident_text.get()), (1, ''))
+        self.app.apply_draft(draft)
+        self.assertEqual([e.get() for _, e, _ in self.app.incident_text.rows], ['甲', '乙'])
+        data, _ = self.app.collect_data()
+        self.assertEqual(data['incident_text'], '甲' + nl + '乙')
+
+    def test_enter_in_incident_entry_adds_next_record(self):
+        box = self.app.incident_text
+        box.rows[0][1].insert(0, '甲')
+        self.app.notebook.select(self.app._tab_by_title(self.app.TAB_SERVICE))
+        self.root.deiconify()
+        self.root.update()
+        box.rows[0][1].focus_force()
+        self.root.update()
+        box.rows[0][1].event_generate('<Return>')
+        self.root.update()
+        self.assertEqual(len(box.rows), 2)
 
     def test_checkbox_change_marks_the_tab_and_dirty(self):
         before = self.app._signature()

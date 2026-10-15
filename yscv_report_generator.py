@@ -1478,8 +1478,8 @@ def scale_gui_fonts(root, delta, family=None, weight=None):
             font.configure(weight=weight)
 
 def widget_set(widget, value):
-    """設定欄位內容：輸入框、唯讀下拉選單、核取方塊都適用。"""
-    if isinstance(widget, CheckField):
+    """設定欄位內容：輸入框、唯讀下拉選單、核取方塊與自訂欄位（有 set_value 的）都適用。"""
+    if hasattr(widget, 'set_value'):
         widget.set_value(value)
     elif isinstance(widget, ttk.Combobox):
         widget.set(value)
@@ -2276,7 +2276,7 @@ class ReportGeneratorGUI:
 
     def _watch(self, widget):
         """欄位內容一改變就更新分頁上的 ●。"""
-        if isinstance(widget, CheckField):
+        if hasattr(widget, 'on_change'):
             widget.on_change(self._refresh_tab_marks)
             return
         sequences = ['<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>']

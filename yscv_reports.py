@@ -174,6 +174,7 @@ def _grid_widths(table):
 
 TATAKA_PHOTO_CATEGORY = '相片記錄'
 TATAKA_WEATHERS = ('晴', '陰', '雨')
+NEWLINE = chr(10)
 
 
 def _tataka_service_paragraphs(data):
@@ -185,11 +186,30 @@ def _tataka_service_paragraphs(data):
     center = (_checkbox_run(center_on), _text_run('塔塔加遊客中心：'), _blank_line(data['center_text']))
     other = (_checkbox_run(other_on), _text_run('其他：'), _blank_line(data['other_text']))
     has_incident = data['incident'] == '有'
+    records = [line.strip() for line in data['incident_text'].split(NEWLINE) if line.strip()] if has_incident else []
     incident = [_checkbox_run(data['incident'] == '無'), _text_run('無  '), _checkbox_run(has_incident),
                 _text_run('有：')]
-    if has_incident and data['incident_text']:
-        incident.append(_blank_line(data['incident_text']))
-    return guide, center, other, incident
+    if len(records) == 1:  # 只有一筆：和範本一樣寫在「有：」後面
+        incident.append(_blank_line(records[0]))
+    return guide, center, other, incident, (records if len(records) > 1 else [])
+
+
+def _add_incident_records(paragraph_el, records):
+    """偶發事件有多筆時，接在「有：」下面一筆一行，加上編號（1. 2. 3. …）。"""
+    anchor = paragraph_el
+    for number, text in enumerate(records, start=1):
+        new = copy.deepcopy(paragraph_el)
+        _rebuild(new, _text_run(f"{number}. "), _blank_line(text))
+        ppr = new.find(qn('w:pPr'))
+        for old in ppr.findall(qn('w:ind')):
+            ppr.remove(old)
+        ind = OxmlElement('w:ind')
+        ind.set(qn('w:left'), '560')
+        ind.set(qn('w:hanging'), '560')
+        jc = ppr.find(qn('w:jc'))
+        ppr.insert(list(ppr).index(jc) if jc is not None else len(ppr), ind)
+        anchor.addnext(new)
+        anchor = new
 
 
 def build_tataka_report(template_path, data, photo_files, captions, output_path, rotations=None, crops=None):
@@ -211,13 +231,15 @@ def build_tataka_report(template_path, data, photo_files, captions, output_path,
         part for name in TATAKA_WEATHERS
         for part in (_checkbox_run(data['weather'] == name), _text_run(name))])
 
-    guide, center, other, incident = _tataka_service_paragraphs(data)
+    guide, center, other, incident, more_records = _tataka_service_paragraphs(data)
     service_cell = _cell(table, 2, 1)
     p0, _, p2, p3 = service_cell._tc.findall(qn('w:p'))[:4]
     _rebuild(p0, *guide)
     _rebuild(p2, *center)
     _rebuild(p3, *other)
-    _rebuild(_cell(table, 3, 1)._tc.findall(qn('w:p'))[0], *incident)
+    incident_p = _cell(table, 3, 1)._tc.findall(qn('w:p'))[0]
+    _rebuild(incident_p, *incident)
+    _add_incident_records(incident_p, more_records)
 
     fill_cell_content(_cell(table, 4, 1), data['facility'], shift=480)
     fill_cell_content(_cell(table, 5, 1), data['visitors'], shift=480)
@@ -461,6 +483,71 @@ def _add_ecotoilet_photos(doc, table, photo_files, captions, warnings, rotations
 
 # ---------------------------------------------------------------- 畫面
 
+class IncidentList(ttk.Frame):
+    """可以按「+」增加筆數的記錄清單：每筆一個輸入框，多於一筆時每筆右邊有「－」可以刪除。
+    和輸入框一樣有 get()：回傳各筆（不含空白筆）以換行串起來；set_value() 依換行還原成多筆。"""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.columnconfigure(0, weight=1)
+        self.rows = []              # [(框架, 輸入框, 刪除鈕)]
+        self._callback = None
+        self.add_button = ttk.Button(self, text="+ 新增一筆", command=self.add_row)
+        self.add_row(focus=False)
+
+    def on_change(self, callback):
+        self._callback = callback
+
+    def _changed(self, _event=None):
+        if self._callback:
+            self._callback()
+
+    def add_row(self, text='', focus=True):
+        frame = ttk.Frame(self)
+        frame.columnconfigure(0, weight=1)
+        entry = ttk.Entry(frame)
+        entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        entry.insert(0, text)
+        for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
+            entry.bind(sequence, self._changed, add='+')
+        entry.bind('<Return>', lambda e: (self.add_row(), 'break')[1])   # 在輸入框按 Enter：新增下一筆
+        item = [frame, entry, None]
+        item[2] = ttk.Button(frame, text="－", width=3, command=lambda: self.remove_row(item))
+        item[2].grid(row=0, column=1, padx=(6, 0))
+        self.rows.append(item)
+        self._layout()
+        if focus:
+            entry.focus_set()
+            self._changed()
+
+    def remove_row(self, item):
+        if len(self.rows) <= 1:       # 只剩一筆：清空文字就好
+            item[1].delete(0, tk.END)
+        else:
+            self.rows.remove(item)
+            item[0].destroy()
+        self._layout()
+        self._changed()
+
+    def _layout(self):
+        only_one = len(self.rows) == 1
+        for index, (frame, _, button) in enumerate(self.rows):
+            frame.grid(row=index, column=0, sticky=(tk.W, tk.E), pady=2)
+            button.state(['disabled'] if only_one else ['!disabled'])
+        self.add_button.grid(row=len(self.rows), column=0, sticky=tk.W, pady=(4, 0))
+
+    def get(self):
+        return NEWLINE.join(text for text in (entry.get().strip() for _, entry, _ in self.rows) if text)
+
+    def set_value(self, value):
+        lines = [line.strip() for line in str(value).split(NEWLINE) if line.strip()] or ['']
+        for frame, _, _ in self.rows:
+            frame.destroy()
+        self.rows = []
+        for line in lines:
+            self.add_row(line, focus=False)
+
+
 def _combo(parent, values, width=10):
     return ttk.Combobox(parent, values=list(values), state='readonly', width=width, justify=tk.CENTER)
 
@@ -602,9 +689,11 @@ class TatakaReportGUI(_FormGUI):
         incident.columnconfigure(2, weight=1)
         self.incident = _combo(incident, ('', '無', '有'), width=6)
         self.incident.grid(row=0, column=0)
-        ttk.Label(incident, text="有的話請說明：", style='Field.TLabel').grid(row=0, column=1, padx=(14, 4))
-        self.incident_text = ttk.Entry(incident)
-        self.incident_text.grid(row=0, column=2, sticky=(tk.W, tk.E))
+        ttk.Label(incident, text="選「有」請在下面逐筆記錄，需要多筆就按「+」", style='Hint.TLabel').grid(
+            row=0, column=1, padx=(14, 0))
+        ttk.Label(frame, text="事件記錄:", style='Field.TLabel').grid(row=7, column=0, sticky=(tk.W, tk.N), pady=5)
+        self.incident_text = IncidentList(frame)
+        self.incident_text.grid(row=7, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
 
     def blank_fields(self, with_captions=False):
         found = []

@@ -800,6 +800,30 @@ class LauncherTest(unittest.TestCase):
             self.assertEqual(max(big.size), 200, report_id)
             self.assertGreaterEqual(min(big.size), 140, report_id)       # 最扁的圖示（健行靴）也不會被切成一條
 
+    @unittest.skipUnless(os.path.exists(g.EMOJI_FONT), '需要 Windows 的彩色表情符號字型')
+    def test_window_icon_is_a_form_with_a_mountain(self):
+        icon = g.report_icon(64)
+        self.assertEqual(icon.size, (64, 64))
+        pixels = [p for p in icon.getdata() if p[3] > 200]
+        orange = sum(1 for r_, g_, b, _ in pixels if r_ > 200 and 130 < g_ < 190 and b < 110)       # 夾板的橘色
+        green = sum(1 for r_, g_, b, _ in pixels if g_ > 180 and r_ < 60 and b < 130)                # 山下的綠地
+        self.assertGreater(orange, 100)
+        self.assertGreater(green, 30)
+        corner = [icon.getpixel((x, y)) for x in range(54, 64) for y in range(54, 64)]
+        self.assertTrue(any(p[3] > 200 for p in corner))                                              # 右下角有山
+
+    def test_every_window_gets_the_icon_and_missing_font_falls_back(self):
+        self.assertTrue(g.set_window_icon(self.root))
+        self.assertEqual(len(self.root._window_icons), len(g.WINDOW_ICON_SIZES))
+        self.assertTrue(hasattr(self.launcher(), 'buttons'))                 # 選單視窗也設定了（不會出錯）
+        g._icon_cache.clear()
+        try:
+            with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):
+                self.assertFalse(g.set_window_icon(self.root))               # 沒有字型：維持預設圖示，不丟例外
+                self.assertEqual(self.root._window_icons, [])
+        finally:
+            g._icon_cache.clear()
+
     def test_launcher_still_works_without_the_emoji_font(self):
         with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):
             launcher = self.launcher()

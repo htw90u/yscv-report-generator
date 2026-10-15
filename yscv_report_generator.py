@@ -1579,6 +1579,7 @@ class ReportGeneratorGUI:
         self.autosave_path = autosave_path or self.DEFAULT_AUTOSAVE_PATH
         self.autosave_interval_ms = autosave_interval_ms
         self.root.title(self.window_title())
+        set_window_icon(self.root)
         width = min(WINDOW_WIDTH, max(900, self.root.winfo_screenwidth() - 40))
         self.root.geometry(f"{width}x820")
 
@@ -3339,6 +3340,41 @@ def emoji_image(char, size_px):
         return None
 
 
+WINDOW_ICON_SIZES = (16, 20, 24, 32, 48, 64)   # 標題列、工作列、Alt+Tab 會依需要挑最接近的大小
+_icon_cache = {}
+
+
+def report_icon(size_px):
+    """視窗圖示：表單（夾板）右下角加一座小雪山；沒有彩色表情符號字型時回傳 None。"""
+    if 'base' not in _icon_cache:
+        form, mountain = emoji_image('📋', 256), emoji_image('🏔', 150)
+        if form is None or mountain is None:
+            return None             # 失敗不快取，下次還會再試
+        canvas = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+        canvas.alpha_composite(form.convert('RGBA').resize((220, 220), Image.Resampling.LANCZOS), (0, 0))
+        mountain = mountain.convert('RGBA')
+        canvas.alpha_composite(mountain, (256 - mountain.width, 256 - mountain.height))
+        _icon_cache['base'] = canvas
+    return _icon_cache['base'].resize((size_px, size_px), Image.Resampling.LANCZOS)
+
+
+def set_window_icon(root):
+    """把視窗圖示（標題列與工作列）換成「表單＋山」；之後開的對話框也沿用。失敗就維持 Tk 預設圖示。"""
+    scale = max(1.0, root.winfo_fpixels('1i') / 96)
+    photos = []
+    for size in WINDOW_ICON_SIZES:
+        icon = report_icon(round(size * scale))
+        if icon is not None:
+            photos.append(ImageTk.PhotoImage(icon, master=root))
+    root._window_icons = photos      # 要保留參照，圖片才不會被回收
+    if photos:
+        try:
+            root.iconphoto(True, *photos)
+        except tk.TclError as e:
+            logging.warning(f"無法設定視窗圖示: {e}")
+    return bool(photos)
+
+
 class LauncherCard(tk.Frame):
     """啟動選單的一張卡片：左邊大數字，右邊上面是粗體的回報單名稱、下面是較小較淡的說明。
     整張卡片都可以按（也可以用 Tab 選取後按 Enter／空白鍵）；滑鼠移上去會變色。"""
@@ -3405,6 +3441,7 @@ class ReportLauncher:
         style.configure('Heading.TLabel', font=(family, 14 + GUI_FONT_DELTA, 'bold'), foreground=palette['heading_fg'])
         style.configure('Hint.TLabel', foreground=palette['muted'])
         root.title(f'{APP_TITLE}　{version_label()}')
+        set_window_icon(root)
         frame = ttk.Frame(root, padding=(28, 22))
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         root.columnconfigure(0, weight=1)

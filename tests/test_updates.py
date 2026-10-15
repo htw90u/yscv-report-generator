@@ -141,9 +141,12 @@ class VersionLogicTest(unittest.TestCase):
         now = datetime(2026, 10, 20, 12, 0, 0)
         self.assertTrue(u.should_check(None, now))
         self.assertTrue(u.should_check('壞掉的時間', now))
+        self.assertEqual(u.CHECK_INTERVAL_SECONDS, 7 * 24 * 3600)                              # 每週一次
         self.assertFalse(u.should_check((now - timedelta(hours=1)).isoformat(), now))
-        self.assertFalse(u.should_check((now - timedelta(hours=23, minutes=59)).isoformat(), now))
-        self.assertTrue(u.should_check((now - timedelta(hours=24)).isoformat(), now))
+        self.assertFalse(u.should_check((now - timedelta(days=1)).isoformat(), now))
+        self.assertFalse(u.should_check((now - timedelta(days=6, hours=23, minutes=59)).isoformat(), now))
+        self.assertTrue(u.should_check((now - timedelta(days=7)).isoformat(), now))
+        self.assertTrue(u.should_check((now - timedelta(days=30)).isoformat(), now))
         self.assertTrue(u.should_check((now + timedelta(hours=5)).isoformat(), now))           # 時鐘被調回去了
 
     def test_version_constant_is_not_behind_the_latest_git_tag(self):
@@ -434,7 +437,7 @@ class LauncherUpdateTest(unittest.TestCase):
         self.wait(launcher)
         self.assertIn('update_last_check', g.load_settings(self.settings))
 
-    def test_auto_check_runs_once_a_day_and_reminds_from_the_saved_result(self):
+    def test_auto_check_runs_once_a_week_and_reminds_from_the_saved_result(self):
         first = self.launcher(auto=True)
         self.root.update()
         t0 = time.time()
@@ -448,7 +451,7 @@ class LauncherUpdateTest(unittest.TestCase):
         self.assertEqual(settings['update_latest_tag'], 'v0.9')
         self.assertTrue(settings['update_last_check'])
         first.root.update()
-        # 24 小時內再開：不連網，但用上次記下來的結果顯示提示
+        # 一週內再開：不連網，但用上次記下來的結果顯示提示
         second = self.launcher(auto=False)
         second._auto_check_updates()
         self.root.update()
@@ -456,8 +459,8 @@ class LauncherUpdateTest(unittest.TestCase):
         self.assertTrue(self.banner_visible(second))
         self.assertEqual(second.update_release.tag, 'v0.9')
         self.assertEqual(second.update_release.url, f'https://github.com/{REPO}/releases/tag/v0.9')
-        # 超過 24 小時：重新檢查
-        old = (datetime.now() - timedelta(hours=25)).isoformat(timespec='seconds')
+        # 超過一週：重新檢查
+        old = (datetime.now() - timedelta(days=8)).isoformat(timespec='seconds')
         g.save_settings(self.settings, update_last_check=old)
         third = self.launcher()
         third._auto_check_updates()
@@ -492,6 +495,29 @@ class LauncherUpdateTest(unittest.TestCase):
         self.root.update()
         self.assertEqual(self.server.requests, [])
         self.assertTrue(self.launcher().auto_check_var.get() is False)                    # 下次啟動記得這個選擇
+
+    def test_usage_hint_sits_under_the_heading_not_in_the_footer(self):
+        launcher = self.launcher()
+        self.root.update()
+        hint = launcher.hint_label
+        first_card = launcher.buttons[g.REPORT_CHOICES[0][0]]
+        self.assertIn('按數字鍵 1～3', hint.cget('text'))
+        self.assertLess(hint.winfo_rooty(), first_card.winfo_rooty())                       # 在卡片上方（標題下面）
+        self.assertGreater(hint.winfo_rooty(), self.root.winfo_rooty())
+        footer_labels = [w for w in launcher.check_button.master.winfo_children() if w.winfo_class() == 'TLabel']
+        self.assertEqual(footer_labels, [])                                                 # 下方那排只剩按鈕與勾選框
+        bottoms = [card.winfo_rooty() + card.winfo_height() for card in launcher.buttons.values()]
+        self.assertGreater(launcher.check_button.winfo_rooty(), max(bottoms))
+
+    def test_footer_row_is_not_crowded(self):
+        launcher = self.launcher()
+        self.root.update()
+        widgets = [launcher.auto_check_button, launcher.check_button, launcher.feedback_button]
+        boxes = [(w.winfo_rootx(), w.winfo_rootx() + w.winfo_width()) for w in widgets]
+        for (_, right), (left, _) in zip(boxes, boxes[1:]):
+            self.assertGreaterEqual(left - right, 8)                                        # 彼此至少隔 8 像素
+        gap = boxes[1][0] - boxes[0][1]
+        self.assertGreaterEqual(gap, 150)                                                   # 左邊的勾選框與右邊的按鈕之間有明顯留白
 
     def test_footer_layout_keeps_feedback_at_the_right(self):
         launcher = self.launcher()

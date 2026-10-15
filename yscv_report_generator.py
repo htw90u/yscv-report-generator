@@ -3806,7 +3806,7 @@ class UpdateNotesDialog(tk.Toplevel):
 class ReportLauncher:
     """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。
 
-    設了 update_repo（'owner/repo'）就會有更新檢查：啟動時（最多每 24 小時一次、可關閉）與按「檢查更新」時，
+    設了 update_repo（'owner/repo'）就會有更新檢查：啟動時（最多每週一次、可關閉）與按「檢查更新」時，
     向 GitHub 查詢有沒有新版；有新版只顯示提示，要不要更新由使用者決定，程式不會自己下載任何東西。
     """
 
@@ -3845,20 +3845,21 @@ class ReportLauncher:
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         root.columnconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0, pady=(0, 14))
+        ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0)
+        self.hint_label = ttk.Label(frame, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel')
+        self.hint_label.grid(row=1, column=0, pady=(2, 12))
         self.buttons = {}
-        for row, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):
+        for number, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):
             pixels = round(root.winfo_fpixels('1i') / 96 * 44)     # 圖示大小隨螢幕縮放比例調整
-            button = LauncherCard(frame, row, name, description, lambda r=report_id: self.pick(r), palette, family,
+            button = LauncherCard(frame, number, name, description, lambda r=report_id: self.pick(r), palette, family,
                                   icon=emoji_image(REPORT_ICONS.get(report_id, ''), pixels))
-            button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=7)
+            button.grid(row=number + 1, column=0, sticky=(tk.W, tk.E), pady=7)
             self.buttons[report_id] = button
-            root.bind(str(row), lambda e, r=report_id: self.pick(r))
-        self._build_update_banner(frame, len(REPORT_CHOICES) + 1)
+            root.bind(str(number), lambda e, r=report_id: self.pick(r))
+        self._build_update_banner(frame, len(REPORT_CHOICES) + 2)
         footer = ttk.Frame(frame)
-        footer.grid(row=len(REPORT_CHOICES) + 2, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        footer.columnconfigure(1, weight=1)
-        ttk.Label(footer, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=0, column=1)
+        footer.grid(row=len(REPORT_CHOICES) + 3, column=0, sticky=(tk.W, tk.E), pady=(12, 0))
+        footer.columnconfigure(1, weight=1)          # 中間留白：自動檢查在左邊，兩個按鈕在右邊
         self.auto_check_var = tk.BooleanVar(master=root, value=bool(load_settings(settings_path).get('update_auto', True)))
         self.auto_check_button = self.check_button = None
         if self.update_repo:
@@ -3910,7 +3911,7 @@ class ReportLauncher:
         save_settings(self.settings_path, update_auto=bool(self.auto_check_var.get()))
 
     def _auto_check_updates(self):
-        """啟動時：關閉自動檢查就不連網；距離上次檢查不到 24 小時也不連網（改用上次記下來的結果提醒）。"""
+        """啟動時：關閉自動檢查就不連網；距離上次檢查不到一週也不連網（改用上次記下來的結果提醒）。"""
         settings = load_settings(self.settings_path)
         if not settings.get('update_auto', True):
             return

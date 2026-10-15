@@ -16,7 +16,7 @@ from datetime import datetime
 
 UPDATE_REPO = 'htw90u/yscv-report-generator'   # 'owner/repo'；空字串＝不啟用更新檢查（不連網、選單也不顯示相關按鈕）
 API_BASE = 'https://api.github.com'
-CHECK_INTERVAL_SECONDS = 24 * 3600    # 自動檢查最多每 24 小時一次
+CHECK_INTERVAL_SECONDS = 7 * 24 * 3600    # 自動檢查最多每週一次
 TIMEOUT = 8                           # 秒
 MAX_RESPONSE_BYTES = 1_000_000
 NOTES_MAX_CHARS = 4000

@@ -46,7 +46,7 @@ FONT_FILES = ('Iansui-Regular.ttf',)
 FONT_LICENSE = 'OFL-Iansui.txt'
 FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
-LOG_FILE = os.path.join(BASE_DIR, 'report_generator_gui.log')
+LOG_FILE = os.path.join(BASE_DIR, 'yscv_report_generator.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -61,7 +61,7 @@ BODY_FONT_PT = 12   # 內容字級（與參考回報單相同，未特別指定�
 LINE_TWIPS = 440    # 固定行高 22pt（參考回報單）
 
 DRAFT_VERSION = 1
-DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'report_generator_autosave.json')
+DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'yscv_report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 30_000  # 每 30 秒檢查一次，有變動才寫檔
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
 REPORT_DATE_FIELDS = ('year', 'month', 'day')  # 「填表日期」：自動帶入第一次填表的日期
@@ -96,7 +96,7 @@ THEMES = {
         danger='#b34700', danger_fg='#ffffff', danger_active='#8a3700', danger_border='#000000'),
 }
 DEFAULT_THEME = '柔和淺色'
-DEFAULT_SETTINGS_PATH = os.path.join(BASE_DIR, 'report_generator_settings.json')
+DEFAULT_SETTINGS_PATH = os.path.join(BASE_DIR, 'yscv_report_generator_settings.json')
 DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
 DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）

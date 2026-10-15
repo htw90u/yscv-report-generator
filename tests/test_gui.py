@@ -13,7 +13,7 @@ from PIL import Image
 from docx import Document
 
 from _common import TEMPLATE
-import report_generator_gui as g
+import yscv_report_generator as g
 from test_report import unique_cells
 
 messagebox = g.messagebox  # 程式自己的對話框（可以替換成假的）

@@ -7,7 +7,7 @@ from PIL import Image
 from docx import Document
 
 from _common import TEMPLATE
-import report_generator_gui as g
+import yscv_report_generator as g
 
 
 def unique_cells(doc):

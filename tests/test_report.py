@@ -179,11 +179,16 @@ class LayoutTest(unittest.TestCase):
         self.assertAlmostEqual(tall.img_h, 4.7)
         self.assertAlmostEqual(tall.img_w, 4.7 / 3)
 
-    def test_rows_follow_the_users_order_two_per_row(self):
-        items = [make_item(4, 3, caption='0'), make_item(3, 4, caption='1'), make_item(4, 3, caption='2'),
-                 make_item(3, 4, caption='3'), make_item(4, 3, caption='4')]
-        plan = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
-        self.assertEqual([[p.caption for p in r] for r in plan], [['0', '1'], ['2', '3'], ['4']])  # 橫直混排也照原順序
+    def test_rows_follow_the_users_order_and_never_mix_orientations(self):
+        spec = [(4, 3), (3, 4), (4, 3), (4, 3), (3, 4), (3, 4), (3, 4), (4, 3)]  # 橫 直 橫 橫 直 直 直 橫
+        items = [make_item(w, h, caption=str(i)) for i, (w, h) in enumerate(spec)]
+        plan = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 5, 0, self.LINE_CHARS)]
+        self.assertEqual([[p.caption for p in r] for r in plan],
+                         [['0'], ['1'], ['2', '3'], ['4', '5'], ['6'], ['7']])
+        self.assertEqual([p.caption for r in plan for p in r], [str(i) for i in range(8)])  # 順序完全沒變
+        for row in plan:
+            self.assertLessEqual(len(row), 2)
+            self.assertEqual(len({p.landscape for p in row}), 1)  # 同一列同方向
 
     def test_categories_are_never_interleaved(self):
         # a 的第 3 列在 12 吋頁高放不下，換頁後才排；就算這頁剩下的空間放得下 b 的列，也不能插進去
@@ -263,6 +268,11 @@ class ReportPhotoOrderTest(unittest.TestCase):
             self.assertEqual(len(shapes), 5)
             orientation = ['直' if s.height > s.width else '橫' for s in shapes]
             self.assertEqual(orientation, ['直', '橫', '直', '橫', '橫'])  # 跟使用者排的順序一樣，沒有把橫式或直式集中
+            # 每張各自成列（相鄰兩張方向都不同或各自落單）：第 4、5 張（橫、正方＝橫式）才會並排
+            tables = Document(out).tables
+            photo_rows = [r for tb in tables[1:] for r in tb.rows[1:]]
+            counts = [sum(1 for c in r.cells if c._tc.xpath('.//w:drawing') ) for r in photo_rows]
+            self.assertEqual([n for n in counts if n], [1, 1, 1, 2])  # 說明列沒有圖片，略過
 
 
 class OrderKeptTest(unittest.TestCase):

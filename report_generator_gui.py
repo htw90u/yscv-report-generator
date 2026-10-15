@@ -619,14 +619,23 @@ class _Page:
 
 
 def build_rows(items):
-    """把一個分類的照片，依使用者排好的順序，每 2 張排成一列（最後可能剩 1 張）。不依方向重新分組。"""
-    return [items[i:i + 2] for i in range(0, len(items), 2)]
+    """把一個分類的照片，依使用者排好的順序排成列：每列最多 2 張，而且同一列一定同方向。
+
+    順序完全不變；橫式與直式不並排，下一張方向和目前這列不同就另起一列（前一列可能只有 1 張）。
+    """
+    rows = []
+    for item in items:
+        if rows and len(rows[-1]) < 2 and rows[-1][0].landscape == item.landscape:
+            rows[-1].append(item)
+        else:
+            rows.append([item])
+    return rows
 
 
 def plan_layout(categories, page_h, start_y, line_chars):
     """安排所有照片列，回傳依序排列的 [(分類, 列)]。
 
-    - 照片完全依使用者排好的順序，每 2 張一列；不會為了排滿頁面而調換順序。
+    - 照片完全依使用者排好的順序，每列最多 2 張、同一列同方向（橫式與直式不並排，見 build_rows）；不會為了排滿頁面而調換順序。
     - 每個分類（章節）的照片連在一起，分類之間依原本順序。
     - 照片一律放大（或縮小）到「寬度剛好填滿儲存格，或高度達到儲存格上限」，不為了擠進頁面再縮小；
       目前這一頁放不下下一列時就換頁。

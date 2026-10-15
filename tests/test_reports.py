@@ -984,12 +984,12 @@ class FeedbackTest(unittest.TestCase):
 
     def test_message_carries_the_version_in_subject_and_body(self):
         subject, body = g.feedback_message('希望新增功能', '請加上九宮格', 'v0.5.16-ca25953')
-        self.assertEqual(subject, '[回報單生成器 v0.5.16-ca25953] 希望新增功能')
+        self.assertEqual(subject, '[回報單產生器 v0.5.16-ca25953] 希望新增功能')
         self.assertTrue(body.startswith('請加上九宮格'))
         self.assertIn('v0.5.16-ca25953', body)
         self.assertIn('聯絡 Email：（未填）', body)                                    # 沒填聯絡 Email
         self.assertIn('聯絡 Email：me@example.com', g.feedback_message('t', 'c', 'v1', ' me@example.com ')[1])
-        self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[回報單生成器 v1] 意見反應')        # 沒填標題用預設
+        self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[回報單產生器 v1] 意見反應')        # 沒填標題用預設
 
     def test_dialog_does_not_show_a_recipient(self):
         dialog = self.dialog()
@@ -1015,7 +1015,7 @@ class FeedbackTest(unittest.TestCase):
         self.finish(dialog)
         self.assertEqual(len(self.sent), 1)
         subject, body = self.sent[0]
-        self.assertEqual(subject, '[回報單生成器 v9.9.3-abc1234] 照片太小')
+        self.assertEqual(subject, '[回報單產生器 v9.9.3-abc1234] 照片太小')
         self.assertIn('預覽可以再大一點\n謝謝', body)
         self.assertIn('v9.9.3-abc1234', body)
         self.assertEqual(self.shown[-1], ('info', '意見反應', '已寄出，謝謝你的意見！'))
@@ -1084,13 +1084,13 @@ class FeedbackTest(unittest.TestCase):
         self.finish(dialog)
         subject, body = self.sent[0]
         self.assertFalse('\r' in subject or '\n' in subject)
-        self.assertEqual(subject, '[回報單生成器 v9.9.3-abc1234] 正常標題 Bcc: evil@example.com Subject: hacked')
+        self.assertEqual(subject, '[回報單產生器 v9.9.3-abc1234] 正常標題 Bcc: evil@example.com Subject: hacked')
 
     def test_control_characters_are_removed_from_the_message(self):
         subject, body = g.feedback_message('標\x00題\u202e', '內\x00容\x1b\u202e反轉\r\n第二行\r第三行', 'v1\r\n', 'a@b.co\r\nBcc: x')
         for text in (subject, body):
             self.assertFalse(any(c in text for c in ('\x00', '\x1b', '\u202e', '\r')), repr(text))
-        self.assertEqual(subject, '[回報單生成器 v1] 標題')
+        self.assertEqual(subject, '[回報單產生器 v1] 標題')
         self.assertTrue(body.startswith('內容反轉\n第二行\n第三行\n\n聯絡 Email：a@b.co Bcc: x\n'))     # Email 欄位的換行也被壓成單行
 
     def test_title_and_content_length_limits(self):
@@ -1188,7 +1188,7 @@ class FeedbackTest(unittest.TestCase):
             dialog.send()
             self.finish(dialog, timeout=10)
         self.assertEqual(len(server.received), 1)
-        self.assertEqual(server.received[0]['subject'], '[回報單生成器 v9.9.3-abc1234] 完整流程')
+        self.assertEqual(server.received[0]['subject'], '[回報單產生器 v9.9.3-abc1234] 完整流程')
         self.assertIn('從畫面一路送到假伺服器', server.received[0]['body'])
         self.assertEqual(server.received[0]['reply_to'], 'me@example.com')
         self.assertEqual(self.shown[-1][0], 'info')

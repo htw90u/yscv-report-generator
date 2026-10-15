@@ -92,12 +92,12 @@ def build(docx_path):
     section.left_margin = section.right_margin = Cm(2)
     section.top_margin = section.bottom_margin = Cm(1.8)
 
-    para(doc, '玉山保育志工回報單生成器', size=22, bold=True, color='1F3A93', after=0)
+    para(doc, '玉山保育志工回報單產生器', size=22, bold=True, color='1F3A93', after=0)
     para(doc, f'使用說明（適用 v{g.VERSION}）', size=13, color='555555', after=8)
 
     heading(doc, '一、開始使用')
     bullets(doc, [
-        '把 zip 解壓縮到任一資料夾，雙擊 yscv-report-generator.exe 就能使用，不需要安裝 Python。',
+        '把 zip 解壓縮到任一資料夾，雙擊「玉山保育志工回報單產生器.exe」就能使用，不需要安裝 Python。',
         '要產生 PDF 需要安裝 Microsoft Word；沒有 Word 時仍會產生 Word 檔（.docx），只是沒有 PDF。',
         '第一次執行時，Windows 若出現「Windows 已保護您的電腦」，請按「其他資訊」，再按「仍要執行」。',
     ])

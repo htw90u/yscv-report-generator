@@ -1,6 +1,6 @@
 # yscv-report-generator
 
-玉山保育志工回報單生成器：用圖形介面填寫玉山國家公園志工的回報單，自動產生 Word（.docx），並用 Word 轉成同名的 PDF。
+玉山保育志工回報單產生器：用圖形介面填寫玉山國家公園志工的回報單，自動產生 Word（.docx），並用 Word 轉成同名的 PDF。
 
 程式啟動後先選擇要填寫的回報單：
 
@@ -15,7 +15,7 @@
 - 依固定範本填入基本資料與各項內容（範本放在程式旁邊，要更新表單格式直接換掉範本檔）
 - 服勤照片：從檔案總管拖進視窗、拖曳調整順序、拖到其他分類、旋轉、裁切（不改原檔）、填寫說明
 - 報告裡的照片依你排的順序放置（橫式與直式不並排），並放大到填滿儲存格
-- 入口選單右下角的「意見反應」：填標題與內容，按寄出就直接送出（主旨是「[回報單生成器 v1.0-96aa62e] 你填的標題」，內文最後也附上版本；可選填聯絡 Email，會寫進信裡並設成回信地址），不用使用者的郵件程式；做法是 POST 到 Google Apps Script，由 Google 端寄信，設定方式見下方「意見反應的設定」
+- 入口選單右下角的「意見反應」：填標題與內容，按寄出就直接送出（主旨是「[回報單產生器 v1.0-96aa62e] 你填的標題」，內文最後也附上版本；可選填聯絡 Email，會寫進信裡並設成回信地址），不用使用者的郵件程式；做法是 POST 到 Google Apps Script，由 Google 端寄信，設定方式見下方「意見反應的設定」
 - 草稿存檔／載入、每 30 秒自動存檔（三種回報單各自存檔，草稿也不會載入到別種回報單）
 - 版本與 git 編號用灰色小字顯示在視窗右下角（入口選單與三種回報單）：`<tag>.<tag 之後第幾個 commit>-<sha>`，剛好在 tag 上是 `v1.0-96aa62e`，之後第 12 個 commit 是 `v1.0.12-3c1f9ab`；打包成 .exe 時會把打包當下的版本烙進去
 - 產生前檢查未填欄位；產生後自動開啟檔案
@@ -23,7 +23,7 @@
 
 ## 下載使用（不需要安裝 Python）
 
-到 GitHub 的 Releases 下載最新的 `yscv-report-generator-v<版本>-win64.zip`，解壓縮後執行 `yscv-report-generator.exe`。下載後可以用 `Get-FileHash <zip 檔> -Algorithm SHA256` 核對 Release 說明裡的雜湊值。
+到 GitHub 的 Releases 下載最新的 `yscv-report-generator-v<版本>-win64.zip`，解壓縮後執行資料夾裡的「玉山保育志工回報單產生器.exe」。下載後可以用 `Get-FileHash <zip 檔> -Algorithm SHA256` 核對 Release 說明裡的雜湊值。
 
 - 需要 Windows 10 或 11；要產生 PDF 需要安裝 Microsoft Word（沒有 Word 仍會產生 .docx）。
 - 這個程式沒有程式碼簽章，第一次執行 Windows SmartScreen 可能警告，按「其他資訊」→「仍要執行」；部分防毒軟體可能誤判，請先核對 SHA-256。
@@ -69,7 +69,7 @@ pip install pyinstaller
 python build_exe.py
 ```
 
-`build_exe.py` 會用 PyInstaller 打包成資料夾版（`dist/yscv-report-generator/`），並壓成 `dist/yscv-report-generator-v<版本>-win64.zip`、印出 SHA-256。圖示用 `icons/yscv.ico`；範本、字型與圖示都會一起包進去；打包當下的 `<tag>.<次數>-<sha>` 版本會烙進 .exe（打包後沒有 git）。
+`build_exe.py` 會用 PyInstaller 打包成資料夾版（`dist/玉山保育志工回報單產生器/`，裡面的執行檔就叫「玉山保育志工回報單產生器.exe」），並壓成 `dist/yscv-report-generator-v<版本>-win64.zip`、印出 SHA-256。圖示用 `icons/yscv.ico`；範本、字型與圖示都會一起包進去；打包當下的 `<tag>.<次數>-<sha>` 版本會烙進 .exe（打包後沒有 git）。
 如果本機有 `yscv_feedback_endpoint.py`，意見反應的網址與密鑰會被一起打包進 .exe（沒有就不內建寄送功能）。
 
 ## 測試

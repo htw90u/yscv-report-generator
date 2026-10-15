@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-玉山保育志工回報單生成器 - GUI版本
+玉山保育志工回報單產生器 - GUI版本
 提供圖形化介面供使用者輸入資料並加入照片
 """
 
@@ -35,7 +35,7 @@ from PIL import Image, ImageOps, ImageTk
 
 import yscv_updates
 
-APP_TITLE = '玉山保育志工回報單生成器'
+APP_TITLE = '玉山保育志工回報單產生器'
 VERSION = '1.0'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 FROZEN = bool(getattr(sys, 'frozen', False))     # 打包成 .exe（PyInstaller）執行時是 True
@@ -3592,7 +3592,7 @@ class LauncherCard(tk.Frame):
         self.command()
 
 
-FEEDBACK_SUBJECT_TAG = '回報單生成器'   # 意見信主旨開頭的名稱：[回報單生成器 v0.5.17-12b4590] 標題
+FEEDBACK_SUBJECT_TAG = '回報單產生器'   # 意見信主旨開頭的名稱：[回報單產生器 v0.5.17-12b4590] 標題
 FEEDBACK_TIMEOUT = 15        # 秒；Apps Script 第一次呼叫可能要幾秒
 FEEDBACK_TITLE_MAX = 100     # 標題最多幾個字
 FEEDBACK_CONTENT_MAX = 5000  # 內容最多幾個字
@@ -3656,7 +3656,7 @@ def feedback_endpoint_token():
 
 
 def feedback_message(title, content, version, email=''):
-    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」；內文有聯絡 Email（沒填寫「未填」），最後附上版本。
+    """意見反應信件的 (主旨, 內文)：主旨是「[回報單產生器 版本] 標題」；內文有聯絡 Email（沒填寫「未填」），最後附上版本。
     標題與 Email 會先整理成單行、拿掉控制字元，避免在主旨或回信地址夾帶換行與郵件標頭。"""
     title = clean_line(title, FEEDBACK_TITLE_MAX) or '意見反應'
     version = clean_line(version, 40)

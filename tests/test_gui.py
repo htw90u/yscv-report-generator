@@ -2646,7 +2646,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(g.mix_color('#000000', '#ffffff', 1), '#ffffff')
 
     def test_window_title(self):
-        self.assertEqual(g.APP_TITLE, '玉山保育志工回報單生成器')
+        self.assertEqual(g.APP_TITLE, '玉山保育志工回報單產生器')
         self.assertEqual(self.root.title(), f'{g.APP_TITLE}－保育巡查回報單')          # 版本不放標題，放在右下角
         self.assertNotIn('v0', self.root.title())
 

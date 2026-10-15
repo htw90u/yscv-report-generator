@@ -36,7 +36,7 @@ from PIL import Image, ImageOps, ImageTk
 import yscv_updates
 
 APP_TITLE = '玉山保育志工回報單生成器'
-VERSION = '0.9'
+VERSION = '1.0'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 FROZEN = bool(getattr(sys, 'frozen', False))     # 打包成 .exe（PyInstaller）執行時是 True
 # 唯讀資源（範本、字型、圖示）的位置：打包後在 PyInstaller 的內部資料夾（執行時才解開或唯讀），不能寫入

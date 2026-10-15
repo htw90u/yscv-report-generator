@@ -3269,16 +3269,39 @@ REPORT_CHOICES = [
 ]
 
 
+EMOJI_FONT = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'Fonts', 'seguiemj.ttf')   # 彩色表情符號字型
+# 啟動選單各回報單的圖示（Unicode 表情符號）：健行靴、大聲公、廁所標誌
+REPORT_ICONS = {'patrol': '\U0001F97E', 'tataka': '\U0001F4E2', 'ecotoilet': '\U0001F6BB'}
+
+
+def emoji_image(char, size_px):
+    """把表情符號畫成彩色圖片（Windows 的 Segoe UI Emoji）；沒有這個字型或畫不出來就回傳 None。"""
+    try:
+        from PIL import ImageDraw, ImageFont
+        font = ImageFont.truetype(EMOJI_FONT, 109, layout_engine=ImageFont.Layout.BASIC)
+        sheet = Image.new('RGBA', (136, 136), (0, 0, 0, 0))
+        ImageDraw.Draw(sheet).text((4, 0), char, font=font, embedded_color=True)
+        box = sheet.getbbox()
+        if not box:
+            return None
+        sheet = sheet.crop(box)
+        scale = size_px / max(sheet.size)
+        return sheet.resize((max(1, round(sheet.width * scale)), max(1, round(sheet.height * scale))),
+                            Image.Resampling.LANCZOS)
+    except Exception as e:
+        logging.warning(f"無法繪製圖示 {char!r}: {e}")
+        return None
+
+
 class LauncherCard(tk.Frame):
     """啟動選單的一張卡片：左邊大數字，右邊上面是粗體的回報單名稱、下面是較小較淡的說明。
     整張卡片都可以按（也可以用 Tab 選取後按 Enter／空白鍵）；滑鼠移上去會變色。"""
 
-    def __init__(self, master, number, name, description, command, palette, family):
+    def __init__(self, master, number, name, description, command, palette, family, icon=None):
         super().__init__(master, background='#ffffff', highlightthickness=2, highlightbackground=palette['border'],
                          highlightcolor=palette['heading_fg'], cursor='hand2', takefocus=True)
         self.command = command
         self.hover_color = palette['tab_hover']
-        self.columnconfigure(1, weight=1)
         self.parts = []
         specs = [(str(number), (family, 22 + GUI_FONT_DELTA, 'bold'), palette['heading_fg'], dict(width=2)),
                  (name, (family, 13 + GUI_FONT_DELTA, 'bold'), palette['heading_fg'], dict(anchor='w')),
@@ -3286,10 +3309,17 @@ class LauncherCard(tk.Frame):
         for text, font, color, options in specs:
             self.parts.append(tk.Label(self, text=text, font=font, foreground=color, background='#ffffff', **options))
         number_label, name_label, description_label = self.parts
-        number_label.grid(row=0, column=0, rowspan=2, padx=(16, 8), pady=10)
-        name_label.grid(row=0, column=1, sticky=tk.W, pady=(12, 0))
-        description_label.grid(row=1, column=1, sticky=tk.W, pady=(2, 12))
-        for widget in (self, *self.parts):
+        number_label.grid(row=0, column=0, rowspan=2, padx=(16, 4), pady=10)
+        self.icon_label = None
+        if icon is not None:            # 圖示放在數字和文字之間（找不到字型時略過）
+            self.icon_image = ImageTk.PhotoImage(icon, master=self)
+            self.icon_label = tk.Label(self, image=self.icon_image, background='#ffffff')
+            self.icon_label.grid(row=0, column=1, rowspan=2, padx=(4, 14), pady=8)
+        name_label.grid(row=0, column=2, sticky=tk.W, pady=(12, 0))
+        description_label.grid(row=1, column=2, sticky=tk.W, pady=(2, 12))
+        self.columnconfigure(1, weight=0)
+        self.columnconfigure(2, weight=1)
+        for widget in (self, *self.parts, *([self.icon_label] if self.icon_label else [])):
             widget.bind('<Button-1>', lambda e: self.invoke())
             widget.bind('<Enter>', lambda e: self._paint(self.hover_color))
             widget.bind('<Leave>', self._leave)
@@ -3298,7 +3328,7 @@ class LauncherCard(tk.Frame):
 
     def _paint(self, color):
         self.configure(background=color)
-        for label in self.parts:
+        for label in (*self.parts, *([self.icon_label] if self.icon_label else [])):
             label.configure(background=color)
 
     def _leave(self, event):
@@ -3336,7 +3366,9 @@ class ReportLauncher:
         ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0, pady=(0, 14))
         self.buttons = {}
         for row, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):
-            button = LauncherCard(frame, row, name, description, lambda r=report_id: self.pick(r), palette, family)
+            pixels = round(root.winfo_fpixels('1i') / 96 * 44)     # 圖示大小隨螢幕縮放比例調整
+            button = LauncherCard(frame, row, name, description, lambda r=report_id: self.pick(r), palette, family,
+                                  icon=emoji_image(REPORT_ICONS.get(report_id, ''), pixels))
             button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=7)
             self.buttons[report_id] = button
             root.bind(str(row), lambda e, r=report_id: self.pick(r))

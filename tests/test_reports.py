@@ -654,6 +654,26 @@ class LauncherTest(unittest.TestCase):
         self.assertGreater(size(name), size(description))              # 名稱比說明大
         self.assertNotEqual(name.cget('foreground'), description.cget('foreground'))
 
+    @unittest.skipUnless(os.path.exists(g.EMOJI_FONT), '需要 Windows 的彩色表情符號字型')
+    def test_each_card_has_a_color_icon(self):
+        launcher = self.launcher()
+        self.assertEqual(set(g.REPORT_ICONS), {'patrol', 'tataka', 'ecotoilet'})
+        for report_id, card in launcher.buttons.items():
+            self.assertIsNotNone(card.icon_label, report_id)
+        icon = g.emoji_image(g.REPORT_ICONS['ecotoilet'], 44)
+        self.assertEqual(max(icon.size), 44)
+        colors = {pixel[:3] for pixel in icon.getdata() if pixel[3] > 200}
+        self.assertGreater(len(colors), 3)                               # 是彩色圖，不是單色字形
+
+    def test_launcher_still_works_without_the_emoji_font(self):
+        with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):
+            launcher = self.launcher()
+        for card in launcher.buttons.values():
+            self.assertIsNone(card.icon_label)
+        launcher.buttons['tataka'].invoke()
+        self.assertEqual(launcher.choice, 'tataka')
+        self.assertIsNone(g.emoji_image('', 44))
+
     def test_enter_on_the_focused_card_chooses_it(self):
         launcher = self.launcher()
         self.root.update()

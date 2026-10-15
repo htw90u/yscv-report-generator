@@ -2644,7 +2644,7 @@ class GuiTest(unittest.TestCase):
 
     def test_version_label_shows_version_and_git_revision(self):
         with mock.patch.object(g, 'git_revision', return_value='abc1234'):
-            self.assertEqual(g.version_label(), f'v{g.VERSION} (abc1234)')
+            self.assertEqual(g.version_label(), f'v{g.VERSION}-abc1234')
         with mock.patch.object(g, 'git_revision', return_value=''):    # 不是 git 倉庫：只顯示版本
             self.assertEqual(g.version_label(), f'v{g.VERSION}')
         self.assertEqual(g.git_revision(self.tmp.name), '')            # 暫存資料夾不是 git 倉庫

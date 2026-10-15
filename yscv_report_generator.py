@@ -855,9 +855,9 @@ def git_revision(directory=None):
 
 
 def version_label():
-    """顯示在視窗標題的版本：「v0.5 (b8a61a0)」；沒有 git 時只有「v0.5」。"""
+    """顯示在視窗標題的版本：「v0.5-b8a61a0」；沒有 git 時只有「v0.5」。"""
     revision = git_revision()
-    return f'v{VERSION} ({revision})' if revision else f'v{VERSION}'
+    return f'v{VERSION}-{revision}' if revision else f'v{VERSION}'
 
 
 def current_date():

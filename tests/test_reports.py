@@ -98,6 +98,26 @@ class ReportBuildTest(unittest.TestCase):
         self.assertEqual(checked_symbols(weather), [False, True, False])   # 晴 陰 雨：只有「陰」打勾
         self.assertEqual(r._cell(table, 1, 3).text, '晴陰雨')
 
+    def test_split_names_detects_common_separators(self):
+        expected = ['王小明', '李小華', '陳大文']
+        for text in ('王小明 李小華 陳大文', '王小明、李小華、陳大文', '王小明,李小華,陳大文', '王小明，李小華；陳大文',
+                     '王小明' + chr(0x3000) + '李小華/陳大文', '  王小明 ,  、李小華　　陳大文 ', '王小明' + chr(10) + '李小華' + chr(9) + '陳大文'):
+            self.assertEqual(r.split_names(text), expected, repr(text))
+        self.assertEqual(r.split_names('王小明'), ['王小明'])
+        self.assertEqual(r.split_names('  ， 、 '), [])
+        self.assertEqual(r.split_names(''), [])
+
+    def test_tataka_each_volunteer_on_its_own_centered_line(self):
+        doc, _ = self.tataka(dict(TATAKA_DATA, volunteer='王小明、李小華 陳大文,林小美'))
+        cell = r._cell(doc.tables[0], 1, 0)
+        paragraphs = cell._tc.findall(qn('w:p'))
+        self.assertEqual([g._paragraph_text(p) for p in paragraphs], ['王小明', '李小華', '陳大文', '林小美'])
+        for p in paragraphs:
+            self.assertEqual(p.find(qn('w:pPr')).find(qn('w:jc')).get(qn('w:val')), 'center')
+            self.assertEqual([c.tag.split('}')[1] for c in p.find(qn('w:pPr'))][-1], 'rPr')   # rPr 放最後（Word 的順序）
+        height = doc.tables[0]._tbl.tr_lst[1].trPr.find(qn('w:trHeight'))
+        self.assertNotEqual(height.get(qn('w:hRule')), 'exact')            # 人多時列會長高，不會被切掉
+
     def test_tataka_service_items_and_incident(self):
         doc, _ = self.tataka()
         table = doc.tables[0]
@@ -474,7 +494,9 @@ class TatakaGuiTest(FormGuiTest):
         self.fill_all()
         data, _ = self.app.collect_data()
         self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
-        name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王/小明'},
+        data['volunteer'] = '王小明 李小華,陳大文'
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明、李小華、陳大文')
+        name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王小:明'},
                                    g.datetime(2026, 10, 15, 9, 30))
         self.assertEqual(name, '1151015_塔塔加保育宣導回報單草稿_王小明_20261015_0930')
         self.assertEqual(self.app.draft_name({}, g.datetime(2026, 10, 15, 9, 30)),

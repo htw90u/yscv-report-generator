@@ -175,6 +175,14 @@ def _grid_widths(table):
 TATAKA_PHOTO_CATEGORY = '相片記錄'
 TATAKA_WEATHERS = ('晴', '陰', '雨')
 NEWLINE = chr(10)
+NAME_SEPARATORS = re.compile(r'[\s、,，;；/／|｜]+')   # 空白（含全形空白）、頓號、逗號、分號、斜線
+
+
+def split_names(text):
+    """把「王小明 李小華、陳大文,林小美」這類輸入拆成一人一筆（分隔符號自動判斷，連續分隔符號視為一個）。"""
+    return [name for name in NAME_SEPARATORS.split(text or '') if name]
+
+
 
 
 def _tataka_service_paragraphs(data):
@@ -223,7 +231,7 @@ def build_tataka_report(template_path, data, photo_files, captions, output_path,
     for row in range(1, 5):
         _relax_height(table, row)
 
-    g._set_cell_value(_cell(table, 1, 0), data['volunteer'], center=True)
+    _set_cell_lines(_cell(table, 1, 0), split_names(data['volunteer']))   # 每位志工一行
     g._set_cell_value(_cell(table, 1, 1), f"{data['year']}年\n{data['month']}月{data['day']}日", center=True)
     g._set_cell_value(_cell(table, 1, 2), data['time_text'], center=True)
     weather = _cell(table, 1, 3)
@@ -285,16 +293,20 @@ def _add_tataka_photos(doc, table, photo_files, captions, warnings, rotations, c
 
 
 def _set_cell_lines(cell, lines):
-    """儲存格填入幾行置中的文字（標楷體 14pt）；沒有文字就清成空白。"""
+    """儲存格填入幾行置中的文字（標楷體 14pt，段落格式沿用儲存格第一段）；沒有文字就清成空白。"""
     paragraphs = cell._tc.findall(qn('w:p'))
     for extra in paragraphs[1:]:
         cell._tc.remove(extra)
     first = paragraphs[0]
     _clear_runs(first)
+    template_ppr = first.find(qn('w:pPr'))
     anchor = first
     for i, line in enumerate(lines or ['']):
-        paragraph = first if i == 0 else OxmlElement('w:p')
+        paragraph = first
         if i:
+            paragraph = OxmlElement('w:p')
+            if template_ppr is not None:
+                paragraph.append(copy.deepcopy(template_ppr))
             anchor.addnext(paragraph)
             anchor = paragraph
         ppr = paragraph.find(qn('w:pPr'))
@@ -305,7 +317,8 @@ def _set_cell_lines(cell, lines):
             ppr.remove(old)
         jc = OxmlElement('w:jc')
         jc.set(qn('w:val'), 'center')
-        ppr.append(jc)
+        mark = ppr.find(qn('w:rPr'))   # 依 Word 的元素順序，段落標記的 rPr 要放在最後
+        ppr.insert(list(ppr).index(mark) if mark is not None else len(ppr), jc)
         if line:
             paragraph.append(_text_run(line))
 
@@ -647,19 +660,21 @@ class TatakaReportGUI(_FormGUI):
         ttk.Label(frame, text="1. 志工姓名:", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
         self.volunteer = ttk.Entry(frame, width=50)
         self.volunteer.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
-        ttk.Label(frame, text="2. 值勤日期:", style='Field.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="多位志工請用空白、頓號（、）或逗號隔開，報告裡會自動一人一行", style='Hint.TLabel').grid(
+            row=1, column=1, sticky=tk.W, padx=5)
+        ttk.Label(frame, text="2. 值勤日期:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)
-        date_frame.grid(row=1, column=1, sticky=tk.W, padx=5)
+        date_frame.grid(row=2, column=1, sticky=tk.W, padx=5)
         self._date_entries(date_frame)
-        ttk.Label(frame, text="3. 時間:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="3. 時間:", style='Field.TLabel').grid(row=3, column=0, sticky=tk.W, pady=5)
         time_frame = ttk.Frame(frame)
-        time_frame.grid(row=2, column=1, sticky=tk.W, padx=5)
+        time_frame.grid(row=3, column=1, sticky=tk.W, padx=5)
         self.time_text = ttk.Entry(time_frame, width=24)
         self.time_text.pack(side=tk.LEFT)
         ttk.Label(time_frame, text="例如 09:00～16:00", style='Hint.TLabel').pack(side=tk.LEFT, padx=8)
-        ttk.Label(frame, text="4. 天氣:", style='Field.TLabel').grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="4. 天氣:", style='Field.TLabel').grid(row=4, column=0, sticky=tk.W, pady=5)
         self.weather = _combo(frame, ('',) + TATAKA_WEATHERS, width=8)
-        self.weather.grid(row=3, column=1, sticky=tk.W, padx=5)
+        self.weather.grid(row=4, column=1, sticky=tk.W, padx=5)
 
     def _service_tab(self, notebook):
         frame = self._tab_frame(notebook, self.TAB_SERVICE)
@@ -730,7 +745,7 @@ class TatakaReportGUI(_FormGUI):
             date = f"{int(fields['year'])}{int(fields['month']):02d}{int(fields['day']):02d}"
         except (KeyError, ValueError):
             date = ''
-        who = g._INVALID_FILENAME_CHARS.sub('', fields.get('volunteer', '')).strip()
+        who = '、'.join(g._INVALID_FILENAME_CHARS.sub('', name) for name in split_names(fields.get('volunteer', '')))
         return date, who
 
     def output_name(self, data):

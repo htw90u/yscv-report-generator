@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-玉山保育巡查回報單生成器 - GUI版本
+玉山保育志工回報單生成器 - GUI版本
 提供圖形化介面供使用者輸入資料並加入照片
 """
 
@@ -32,7 +32,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from PIL import Image, ImageOps, ImageTk
 
-APP_TITLE = '玉山保育巡查回報單生成器'
+APP_TITLE = '玉山保育志工回報單生成器'
 VERSION = '0.5'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）

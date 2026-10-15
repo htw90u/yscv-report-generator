@@ -3448,6 +3448,7 @@ class LauncherCard(tk.Frame):
         self.command()
 
 
+FEEDBACK_SUBJECT_TAG = '回報單生成器'   # 意見信主旨開頭的名稱：[回報單生成器 v0.5.17-12b4590] 標題
 FEEDBACK_TIMEOUT = 15        # 秒；Apps Script 第一次呼叫可能要幾秒
 
 
@@ -3462,9 +3463,9 @@ def feedback_endpoint_url():
 
 
 def feedback_message(title, content, version):
-    """意見反應信件的 (主旨, 內文)：主旨與內文最後都自動加上版本。"""
+    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」，內文最後也附上版本。"""
     title = (title or '').strip() or '意見反應'
-    subject = f"[{version}] {title}"
+    subject = f"[{FEEDBACK_SUBJECT_TAG} {version}] {title}"
     body = f"{(content or '').strip()}\n\n----\n{APP_TITLE}　{version}"
     return subject, body
 

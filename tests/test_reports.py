@@ -970,10 +970,10 @@ class FeedbackTest(unittest.TestCase):
 
     def test_message_carries_the_version_in_subject_and_body(self):
         subject, body = g.feedback_message('希望新增功能', '請加上九宮格', 'v0.5.16-ca25953')
-        self.assertEqual(subject, '[v0.5.16-ca25953] 希望新增功能')
+        self.assertEqual(subject, '[回報單生成器 v0.5.16-ca25953] 希望新增功能')
         self.assertTrue(body.startswith('請加上九宮格'))
         self.assertIn('v0.5.16-ca25953', body)
-        self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[v1] 意見反應')        # 沒填標題用預設
+        self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[回報單生成器 v1] 意見反應')        # 沒填標題用預設
 
     def test_dialog_does_not_show_a_recipient(self):
         dialog = self.dialog()
@@ -995,7 +995,7 @@ class FeedbackTest(unittest.TestCase):
         self.finish(dialog)
         self.assertEqual(len(self.sent), 1)
         subject, body = self.sent[0]
-        self.assertEqual(subject, '[v9.9.3-abc1234] 照片太小')
+        self.assertEqual(subject, '[回報單生成器 v9.9.3-abc1234] 照片太小')
         self.assertIn('預覽可以再大一點\n謝謝', body)
         self.assertIn('v9.9.3-abc1234', body)
         self.assertEqual(self.shown[-1], ('info', '意見反應', '已寄出，謝謝你的意見！'))
@@ -1053,7 +1053,7 @@ class FeedbackTest(unittest.TestCase):
             dialog.send()
             self.finish(dialog, timeout=10)
         self.assertEqual(len(server.received), 1)
-        self.assertEqual(server.received[0]['subject'], '[v9.9.3-abc1234] 完整流程')
+        self.assertEqual(server.received[0]['subject'], '[回報單生成器 v9.9.3-abc1234] 完整流程')
         self.assertIn('從畫面一路送到假伺服器', server.received[0]['body'])
         self.assertEqual(self.shown[-1][0], 'info')
 

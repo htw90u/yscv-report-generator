@@ -2357,6 +2357,113 @@ class GuiTest(unittest.TestCase):
         self.assertGreaterEqual(len(shapes), 1)
         self.assertGreater(shapes[0].height, shapes[0].width)  # 裁成 100×200 之後是直式
 
+    # ---- 把照片拖到其他小分頁
+    def _tab_point(self, index):
+        """第 index 個小分頁標籤中央的螢幕座標。"""
+        sub = self.app.photo_notebook
+        left, right, top, bottom = g.tab_geometry(sub, index)
+        return sub.winfo_rootx() + (left + right) // 2, sub.winfo_rooty() + (top + bottom) // 2
+
+    def _press_row(self, src, src_table):
+        """在選取的那一列按下滑鼠，開始拖曳。"""
+        row = src_table.selected_indexes()[0]
+        self.root.update()
+        box = src_table.bbox(str(row))
+        self.app._drag_start(src, src_table, self._Ev(box[1] + box[3] // 2))
+
+    def _setup_two_categories(self):
+        src, dst = g.PHOTO_CATEGORIES[0], g.PHOTO_CATEGORIES[2]
+        _, src_table, (a, b, c) = self._photos(cat=src)
+        [x, y] = self._make_images(['x.jpg', 'y.jpg'])
+        self.app._add_photo_files(dst, [x, y])
+        self._show_photos_tab()
+        return src, dst, src_table, self.app.listboxes[dst], (a, b, c), (x, y)
+
+    def test_dragging_over_another_sub_tab_switches_to_it_automatically(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        src_table.set_selection([1])
+        self._press_row(src, src_table)
+        px, py = self._tab_point(2)
+        self.app._drag_motion(src, src_table, self._Ev(5, px, py))
+        self.root.update()
+        self.assertEqual(self.app._current_photo_category(), dst)
+        self.assertEqual(self.app.photo_files[src], [a, b, c])  # 還沒放開，沒有移動
+        px, py = self._tab_point(0)
+        self.app._drag_motion(src, src_table, self._Ev(5, px, py))   # 移回原本的分頁標籤
+        self.root.update()
+        self.assertEqual(self.app._current_photo_category(), src)
+        self.app._drag_end(src, src_table, self._Ev(5, px, py))
+
+    def test_drop_on_another_tab_table_inserts_at_the_release_position(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        self.app.photo_captions[src][b] = '山屋'
+        self.app.photo_rotations[src][b] = 90
+        self.app.photo_crops[src][b] = (0.1, 0.1, 0.9, 0.9)
+        src_table.set_selection([1])
+        self._press_row(src, src_table)
+        px, py = self._tab_point(2)
+        self.app._drag_motion(src, src_table, self._Ev(5, px, py))
+        self.root.update()
+        box = dst_table.bbox('1')   # 目標表格第 2 列的上半部＝插在它前面
+        rx, ry = dst_table.winfo_rootx() + 30, dst_table.winfo_rooty() + box[1] + box[3] // 4
+        self.app._drag_motion(src, src_table, self._Ev(5, rx, ry))
+        self.assertTrue(self.app._drag_marker.winfo_manager())          # 顯示「會插在這裡」的橫線
+        self.app._drag_end(src, src_table, self._Ev(5, rx, ry))
+        self.root.update()
+        self.assertEqual(self.app.photo_files[src], [a, c])
+        self.assertEqual(self.app.photo_files[dst], [x, b, y])
+        self.assertEqual(self.app.photo_captions[dst], {b: '山屋'})    # 說明、旋轉、裁切跟著走
+        self.assertEqual(self.app.photo_rotations[dst], {b: 90})
+        self.assertEqual(self.app.photo_crops[dst], {b: (0.1, 0.1, 0.9, 0.9)})
+        self.assertEqual(self.app.photo_captions[src], {})
+        self.assertEqual(self.app.photo_rotations[src], {})
+        self.assertEqual(dst_table.selected_indexes(), (1,))              # 選取剛移過來的照片
+        self.assertEqual(self.app.photo_preview.current, (dst, b))
+        self.assertFalse(self.app._drag_marker.winfo_manager())
+        self.assertEqual(src_table.count(), 2)
+
+    def test_drop_on_a_tab_label_appends_to_the_end_of_that_category(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        src_table.set_selection([0])
+        self._press_row(src, src_table)
+        px, py = self._tab_point(2)
+        self.app._drag_motion(src, src_table, self._Ev(5, px, py))
+        self.app._drag_end(src, src_table, self._Ev(5, px, py))
+        self.assertEqual(self.app.photo_files[dst], [x, y, a])
+        self.assertEqual(self.app.photo_files[src], [b, c])
+
+    def test_drop_in_empty_space_cancels_and_returns_to_the_original_tab(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        src_table.set_selection([0])
+        self._press_row(src, src_table)
+        px, py = self._tab_point(2)
+        self.app._drag_motion(src, src_table, self._Ev(5, px, py))
+        self.root.update()
+        nowhere = (self.root.winfo_rootx() + 2, self.root.winfo_rooty() + self.root.winfo_height() - 3)
+        self.app._drag_motion(src, src_table, self._Ev(5, *nowhere))
+        self.app._drag_end(src, src_table, self._Ev(5, *nowhere))
+        self.root.update()
+        self.assertEqual(self.app.photo_files[src], [a, b, c])
+        self.assertEqual(self.app.photo_files[dst], [x, y])
+        self.assertEqual(self.app._current_photo_category(), src)
+
+    def test_dropping_a_photo_already_in_the_target_category_does_not_duplicate_it(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        self.app.photo_files[dst].append(a)
+        self.app._render_list(dst)
+        self.assertFalse(self.app.transfer_photo(src, a, dst, 0))
+        self.assertEqual(self.app.photo_files[src], [a, b, c])
+        self.assertEqual(self.app.photo_files[dst], [x, y, a])
+        self.assertIn('已經有這張照片', self.app.status_label.cget('text'))
+
+    def test_transfer_marks_draft_dirty_and_updates_tab_marks(self):
+        src, dst, src_table, dst_table, (a, b, c), (x, y) = self._setup_two_categories()
+        self.app._saved_signature = self.app._signature()
+        self.assertTrue(self.app.transfer_photo(src, a, dst, None))
+        self.assertTrue(self.app.is_dirty())
+        self.assertEqual(self.app.missing_caption_count(dst), 3)
+        self.assertEqual(self.app.build_draft()['photos'][dst], [x, y, a])
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -2669,8 +2776,10 @@ class GuiTest(unittest.TestCase):
 
     # ---- 照片預覽與拖曳排序
     class _Ev:
-        def __init__(self, y):
+        def __init__(self, y, x_root=0, y_root=0):
             self.y = y
+            self.x_root = x_root
+            self.y_root = y_root
 
     def _photos(self, names=('a.jpg', 'b.jpg', 'c.jpg'), cat=None, size=(400, 200), exif=None):
         cat = cat or g.PHOTO_CATEGORIES[0]

@@ -1507,6 +1507,7 @@ class ReportGeneratorGUI:
         self.jump_buttons = {}   # category -> 「跳到下一張未填說明」按鈕
         self._caption_target = None  # 說明輸入框目前對應的 (分類, 路徑)
         self._drag = None    # 拖曳排序中：[分類, 目前索引]
+        self._drag_marker = None  # 拖到別的分頁時，表格上顯示「會插在這裡」的橫線
         self.text_fields = {}
         self.text_grips = {}
 
@@ -2036,7 +2037,7 @@ class ReportGeneratorGUI:
             table.bind("<<TreeviewSelect>>", lambda e, c=category, t=table: self._on_photo_select(c, t))
             table.bind("<Button-1>", lambda e, c=category, t=table: self._drag_start(c, t, e))
             table.bind("<B1-Motion>", lambda e, c=category, t=table: self._drag_motion(c, t, e))
-            table.bind("<ButtonRelease-1>", lambda e: self._drag_end())
+            table.bind("<ButtonRelease-1>", lambda e, c=category, t=table: self._drag_end(c, t, e))
             for key in ("n", "N"):  # 在表格中按 N：跳到下一張未填說明（Ctrl+N 不處理）
                 table.bind(f"<KeyPress-{key}>", lambda e, c=category: self._on_n_key(e, c))
             table.bind("<Delete>", lambda e, c=category, t=table: self._on_delete_key(c, t))  # Delete：移除所選照片
@@ -2394,17 +2395,124 @@ class ReportGeneratorGUI:
         return None
 
     def _drag_motion(self, category, table, event):
+        """拖曳照片：在原本的表格內就是調整順序；拖出表格後，滑鼠移到別的小分頁會自動切過去，
+        移到那個分頁的表格上會顯示橫線，表示放開滑鼠時照片會插在哪裡。"""
         if not self._drag or self._drag[0] != category:
             return None
-        target = max(0, min(table.row_at(event.y), table.count() - 1))
-        if target != self._drag[1]:
-            self._move_photo(category, table, self._drag[1], target)
-            self._drag[1] = target
-            table.show_index(target)
+        x, y = event.x_root, event.y_root
+        sub = self.photo_notebook
+        # 滑鼠在小分頁的標籤列上：切到那個分頁
+        try:
+            hit = sub.index(f'@{x - sub.winfo_rootx()},{y - sub.winfo_rooty()}')
+        except tk.TclError:
+            hit = None
+        if hit is not None:
+            if PHOTO_CATEGORIES[hit] != self._current_photo_category():
+                sub.select(self.photo_pages[PHOTO_CATEGORIES[hit]])
+                self.root.update_idletasks()
+            self._hide_drop_marker()
+            return 'break'
+        shown = self._current_photo_category()
+        shown_table = self.listboxes[shown]
+        if shown == category:
+            self._hide_drop_marker()
+            target = max(0, min(table.row_at(event.y), table.count() - 1))
+            if target != self._drag[1]:
+                self._move_photo(category, table, self._drag[1], target)
+                self._drag[1] = target
+                table.show_index(target)
+        elif self._pointer_in_table(shown_table, x, y):
+            self._show_drop_marker(shown_table, self._drop_insert_index(shown, x, y))
+        else:
+            self._hide_drop_marker()
         return 'break'  # 拖曳時不要讓表格把它當成「擴大選取」
 
-    def _drag_end(self):
-        self._drag = None
+    @staticmethod
+    def _pointer_in_table(table, x, y):
+        if not table.winfo_ismapped():
+            return False
+        return (table.winfo_rootx() <= x < table.winfo_rootx() + table.winfo_width()
+                and table.winfo_rooty() <= y < table.winfo_rooty() + table.winfo_height())
+
+    def _show_drop_marker(self, table, index):
+        """在表格上畫一條橫線，標示照片放開後會插在第 index 張的位置（None＝接在最後面）。"""
+        count = table.count()
+        position = count if index is None else max(0, min(index, count))
+        if count == 0:
+            y = 2
+        elif position < count:
+            box = table.bbox(str(position))
+            y = box[1] if box else None
+        else:
+            box = table.bbox(str(count - 1))
+            y = box[1] + box[3] if box else None
+        if y is None:
+            self._hide_drop_marker()
+            return
+        if self._drag_marker is None:
+            self._drag_marker = tk.Frame(self.root, background=self.palette['primary'], height=3)
+        self._drag_marker.place(in_=table, x=0, y=max(0, y - 1), relwidth=1, height=3)
+        self._drag_marker.lift()
+
+    def _hide_drop_marker(self):
+        if self._drag_marker is not None:
+            self._drag_marker.place_forget()
+
+    def _drag_end(self, category=None, table=None, event=None):
+        """放開滑鼠。如果照片被拖到別的小分頁，就在放開的位置插入（放在標籤列上＝接在最後面）。"""
+        drag, self._drag = self._drag, None
+        self._hide_drop_marker()
+        if not drag or event is None or category is None:
+            return None
+        shown = self._current_photo_category()
+        if shown == category:
+            return None
+        x, y = event.x_root, event.y_root
+        sub = self.photo_notebook
+        over_tab = False
+        try:
+            sub.index(f'@{x - sub.winfo_rootx()},{y - sub.winfo_rooty()}')
+            over_tab = True
+        except tk.TclError:
+            pass
+        shown_table = self.listboxes[shown]
+        if over_tab:
+            index = None
+        elif self._pointer_in_table(shown_table, x, y):
+            index = self._drop_insert_index(shown, x, y)
+        else:  # 放在別的地方：取消，回到原本的分頁
+            sub.select(self.photo_pages[category])
+            return None
+        if drag[1] < len(self.photo_files[category]):
+            self.transfer_photo(category, self.photo_files[category][drag[1]], shown, index)
+        return None
+
+    def transfer_photo(self, src, path, dst, index=None):
+        """把照片（連同說明、旋轉、裁切）從 src 分類移到 dst 分類的 index 位置（None＝最後面）。回傳是否有移動。"""
+        if src == dst or path not in self.photo_files[src]:
+            return False
+        self._commit_caption()
+        if path in self.photo_files[dst]:
+            self.status_label.config(text=f"「{PHOTO_SHORT_NAMES[dst]}」已經有這張照片了，沒有移動")
+            self.photo_notebook.select(self.photo_pages[src])
+            return False
+        self.photo_files[src].remove(path)
+        for store in (self.photo_captions, self.photo_rotations, self.photo_crops):
+            if path in store[src]:
+                store[dst][path] = store[src].pop(path)
+        files = self.photo_files[dst]
+        position = len(files) if index is None else max(0, min(index, len(files)))
+        files.insert(position, path)
+        self._render_list(src)
+        self._render_list(dst)
+        table = self.listboxes[dst]
+        self.photo_notebook.select(self.photo_pages[dst])
+        table.set_selection([position])
+        table.show_index(position)
+        self._on_photo_select(dst, table)
+        self.status_label.config(text=f"已把照片移到「{PHOTO_SHORT_NAMES[dst]}」（第 {position + 1} 張）")
+        logging.info(f"照片 {os.path.basename(path)} 從 {src} 移到 {dst}（第 {position + 1} 張）")
+        return True
 
     def select_photos(self, category, table):
         filepaths = filedialog.askopenfilenames(

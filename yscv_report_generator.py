@@ -36,7 +36,7 @@ from PIL import Image, ImageOps, ImageTk
 import yscv_updates
 
 APP_TITLE = '玉山保育志工回報單生成器'
-VERSION = '0.8'
+VERSION = '0.9'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）

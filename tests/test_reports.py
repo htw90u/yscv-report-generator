@@ -994,8 +994,9 @@ class FeedbackTest(unittest.TestCase):
         everything = '\n'.join(texts(dialog))
         self.assertNotIn('@', everything)
         self.assertNotIn('收件人', everything)
-        self.assertIn('v9.9.3-abc1234', everything)                                 # 但會說明會附上版本
-        self.assertIn('聯絡 Email', everything)                                      # 使用者可以留下自己的聯絡信箱
+        self.assertNotIn('v9.9.3-abc1234', everything)                              # 版本自動加進信裡，不用告訴使用者
+        self.assertNotIn('版本', everything)
+        self.assertIn('聯絡 Email(選填)', everything)                                # 使用者可以留下自己的聯絡信箱，說明就這樣
 
     def test_sending_posts_in_the_background_and_closes_on_success(self):
         dialog = self.dialog('照片太小', '預覽可以再大一點\n謝謝')

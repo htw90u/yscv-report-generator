@@ -3502,7 +3502,8 @@ def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT, reply_to=''
 
 
 class FeedbackDialog(tk.Toplevel):
-    """意見反應：填標題與內容，按「寄出」就在背景送出，版本自動加在信裡。不顯示收件人，也不依賴使用者的郵件程式。"""
+    """意見反應：填標題、內容與選填的聯絡 Email，按「寄出」就在背景送出（版本由程式自動加進信裡，不特別告訴使用者）。
+    不顯示收件人，也不依賴使用者的郵件程式。"""
 
     def __init__(self, parent, palette, family, version):
         super().__init__(parent)
@@ -3524,14 +3525,12 @@ class FeedbackDialog(tk.Toplevel):
                                     undo=True, foreground=palette['text'], relief='solid', borderwidth=1,
                                     highlightthickness=0, padx=6, pady=4)
         self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=4)
-        ttk.Label(frame, text="聯絡 Email:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
-                                                                        padx=(0, 10))
+        ttk.Label(frame, text="聯絡 Email(選填):", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
+                                                                              padx=(0, 10))
         self.email_entry = ttk.Entry(frame, width=52)
         self.email_entry.grid(row=2, column=1, sticky=(tk.W, tk.E))
-        ttk.Label(frame, text=f"聯絡 Email 選填，希望收到回覆時才填，只用來回覆你的意見\n寄出時會自動加上版本：{version}",
-                  style='Hint.TLabel', justify=tk.LEFT).grid(row=3, column=1, sticky=tk.W, pady=(4, 0))
         bar = ttk.Frame(frame)
-        bar.grid(row=4, column=0, columnspan=2, pady=(14, 0))
+        bar.grid(row=3, column=0, columnspan=2, pady=(14, 0))
         self.send_button = ttk.Button(bar, text="寄出(Ctrl+Enter)", style='DialogDefault.TButton', command=self.send)
         self.send_button.pack(side=tk.LEFT, padx=8)
         self.cancel_button = ttk.Button(bar, text="取消", style='Dialog.TButton', command=self.cancel)

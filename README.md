@@ -65,6 +65,16 @@ python -m unittest discover -s tests
 - 草稿檔可能來自別人：載入時先檢查格式，格式不對不會動到畫面；草稿裡的照片只接受本機路徑，網路路徑（`\\主機\分享`）會被略過（Windows 開啟網路路徑時會向對方主機送出登入雜湊）。
 - 意見反應只會傳你填的標題、內容、聯絡 Email 和程式版本，用 https 送出；標題與 Email 會過濾換行與控制字元，標題 100 字、內容 5000 字為上限，成功寄出後 30 秒內不能再寄。端點的密鑰與頻率限制設定在 Apps Script 裡（見 `apps_script_feedback.gs`）。
 
+## 更新檢查
+
+入口選單可以檢查 GitHub 上有沒有新版：啟動時自動檢查（最多每 24 小時一次）或按「檢查更新」。有新版只會在選單上方顯示提示，你可以「查看更新內容」「前往下載」（用瀏覽器開啟發行頁面）或「略過這個版本」；**程式不會自己下載或安裝任何東西**。
+
+- 只向 GitHub 的公開 API 發出一個查詢，不傳任何個人資料。
+- 不想自動檢查：取消選單左下角的「啟動時自動檢查更新」，或用 `--no-update-check`、環境變數 `YSCV_NO_UPDATE_CHECK=1`。
+- 更新來源是 `yscv_updates.py` 的 `UPDATE_REPO`（目前是 `htw90u/yscv-report-generator`）；設成空字串，整個更新功能就不啟用，也不會連網。
+- **repo 必須公開，使用者才查得到新版**：私人 repo 對沒登入的人是 404，選單會顯示「找不到已發行的版本」，不會誤報成「已是最新版」。
+- 發行新版：先把 `yscv_report_generator.py` 的 `VERSION` 改成新版號再打同名 tag（例如 `VERSION = '0.9'`、tag `v0.9`），然後在 GitHub 建立 Release；測試會檢查 `VERSION` 沒有落後最新的 tag。
+
 ## 授權
 
 程式碼以 [MIT License](LICENSE) 授權。

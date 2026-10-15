@@ -33,6 +33,8 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 from PIL import Image, ImageOps, ImageTk
 
+import yscv_updates
+
 APP_TITLE = '玉山保育志工回報單生成器'
 VERSION = '0.8'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
@@ -1510,13 +1512,32 @@ def load_private_fonts():
     return loaded
 
 
-def load_theme_name(settings_path):
-    """讀取記住的外觀主題名稱；沒有設定或名稱無效就用預設主題。"""
+def load_settings(settings_path):
+    """讀取設定檔（外觀主題、更新檢查的狀態等）；沒有檔案或內容壞掉就回傳空字典。"""
     try:
         with open(settings_path, encoding='utf-8') as f:
-            name = json.load(f).get('theme')
-    except (OSError, ValueError, AttributeError):
-        return DEFAULT_THEME
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(settings_path, **changes):
+    """把 changes 合併進設定檔（不會蓋掉其他設定）。回傳是否寫入成功。"""
+    data = load_settings(settings_path)
+    data.update(changes)
+    try:
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+    except OSError as e:
+        logging.error(f"無法儲存設定: {e}")
+        return False
+    return True
+
+
+def load_theme_name(settings_path):
+    """讀取記住的外觀主題名稱；沒有設定或名稱無效就用預設主題。"""
+    name = load_settings(settings_path).get('theme')
     return name if name in THEMES else DEFAULT_THEME
 
 
@@ -1755,11 +1776,7 @@ class ReportGeneratorGUI:
         return load_theme_name(self.settings_path)
 
     def _save_theme_setting(self):
-        try:
-            with open(self.settings_path, 'w', encoding='utf-8') as f:
-                json.dump({'theme': self.theme_name}, f, ensure_ascii=False)
-        except OSError as e:
-            logging.error(f"無法儲存外觀設定: {e}")
+        save_settings(self.settings_path, theme=self.theme_name)
 
     def _setup_style(self):
         """依目前主題設定外觀：分頁是一個個分開的標籤（目前分頁較突出），按鈕採淺底深字。"""
@@ -3747,12 +3764,62 @@ class FeedbackDialog(tk.Toplevel):
             messagebox.showerror("寄送失敗", f"{error}\n\n請檢查網路連線後再試一次。你填的內容還在，可以直接重新寄出。")
 
 
-class ReportLauncher:
-    """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。"""
+def open_url(url):
+    """用預設瀏覽器開啟網址（獨立成函式，方便測試時替換）。"""
+    import webbrowser
+    return webbrowser.open(url)
 
-    def __init__(self, root, settings_path=DEFAULT_SETTINGS_PATH):
+
+class UpdateNotesDialog(tk.Toplevel):
+    """新版的更新內容（純文字），可以直接前往下載頁面。"""
+
+    def __init__(self, parent, palette, family, release, on_download):
+        super().__init__(parent)
+        self.title(f"更新內容　{release.tag}")
+        self.configure(background=palette['bg'])
+        self.transient(parent)
+        frame = ttk.Frame(self, padding=(22, 18, 22, 14))
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(0, weight=1)
+        heading = f"{release.name or release.tag}　（{release.published}）" if release.published else release.name
+        ttk.Label(frame, text=heading, style='Heading.TLabel').grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+        self.text = tk.Text(frame, width=64, height=14, wrap='word', font=(family, 10 + GUI_FONT_DELTA),
+                            foreground=palette['text'], relief='solid', borderwidth=1, highlightthickness=0,
+                            padx=8, pady=6)
+        self.text.insert('1.0', release.notes or "（這一版沒有附更新說明）")
+        self.text.configure(state='disabled')
+        self.text.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        bar = ttk.Frame(frame)
+        bar.grid(row=2, column=0, pady=(14, 0))
+        self.download_button = ttk.Button(bar, text="前往下載", style='DialogDefault.TButton',
+                                          command=lambda: (on_download(), self.destroy()))
+        self.download_button.pack(side=tk.LEFT, padx=8)
+        self.close_button = ttk.Button(bar, text="關閉", style='Dialog.TButton', command=self.destroy)
+        self.close_button.pack(side=tk.LEFT, padx=8)
+        self.bind('<Escape>', lambda e: self.destroy())
+        self.update_idletasks()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - self.winfo_width()) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - self.winfo_height()) // 4)
+        self.geometry(f'+{x}+{y}')
+
+
+class ReportLauncher:
+    """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。
+
+    設了 update_repo（'owner/repo'）就會有更新檢查：啟動時（最多每 24 小時一次、可關閉）與按「檢查更新」時，
+    向 GitHub 查詢有沒有新版；有新版只顯示提示，要不要更新由使用者決定，程式不會自己下載任何東西。
+    """
+
+    def __init__(self, root, settings_path=DEFAULT_SETTINGS_PATH, update_repo='', auto_update_check=False,
+                 update_api_base=yscv_updates.API_BASE):
         self.root = root
         self.choice = None
+        self.settings_path = settings_path
+        self.update_repo = update_repo if yscv_updates.is_valid_repo(update_repo) else ''
+        self.update_api_base = update_api_base
+        self.update_release = None
+        self._update_queue = queue.Queue()
+        self._update_checking = False
         family = pick_font_family(root)
         scale_gui_fonts(root, GUI_FONT_DELTA, family, GUI_FONT_WEIGHT)
         palette = THEMES[load_theme_name(settings_path)]
@@ -3774,6 +3841,7 @@ class ReportLauncher:
         root.title(f'{APP_TITLE}　{version_label()}')
         set_window_icon(root)
         frame = ttk.Frame(root, padding=(28, 22))
+        self.frame = frame
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         root.columnconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
@@ -3786,21 +3854,34 @@ class ReportLauncher:
             button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=7)
             self.buttons[report_id] = button
             root.bind(str(row), lambda e, r=report_id: self.pick(r))
+        self._build_update_banner(frame, len(REPORT_CHOICES) + 1)
         footer = ttk.Frame(frame)
-        footer.grid(row=len(REPORT_CHOICES) + 1, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        footer.columnconfigure(0, weight=1)
-        ttk.Label(footer, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=0, column=0)
+        footer.grid(row=len(REPORT_CHOICES) + 2, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        footer.columnconfigure(1, weight=1)
+        ttk.Label(footer, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=0, column=1)
+        self.auto_check_var = tk.BooleanVar(master=root, value=bool(load_settings(settings_path).get('update_auto', True)))
+        self.auto_check_button = self.check_button = None
+        if self.update_repo:
+            self.auto_check_button = ttk.Checkbutton(footer, text="啟動時自動檢查更新", variable=self.auto_check_var,
+                                                     command=self._save_auto_check)
+            self.auto_check_button.grid(row=0, column=0, sticky=tk.W)
+            self.check_button = ttk.Button(footer, text="檢查更新", command=lambda: self.check_updates(manual=True))
+            self.check_button.grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         self.feedback_button = ttk.Button(footer, text="意見反應", command=self.open_feedback)
-        self.feedback_button.grid(row=0, column=1, sticky=tk.E)      # 右下角
+        self.feedback_button.grid(row=0, column=3, sticky=tk.E)      # 右下角
         messagebox.attach(self)
         root.bind('<Escape>', lambda e: root.destroy())
         root.update_idletasks()
-        width, height = max(740, frame.winfo_reqwidth()), frame.winfo_reqheight()
-        x = max(0, (root.winfo_screenwidth() - width) // 2)
+        self.width = max(740, frame.winfo_reqwidth())
+        height = frame.winfo_reqheight()
+        x = max(0, (root.winfo_screenwidth() - self.width) // 2)
         y = max(0, (root.winfo_screenheight() - height) // 3)
-        root.geometry(f"{width}x{height}+{x}+{y}")
+        root.geometry(f"{self.width}x{height}+{x}+{y}")
         self.buttons[REPORT_CHOICES[0][0]].focus_set()   # Enter 直接進入第一個
+        if self.update_repo and auto_update_check:
+            self.root.after(300, self._auto_check_updates)
 
+    # ---- 意見反應
     def open_feedback(self):
         """開啟意見反應視窗（標題、內容；寄出時自動加上版本）。"""
         dialog = FeedbackDialog(self.root, self.palette, self.font_family, version_label())
@@ -3808,15 +3889,147 @@ class ReportLauncher:
         dialog.run()
         return dialog
 
+    # ---- 更新檢查
+    def _build_update_banner(self, frame, row):
+        p = self.palette
+        self.update_banner = tk.Frame(frame, background=p['tab_active'], highlightthickness=1,
+                                      highlightbackground=p['border'])
+        self.update_label = tk.Label(self.update_banner, text='', font=(self.font_family, 10 + GUI_FONT_DELTA, 'bold'),
+                                     foreground=p['tab_active_fg'], background=p['tab_active'])
+        self.update_label.pack(side=tk.LEFT, padx=12, pady=8)
+        self.skip_button = ttk.Button(self.update_banner, text="略過這個版本", command=self.skip_update)
+        self.skip_button.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
+        self.download_button = ttk.Button(self.update_banner, text="前往下載", command=self.open_release_page)
+        self.download_button.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
+        self.notes_button = ttk.Button(self.update_banner, text="查看更新內容", command=self.show_update_notes)
+        self.notes_button.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
+        self.update_banner.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=(6, 0))
+        self.update_banner.grid_remove()
+
+    def _save_auto_check(self):
+        save_settings(self.settings_path, update_auto=bool(self.auto_check_var.get()))
+
+    def _auto_check_updates(self):
+        """啟動時：關閉自動檢查就不連網；距離上次檢查不到 24 小時也不連網（改用上次記下來的結果提醒）。"""
+        settings = load_settings(self.settings_path)
+        if not settings.get('update_auto', True):
+            return
+        if yscv_updates.should_check(settings.get('update_last_check')):
+            self.check_updates(manual=False)
+        else:
+            self._restore_cached_update(settings)
+
+    def _restore_cached_update(self, settings):
+        """上次檢查發現的新版（還沒更新、也沒略過）：這次不再連網，直接用記下來的資訊顯示提示。"""
+        tag = str(settings.get('update_latest_tag') or '')
+        version = yscv_updates.parse_version(tag)
+        current = yscv_updates.parse_version(VERSION)
+        if version is None or current is None or version <= current or tag == settings.get('update_skipped'):
+            return
+        self._show_update(yscv_updates.ReleaseInfo(
+            tag=tag, version=version, name=str(settings.get('update_latest_name') or tag),
+            notes=yscv_updates.clean_notes(settings.get('update_latest_notes')),
+            url=yscv_updates.release_page_url(self.update_repo, tag),
+            published=str(settings.get('update_latest_published') or '')[:10]))
+
+    def check_updates(self, manual=False):
+        """在背景向 GitHub 查詢有沒有新版（畫面不會卡住）。manual＝使用者按了「檢查更新」，每種結果都會回報。"""
+        if not self.update_repo or self._update_checking:
+            return False
+        self._update_checking = True
+        if manual and self.check_button is not None:
+            self.check_button.config(state=tk.DISABLED, text="檢查中…")
+        skipped = '' if manual else str(load_settings(self.settings_path).get('update_skipped') or '')
+        args = (self.update_repo, VERSION, skipped, self.update_api_base, yscv_updates.TIMEOUT,
+                f"yscv-report-generator/{VERSION}")
+        threading.Thread(target=lambda: self._update_queue.put((manual, yscv_updates.check_for_update(*args))),
+                         daemon=True).start()
+        self.root.after(100, self._poll_update)
+        return True
+
+    def _poll_update(self):
+        try:
+            manual, result = self._update_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self.root.after(100, self._poll_update)
+            except tk.TclError:         # 選單已經關掉了
+                pass
+            return
+        self._update_checking = False
+        if self.check_button is not None:
+            self.check_button.config(state=tk.NORMAL, text="檢查更新")
+        self._handle_update_result(manual, result)
+
+    def _handle_update_result(self, manual, result):
+        if result.status != 'error':
+            save_settings(self.settings_path, update_last_check=datetime.now().isoformat(timespec='seconds'))
+        if result.status in ('available', 'skipped') and result.release is not None:
+            release = result.release
+            save_settings(self.settings_path, update_latest_tag=release.tag, update_latest_name=release.name,
+                          update_latest_notes=release.notes, update_latest_published=release.published)
+        if result.status == 'available':
+            self._show_update(result.release)
+            if manual:
+                self.show_update_notes()
+        elif manual and result.status == 'up_to_date':
+            messagebox.showinfo("檢查更新", f"目前已是最新版（{version_label()}）。")
+        elif manual and result.status == 'no_release':
+            messagebox.showinfo("檢查更新", f"{result.message}。\n\n目前無法判斷有沒有新版。")
+        elif manual and result.status == 'error':
+            messagebox.showerror("檢查更新", f"無法檢查更新：{result.message}\n\n可以稍後再試，其他功能不受影響。")
+        elif result.status == 'error':
+            logging.info(f"自動檢查更新失敗（已略過）：{result.message}")
+
+    def _show_update(self, release):
+        self.update_release = release
+        self.update_label.config(text=f"有新版 {release.tag}（目前 v{VERSION}）")
+        self.update_banner.grid()
+        self.root.update_idletasks()
+        self.root.geometry(f"{self.width}x{self.frame.winfo_reqheight()}")
+
+    def hide_update(self):
+        self.update_release = None
+        self.update_banner.grid_remove()
+        self.root.update_idletasks()
+        self.root.geometry(f"{self.width}x{self.frame.winfo_reqheight()}")
+
+    def show_update_notes(self):
+        if self.update_release is None:
+            return None
+        dialog = UpdateNotesDialog(self.root, self.palette, self.font_family, self.update_release,
+                                   self.open_release_page)
+        self.last_notes_dialog = dialog
+        return dialog
+
+    def open_release_page(self):
+        """用瀏覽器開啟新版的發行頁面，由使用者自己在那裡決定要不要下載。程式本身不下載任何東西。"""
+        release = self.update_release
+        if release is None:
+            return False
+        if not yscv_updates.is_trusted_release_url(release.url, self.update_repo):
+            messagebox.showerror("前往下載", "發行頁面的網址不正確，已取消開啟。")
+            return False
+        if not open_url(release.url):
+            messagebox.showerror("前往下載", f"無法開啟瀏覽器。請自己前往：\n{release.url}")
+            return False
+        return True
+
+    def skip_update(self):
+        """略過這個版本：之後不再提醒這一版，出了更新的版本才會再提醒。"""
+        if self.update_release is not None:
+            save_settings(self.settings_path, update_skipped=self.update_release.tag)
+        self.hide_update()
+
     def pick(self, report_id):
         self.choice = report_id
         self.root.destroy()
 
 
-def choose_report():
-    """顯示啟動選單，回傳選到的回報單代號；直接關閉視窗回傳 None。"""
+def choose_report(update_check=True):
+    """顯示啟動選單，回傳選到的回報單代號；直接關閉視窗回傳 None。update_check＝啟動時是否自動檢查更新。"""
     root = tk.Tk()
-    launcher = ReportLauncher(root)
+    launcher = ReportLauncher(root, update_repo=yscv_updates.UPDATE_REPO, auto_update_check=update_check)
     root.mainloop()
     messagebox.attach(None)         # 選單關了，之後由各回報單視窗重新綁定
     return launcher.choice
@@ -3838,6 +4051,8 @@ def parse_args(argv=None):
                         help="直接開啟指定的回報單，不顯示選單（patrol＝保育巡查、tataka＝塔塔加、ecotoilet＝生態廁所）")
     parser.add_argument('-d', '-D', '--debug', action='store_true', dest='debug',
                         help="除錯模式：把完整的執行記錄寫到 yscv_report_generator.log（平常不產生記錄檔）")
+    parser.add_argument('--no-update-check', action='store_true', dest='no_update_check',
+                        help="啟動時不自動檢查更新（也可以設定環境變數 YSCV_NO_UPDATE_CHECK=1）")
     return parser.parse_args(argv)
 
 
@@ -3847,7 +4062,8 @@ def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     setup_logging(args.debug)
     enable_dpi_awareness()
-    report_id = args.report or choose_report()
+    update_check = not (args.no_update_check or os.environ.get('YSCV_NO_UPDATE_CHECK'))
+    report_id = args.report or choose_report(update_check)
     if report_id is None:
         return
     root = tk.Tk()

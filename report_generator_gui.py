@@ -117,7 +117,6 @@ HEADING_H = 0.45        # 「九、服勤照片」標題
 PHOTO_ROW_PAD = 0.04
 CAPTION_LINE_H = 0.2    # 說明文字每行高度（12pt）
 CAPTION_PAD = 0.08
-MIN_PHOTO_SCALE = 0.8   # 為了排滿整頁，照片最多等比例縮小到 80%
 PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成多出一頁
 
 # 產生 Word 時照片章節的順序（與畫面上放在哪個分頁無關）
@@ -594,11 +593,10 @@ def row_height(row, line_chars):
 
 
 class _Page:
-    """模擬中的一頁：固定高度（標題列、說明文字等）與可縮放的照片高度分開計算。"""
+    """模擬中的一頁：累計已用掉的高度（標題列、說明文字、照片），用來判斷下一列放不放得下。"""
 
     def __init__(self, fixed=0.0):
-        self.fixed = fixed
-        self.img = 0.0
+        self.used = fixed
         self.rows = []       # [(分類, 列)]
         self.last_category = None
 
@@ -608,72 +606,40 @@ class _Page:
             return 0.0
         return HEADER_H + (SPACER_H if self.last_category is not None else 0.0)
 
+    def _row_cost(self, category, row, line_chars):
+        return self._extra(category) + row_height(row, line_chars)
+
     def fits(self, category, row, line_chars, page_h):
-        fixed = (self.fixed + self._extra(category) + PHOTO_ROW_PAD
-                 + max(caption_height(p.caption, line_chars) for p in row))
-        img = self.img + max(p.img_h for p in row)
-        return fixed + MIN_PHOTO_SCALE * img <= page_h
+        return self.used + self._row_cost(category, row, line_chars) <= page_h
 
     def add(self, category, row, line_chars):
-        self.fixed += (self._extra(category) + PHOTO_ROW_PAD
-                       + max(caption_height(p.caption, line_chars) for p in row))
-        self.img += max(p.img_h for p in row)
+        self.used += self._row_cost(category, row, line_chars)
         self.rows.append((category, row))
         self.last_category = category
 
-    def finish(self, page_h):
-        """這頁照片放不下時，等比例縮小（不低於 MIN_PHOTO_SCALE），讓版面剛好排滿。"""
-        if self.img <= 0:
-            return
-        scale = min(1.0, (page_h - self.fixed) / self.img)
-        if scale < 1.0:
-            for _, row in self.rows:
-                for p in row:
-                    p.img_w *= scale
-                    p.img_h *= scale
-
 
 def build_rows(items):
-    """把一個分類的照片排成列：橫式在前、直式在後，每列 2 張。
-
-    橫式與直式各剩一張落單時，兩張拼成一列（放在橫式與直式之間）。
-    """
-    land = [p for p in items if p.landscape]
-    port = [p for p in items if not p.landscape]
-    land_rows = [land[i:i + 2] for i in range(0, len(land), 2)]
-    port_rows = [port[i:i + 2] for i in range(0, len(port), 2)]
-    if len(land) % 2 and len(port) % 2:
-        mixed = land_rows.pop() + port_rows.pop()
-        return land_rows + [mixed] + port_rows
-    return land_rows + port_rows
+    """把一個分類的照片，依使用者排好的順序，每 2 張排成一列（最後可能剩 1 張）。不依方向重新分組。"""
+    return [items[i:i + 2] for i in range(0, len(items), 2)]
 
 
 def plan_layout(categories, page_h, start_y, line_chars):
     """安排所有照片列，回傳依序排列的 [(分類, 列)]。
 
-    - 每個分類（章節）的照片一定連在一起，分類之間依原本順序，不會交錯混放。
-    - 分類內橫式排在一起、直式排在一起（見 build_rows）。
-    - 模擬分頁：目前這一頁放不下下一列時，在「同一個分類」裡往後找放得下的列補位；
-      照片等比例縮小一點（最多縮到 MIN_PHOTO_SCALE）就能多放一列時也會這樣做，
-      讓整頁盡量排滿。都放不下才換頁。
+    - 照片完全依使用者排好的順序，每 2 張一列；不會為了排滿頁面而調換順序。
+    - 每個分類（章節）的照片連在一起，分類之間依原本順序。
+    - 照片一律放大（或縮小）到「寬度剛好填滿儲存格，或高度達到儲存格上限」，不為了擠進頁面再縮小；
+      目前這一頁放不下下一列時就換頁。
     - page_h 為內文可用高度，start_y 為照片區開始時已用掉的高度（吋）。
     """
     page = _Page(fixed=start_y)
     sequence = []
     for name, items in categories.items():
-        rows = build_rows(items)
-        while rows:
-            index = next((i for i, r in enumerate(rows) if page.fits(name, r, line_chars, page_h)), None)
-            if index is None:
-                if page.rows:
-                    page.finish(page_h)
-                    page = _Page()
-                    continue
-                index = 0  # 連空白頁都放不下（說明文字特別長）：硬放，讓 Word 自行處理
-            row = rows.pop(index)
+        for row in build_rows(items):
+            if page.rows and not page.fits(name, row, line_chars, page_h):
+                page = _Page()
             page.add(name, row, line_chars)
             sequence.append((name, row))
-    page.finish(page_h)
     return sequence
 
 

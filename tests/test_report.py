@@ -72,10 +72,10 @@ class BuildReportTest(unittest.TestCase):
 
     def test_images_and_exif(self):
         self.assertEqual(len(self.doc.inline_shapes), 3)
-        # 3 張照片中只有 EXIF 旋轉過的 b.jpg 是直式（橫式排前、直式排後，所以是最後一張）
+        # 3 張照片中只有 EXIF 旋轉過的 b.jpg 是直式；照片依使用者排的順序（a、b、c），所以是第 2 張
         portrait = [s for s in self.doc.inline_shapes if s.height > s.width]
         self.assertEqual(len(portrait), 1)
-        self.assertIs(portrait[0]._inline, self.doc.inline_shapes[2]._inline)
+        self.assertIs(portrait[0]._inline, self.doc.inline_shapes[1]._inline)
 
     def test_bad_image_warns_not_crashes(self):
         self.assertTrue(any('bad.jpg' in w for w in self.warnings))
@@ -179,15 +179,11 @@ class LayoutTest(unittest.TestCase):
         self.assertAlmostEqual(tall.img_h, 4.7)
         self.assertAlmostEqual(tall.img_w, 4.7 / 3)
 
-    def test_groups_by_orientation_two_per_row(self):
-        items = [make_item(4, 3), make_item(3, 4), make_item(4, 3), make_item(3, 4), make_item(4, 3)]
-        plan = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 2, 0, self.LINE_CHARS)]
-        for row in plan:
-            self.assertLessEqual(len(row), 2)
-            self.assertEqual(len({p.landscape for p in row}), 1)  # 同一列同方向
-        kinds = [row[0].landscape for row in plan]
-        self.assertEqual(kinds, sorted(kinds, reverse=True))  # 橫式在前、直式在後
-        self.assertEqual(sum(len(r) for r in plan), 5)
+    def test_rows_follow_the_users_order_two_per_row(self):
+        items = [make_item(4, 3, caption='0'), make_item(3, 4, caption='1'), make_item(4, 3, caption='2'),
+                 make_item(3, 4, caption='3'), make_item(4, 3, caption='4')]
+        plan = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
+        self.assertEqual([[p.caption for p in r] for r in plan], [['0', '1'], ['2', '3'], ['4']])  # 橫直混排也照原順序
 
     def test_categories_are_never_interleaved(self):
         # a 的第 3 列在 12 吋頁高放不下，換頁後才排；就算這頁剩下的空間放得下 b 的列，也不能插進去
@@ -211,45 +207,26 @@ class LayoutTest(unittest.TestCase):
             self.assertEqual(seen, sorted(set(order)), order)  # 每個分類只出現一段，且依原順序
             self.assertEqual(sum(len(r) for _, r in seq), sum(len(v) for v in cats.values()))
 
-    def test_gap_fill_still_works_inside_one_category(self):
-        # 同一分類內：直式列放不下的空隙，可由後面的橫式列補上
-        port = [make_item(3, 4) for _ in range(6)]   # 3 列直式，每列約 4.8
-        land = [make_item(2, 1) for _ in range(2)]   # 1 列扁的橫式列
-        seq = g.plan_layout({'a': port + land}, 12.0, 0, self.LINE_CHARS)
-        rows = [r for _, r in seq]
-        self.assertEqual([r[0].landscape for r in rows], [True, False, False, False])  # 橫式在前（分類內分組）
-        self.assertEqual(len(rows), 4)
+    def test_no_gap_fill_order_is_never_changed_to_pack_pages(self):
+        # 直式列放不下的空隙，不會拿後面的橫式列補位：版面順序＝使用者排的順序
+        items = [make_item(3, 4, caption=f'p{i}') for i in range(6)] + [make_item(2, 1, caption='land')]
+        seq = g.plan_layout({'a': items}, 12.0, 0, self.LINE_CHARS)
+        flat = [p.caption for _, r in seq for p in r]
+        self.assertEqual(flat, ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'land'])
 
-    def test_mixed_row_for_leftover_landscape_and_portrait(self):
-        items = ([make_item(4, 3) for _ in range(3)] + [make_item(3, 4) for _ in range(3)])
-        rows = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
-        self.assertEqual([len(r) for r in rows], [2, 2, 2])
-        mixed = [r for r in rows if len({p.landscape for p in r}) == 2]
-        self.assertEqual(len(mixed), 1)
-        self.assertTrue(mixed[0][0].landscape and not mixed[0][1].landscape)
-
-    def test_no_mixed_row_when_only_one_side_is_odd(self):
-        items = ([make_item(4, 3) for _ in range(3)] + [make_item(3, 4) for _ in range(2)])
-        rows = [r for _, r in g.plan_layout({'a': items}, self.PAGE_H * 3, 0, self.LINE_CHARS)]
-        self.assertEqual([len(r) for r in rows], [2, 1, 2])
-        self.assertTrue(all(len({p.landscape for p in r}) == 1 for r in rows))
-
-    def test_shrink_to_fill_page_not_below_min(self):
-        # 4 列橫式約需 4*(2.55+0.32)+0.32 = 11.8 > 10.4，縮到 80% 可放入 -> 全部縮小且總高不超過頁高
+    def test_photos_are_never_shrunk_to_squeeze_onto_a_page(self):
+        # 4 列橫式在 10.4 吋放不下第 4 列：換頁，而不是縮小照片；每張照片都維持寬度填滿儲存格
         items = [make_item(4, 3) for _ in range(8)]
         plan = [r for _, r in g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)]
         self.assertEqual(len(plan), 4)
-        scale = items[0].img_w / 3.4
-        self.assertLess(scale, 1.0)
-        self.assertGreaterEqual(scale, g.MIN_PHOTO_SCALE - 1e-9)
-        total = g.HEADER_H + sum(g.row_height(r, self.LINE_CHARS) for r in plan)
-        self.assertLessEqual(total, 10.4 + 1e-6)
+        self.assertTrue(all(abs(p.img_w - 3.4) < 1e-9 for p in items))
+        self.assertTrue(all(abs(p.img_h - 3.4 * 0.75) < 1e-9 for p in items))
 
-    def test_no_shrink_when_it_cannot_help(self):
-        items = [make_item(4, 3) for _ in range(10)]  # 5 列：縮 80% 也放不下第 5 列 -> 換頁
-        plan = [r for _, r in g.plan_layout({'a': items}, 10.4, 0, self.LINE_CHARS)]
-        self.assertEqual(len(plan), 5)
-        self.assertTrue(all(p.img_w >= 3.4 * g.MIN_PHOTO_SCALE - 1e-9 for p in items))
+    def test_small_pixel_photos_are_zoomed_in_to_fill_the_cell(self):
+        small = make_item(40, 30)            # 像素很少的照片也要放大到填滿儲存格寬度
+        self.assertAlmostEqual(small.img_w, 3.4)
+        tall_small = make_item(10, 40)       # 又細又高：放大到高度上限
+        self.assertAlmostEqual(tall_small.img_h, 4.7)
 
     def test_caption_height_grows_with_text(self):
         self.assertLess(g.caption_height('短', 20), g.caption_height('長' * 45, 20))
@@ -266,8 +243,30 @@ class MoveItemTest(unittest.TestCase):
         self.assertEqual(seq, ['d', 'b', 'c', 'a'])
 
 
+class ReportPhotoOrderTest(unittest.TestCase):
+    def test_photos_appear_in_the_report_in_the_users_order_with_mixed_orientations(self):
+        with tempfile.TemporaryDirectory() as d:
+            shapes_spec = [(200, 400), (400, 200), (200, 400), (400, 200), (300, 300)]  # 直、橫、直、橫、正方
+            paths = []
+            for i, size in enumerate(shapes_spec):
+                path = os.path.join(d, f'{i}.png')
+                Image.new('RGB', size, 'red').save(path)
+                paths.append(path)
+            data = {k: '' for k in g.FIELD_NAMES}
+            data.update(year='115', month='10', day='12', personnel='王', start_year='115', start_month='10',
+                        start_day='10', end_year='115', end_month='10', end_day='11', location='甲')
+            files = {c: [] for c in g.PHOTO_CATEGORIES}
+            files[g.PHOTO_CATEGORIES[0]] = paths
+            out = os.path.join(d, 'o.docx')
+            g.build_report(TEMPLATE, data, files, {}, out)
+            shapes = Document(out).inline_shapes
+            self.assertEqual(len(shapes), 5)
+            orientation = ['直' if s.height > s.width else '橫' for s in shapes]
+            self.assertEqual(orientation, ['直', '橫', '直', '橫', '橫'])  # 跟使用者排的順序一樣，沒有把橫式或直式集中
+
+
 class OrderKeptTest(unittest.TestCase):
-    def test_user_order_is_kept_within_orientation_group(self):
+    def test_user_order_is_kept(self):
         items = [make_item(4, 3, caption=f'L{i}') for i in range(4)]
         rows = [r for _, r in g.plan_layout({'a': items}, 30, 0, 20)]
         self.assertEqual([[p.caption for p in r] for r in rows], [['L0', 'L1'], ['L2', 'L3']])

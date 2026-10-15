@@ -104,6 +104,15 @@ class ReportBuildTest(unittest.TestCase):
                      '王小明' + chr(0x3000) + '李小華/陳大文', '  王小明 ,  、李小華　　陳大文 ', '王小明' + chr(10) + '李小華' + chr(9) + '陳大文'):
             self.assertEqual(r.split_names(text), expected, repr(text))
         self.assertEqual(r.split_names('王小明'), ['王小明'])
+        # 外文姓名：中間的空白不拆；中文姓名之間的空白照常拆
+        self.assertEqual(r.split_names('John Smith'), ['John Smith'])
+        self.assertEqual(r.split_names('John Smith, Mary Jane Watson'), ['John Smith', 'Mary Jane Watson'])
+        self.assertEqual(r.split_names('王小明 John Smith 李小華'), ['王小明', 'John Smith', '李小華'])
+        self.assertEqual(r.split_names('王小明 李小華 John Smith'), ['王小明', '李小華', 'John Smith'])
+        self.assertEqual(r.split_names('John Smith、王小明' + chr(0x3000) + 'Mary Jane'), ['John Smith', '王小明', 'Mary Jane'])
+        self.assertEqual(r.split_names('김 철수 田中 太郎'), ['김 철수', '田中', '太郎'])   # 韓文不拆，漢字姓名照拆
+        self.assertEqual(r.split_names('約翰·史密斯 王小明'), ['約翰·史密斯', '王小明'])
+        self.assertEqual(r.split_names('John  Smith' + chr(10) + 'Mary Jane'), ['John Smith', 'Mary Jane'])   # 換行一定分隔
         self.assertEqual(r.split_names('  ， 、 '), [])
         self.assertEqual(r.split_names(''), [])
 
@@ -117,6 +126,11 @@ class ReportBuildTest(unittest.TestCase):
             self.assertEqual([c.tag.split('}')[1] for c in p.find(qn('w:pPr'))][-1], 'rPr')   # rPr 放最後（Word 的順序）
         height = doc.tables[0]._tbl.tr_lst[1].trPr.find(qn('w:trHeight'))
         self.assertNotEqual(height.get(qn('w:hRule')), 'exact')            # 人多時列會長高，不會被切掉
+
+    def test_tataka_foreign_name_stays_on_one_line(self):
+        doc, _ = self.tataka(dict(TATAKA_DATA, volunteer='王小明 John Smith 李小華'))
+        paragraphs = r._cell(doc.tables[0], 1, 0)._tc.findall(qn('w:p'))
+        self.assertEqual([g._paragraph_text(p) for p in paragraphs], ['王小明', 'John Smith', '李小華'])
 
     def test_tataka_service_items_and_incident(self):
         doc, _ = self.tataka()
@@ -494,6 +508,8 @@ class TatakaGuiTest(FormGuiTest):
         self.fill_all()
         data, _ = self.app.collect_data()
         self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
+        data['volunteer'] = '王小明 李小華,John Smith'
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明、李小華、John Smith')
         data['volunteer'] = '王小明 李小華,陳大文'
         self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明、李小華、陳大文')
         name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王小:明'},

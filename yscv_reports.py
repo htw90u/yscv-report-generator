@@ -175,12 +175,31 @@ def _grid_widths(table):
 TATAKA_PHOTO_CATEGORY = '相片記錄'
 TATAKA_WEATHERS = ('晴', '陰', '雨')
 NEWLINE = chr(10)
-NAME_SEPARATORS = re.compile(r'[\s、,，;；/／|｜]+')   # 空白（含全形空白）、頓號、逗號、分號、斜線
+NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
+HAN = re.compile('[' + chr(0x3400) + '-' + chr(0x4dbf) + chr(0x4e00) + '-' + chr(0x9fff) + chr(0xf900) + '-' + chr(0xfaff) + ']')
 
 
 def split_names(text):
-    """把「王小明 李小華、陳大文,林小美」這類輸入拆成一人一筆（分隔符號自動判斷，連續分隔符號視為一個）。"""
-    return [name for name in NAME_SEPARATORS.split(text or '') if name]
+    """把「王小明 李小華、陳大文,林小美」這類輸入拆成一人一筆（連續的分隔符號視為一個）。
+
+    頓號、逗號、分號、斜線、換行一定是分隔。空白（含全形空白）只用來分隔中文姓名：
+    含漢字的詞各自是一個姓名；沒有漢字的詞（英文、韓文、日文假名等外文）連在一起時，中間的空白不拆，
+    視為同一個姓名，例如「王小明 John Smith 李小華」是三位。多位外文姓名請用逗號或頓號隔開。
+    """
+    names = []
+    for part in NAME_SEPARATORS.split(text or ''):
+        foreign = []        # 連續的外文詞，合成一個姓名
+        for token in part.split():
+            if HAN.search(token):
+                if foreign:
+                    names.append(' '.join(foreign))
+                    foreign = []
+                names.append(token)
+            else:
+                foreign.append(token)
+        if foreign:
+            names.append(' '.join(foreign))
+    return names
 
 
 
@@ -660,7 +679,8 @@ class TatakaReportGUI(_FormGUI):
         ttk.Label(frame, text="1. 志工姓名:", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
         self.volunteer = ttk.Entry(frame, width=50)
         self.volunteer.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
-        ttk.Label(frame, text="多位志工請用空白、頓號（、）或逗號隔開，報告裡會自動一人一行", style='Hint.TLabel').grid(
+        ttk.Label(frame, text="多位志工請用空白、頓號（、）或逗號隔開，報告裡會自動一人一行；"
+                              "外文姓名中間的空白不會被拆開（多位外文姓名請用逗號隔開）", style='Hint.TLabel').grid(
             row=1, column=1, sticky=tk.W, padx=5)
         ttk.Label(frame, text="2. 值勤日期:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=5)
         date_frame = ttk.Frame(frame)

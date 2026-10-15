@@ -737,6 +737,71 @@ class EcoToiletGuiTest(FormGuiTest):
         self.assertEqual(name, '1151015_玉山主峰線生態廁所回報單草稿_1015_0930')
 
 
+class DebugLogTest(unittest.TestCase):
+    """記錄檔只有在除錯模式（-d、-D、--debug）才會產生。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log_path = os.path.join(self.tmp.name, 'debug.log')
+        root = g.logging.getLogger()
+        saved = (list(root.handlers), root.level)
+
+        def restore():
+            for handler in list(root.handlers):
+                if handler not in saved[0]:
+                    handler.close()
+            root.handlers[:] = saved[0]
+            root.setLevel(saved[1])
+
+        self.addCleanup(restore)
+
+    def test_parse_args(self):
+        for flag in ('-d', '-D', '--debug'):
+            self.assertTrue(g.parse_args([flag]).debug, flag)
+        self.assertFalse(g.parse_args([]).debug)
+        args = g.parse_args(['tataka', '-D'])
+        self.assertEqual((args.report, args.debug), ('tataka', True))
+        args = g.parse_args(['--debug', 'ecotoilet'])
+        self.assertEqual((args.report, args.debug), ('ecotoilet', True))
+        self.assertIsNone(g.parse_args([]).report)
+        with mock.patch('sys.stderr', new=__import__('io').StringIO()), self.assertRaises(SystemExit):
+            g.parse_args(['不存在的回報單'])
+
+    def test_no_log_file_without_debug(self):
+        with mock.patch.object(g, 'LOG_FILE', self.log_path):
+            g.setup_logging(False)
+            g.logging.info('平常不寫記錄')
+            g.logging.error('錯誤只印在命令列')
+        self.assertFalse(os.path.exists(self.log_path))
+        root = g.logging.getLogger()
+        self.assertFalse(any(isinstance(h, g.logging.FileHandler) for h in root.handlers))
+        self.assertEqual(root.level, g.logging.WARNING)
+
+    def test_log_file_is_written_in_debug_mode(self):
+        with mock.patch.object(g, 'LOG_FILE', self.log_path):
+            g.setup_logging(True)
+            g.logging.info('除錯時要寫記錄')
+            for handler in g.logging.getLogger().handlers:
+                handler.flush()
+        self.assertTrue(os.path.exists(self.log_path))
+        text = open(self.log_path, encoding='utf-8').read()
+        self.assertIn('除錯時要寫記錄', text)
+        self.assertIn('除錯模式', text)
+
+    def test_importing_the_program_does_not_create_a_log_file(self):
+        import subprocess
+        import sys
+        copy = os.path.join(self.tmp.name, 'copy')
+        os.makedirs(copy)
+        for name in ('yscv_report_generator.py',):
+            with open(os.path.join(g.BASE_DIR, name), 'rb') as src, open(os.path.join(copy, name), 'wb') as dst:
+                dst.write(src.read())
+        subprocess.run([sys.executable, '-c', 'import yscv_report_generator as g; g.logging.info("x"); g.logging.warning("w")'],
+                       cwd=copy, check=True, capture_output=True)
+        self.assertEqual([n for n in os.listdir(copy) if n.endswith('.log')], [])
+
+
 class LauncherTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

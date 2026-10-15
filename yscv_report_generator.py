@@ -5,6 +5,7 @@
 提供圖形化介面供使用者輸入資料並加入照片
 """
 
+import argparse
 import base64
 import copy
 import io
@@ -49,14 +50,17 @@ FONT_LICENSE = 'OFL-Iansui.txt'
 FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
 LOG_FILE = os.path.join(BASE_DIR, 'yscv_report_generator.log')
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+
+
+def setup_logging(debug=False):
+    """平常只把警告與錯誤印在命令列，不產生記錄檔；除錯模式（-d、-D、--debug）才把完整的執行記錄寫進 LOG_FILE。"""
+    if debug:
+        logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT, force=True,
+                            handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()])
+        logging.info(f"除錯模式：執行記錄寫入 {LOG_FILE}")
+    else:
+        logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT, force=True)
 
 KAI = '標楷體'
 BODY_FONT_PT = 12   # 內容字級（與參考回報單相同，未特別指定時為 12pt）
@@ -3506,11 +3510,23 @@ def create_app(report_id, root, **kwargs):
     return apps[report_id](root, **kwargs)
 
 
+def parse_args(argv=None):
+    """命令列參數：可選的回報單代號（跳過選單），以及除錯模式 -d／-D／--debug。"""
+    parser = argparse.ArgumentParser(prog='yscv_report_generator.py', description=APP_TITLE)
+    parser.add_argument('report', nargs='?', choices=[choice[0] for choice in REPORT_CHOICES],
+                        help="直接開啟指定的回報單，不顯示選單（patrol＝保育巡查、tataka＝塔塔加、ecotoilet＝生態廁所）")
+    parser.add_argument('-d', '-D', '--debug', action='store_true', dest='debug',
+                        help="除錯模式：把完整的執行記錄寫到 yscv_report_generator.log（平常不產生記錄檔）")
+    return parser.parse_args(argv)
+
+
 def main(argv=None):
-    """啟動。可以在命令列直接指定回報單（patrol、tataka、ecotoilet）跳過選單，沒指定就先顯示選單。"""
+    """啟動。可以在命令列直接指定回報單（patrol、tataka、ecotoilet）跳過選單，沒指定就先顯示選單；
+    加上 -d／-D／--debug 才會產生記錄檔。"""
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    setup_logging(args.debug)
     enable_dpi_awareness()
-    argv = sys.argv[1:] if argv is None else argv
-    report_id = argv[0] if argv and argv[0] in dict((r[0], r) for r in REPORT_CHOICES) else choose_report()
+    report_id = args.report or choose_report()
     if report_id is None:
         return
     root = tk.Tk()

@@ -33,6 +33,12 @@ python yscv_report_generator.py
 
 也可以在命令列直接指定回報單，跳過選單：`python yscv_report_generator.py tataka`（`patrol`、`tataka`、`ecotoilet`）。
 
+平常不會產生記錄檔；要除錯時加上 `-d`（或 `-D`、`--debug`），完整的執行記錄會寫到 `yscv_report_generator.log`：
+
+```bash
+python yscv_report_generator.py --debug
+```
+
 ## 測試
 
 ```bash

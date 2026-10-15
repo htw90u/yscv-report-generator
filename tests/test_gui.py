@@ -2648,7 +2648,7 @@ class GuiTest(unittest.TestCase):
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育志工回報單生成器')
         self.assertEqual(self.root.title(), f'{g.APP_TITLE}－保育巡查回報單　{g.version_label()}')
-        self.assertIn(f'　v{g.VERSION}', self.root.title())
+        self.assertRegex(self.root.title(), r'　v\d+\.\d+(\.\d+)?(-[0-9a-f]{7})?$')   # 版本由 git tag 推算，不寫死
 
     def test_version_label_shows_tag_commits_since_tag_and_sha(self):
         with mock.patch.object(g, 'git_describe', return_value=('v0.5', 0, 'abc1234')):      # 剛好在 tag 上

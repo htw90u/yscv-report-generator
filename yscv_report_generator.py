@@ -34,7 +34,7 @@ from docx.shared import Inches, Pt
 from PIL import Image, ImageOps, ImageTk
 
 APP_TITLE = '玉山保育志工回報單生成器'
-VERSION = '0.5'
+VERSION = '0.8'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
@@ -850,10 +850,16 @@ def open_file(path):
 
 
 def _git(args, directory=None):
-    """執行 git 指令，回傳輸出文字；不是 git 倉庫、沒有安裝 git、或指令失敗時回傳空字串。"""
+    """執行 git 指令，回傳輸出文字；不是 git 倉庫、沒有安裝 git、或指令失敗時回傳空字串。
+
+    資料夾裡沒有 .git（例如下載的壓縮檔）就完全不執行 git：Windows 啟動程式時會先在目前資料夾找同名的
+    git.exe，從別人給的資料夾啟動時可能執行到被植入的程式。"""
+    directory = directory or BASE_DIR
+    if not os.path.exists(os.path.join(directory, '.git')):
+        return ''
     try:
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        out = subprocess.run(['git', *args], cwd=directory or BASE_DIR, capture_output=True, text=True, timeout=3,
+        out = subprocess.run(['git', *args], cwd=directory, capture_output=True, text=True, timeout=3,
                              creationflags=flags)
     except (OSError, subprocess.SubprocessError):
         return ''
@@ -1537,6 +1543,14 @@ def scale_gui_fonts(root, delta, family=None, weight=None):
             font.configure(family=family)
         if weight:
             font.configure(weight=weight)
+
+def is_unsafe_draft_path(path):
+    r"""草稿（可能來自別人）裡不能信任的照片路徑：不是文字、含空字元、不是完整路徑，或是網路路徑
+    （\\主機\分享：Windows 會向那台主機連線並送出登入雜湊）與裝置路徑（\\?\、\\.\）。"""
+    if not isinstance(path, str) or not path or '\0' in path or not os.path.isabs(path):
+        return True
+    return path.replace('/', '\\').startswith('\\\\')
+
 
 def widget_set(widget, value):
     """設定欄位內容：輸入框、唯讀下拉選單、核取方塊與自訂欄位（有 set_value 的）都適用。"""
@@ -2811,40 +2825,69 @@ class ReportGeneratorGUI:
         report = draft.get('report', 'patrol')
         if report != self.REPORT_ID:
             raise ValueError(f"這不是「{self.REPORT_NAME}」的草稿（草稿種類：{REPORT_NAMES.get(report, report)}）")
+        self._read_draft(draft)     # 內容格式也先檢查；有問題在動到畫面之前就擋下來
+
+    @staticmethod
+    def _read_draft(draft):
+        """把草稿整理成固定的資料結構並檢查格式（不會動到畫面）；格式不對丟 ValueError。"""
+        def section(key, nested=False):
+            value = draft.get(key, {})
+            if not isinstance(value, dict):
+                raise ValueError(f"草稿的「{key}」格式不正確")
+            if nested:
+                return {name: (item if isinstance(item, dict) else {}) for name, item in value.items()}
+            return value
+
+        photos = section('photos')
+        if not all(isinstance(paths, list) for paths in photos.values()):
+            raise ValueError("草稿的「photos」格式不正確")
+        return {'fields': section('fields'), 'texts': section('texts'), 'photos': photos,
+                'captions': section('captions', True), 'rotations': section('rotations', True),
+                'crops': section('crops', True)}
 
     def apply_draft(self, draft):
-        """把草稿內容還原到畫面，回傳警告訊息清單（例如找不到的照片）。"""
+        """把草稿內容還原到畫面，回傳警告訊息清單（例如找不到的照片）。
+        草稿可能來自別人：格式先全部檢查過才動畫面（壞檔案不會清掉目前填的內容）；
+        照片只接受本機的完整路徑，網路路徑（UNC）一律不載入。"""
         self.check_draft(draft)
+        data = self._read_draft(draft)
         warnings = []
         self._clear_widgets()
 
         for name in self.ENTRY_FIELDS:
-            widget_set(getattr(self, name), str(draft.get('fields', {}).get(name, '')))
+            widget_set(getattr(self, name), str(data['fields'].get(name, '')))
         self._fill_report_date()  # 草稿裡有日期就沿用（第一次填表的日期）；沒有才補上今天
         for key, widget in self.text_fields.items():
-            widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
+            widget.insert('1.0', str(data['texts'].get(key, '')))
 
-        for saved_category, paths in draft.get('photos', {}).items():
+        for saved_category, paths in data['photos'].items():
             category = self.LEGACY_PHOTO_CATEGORIES.get(saved_category, saved_category)
             if category not in self.photo_files:
                 continue
-            captions = draft.get('captions', {}).get(saved_category, {})
-            rotations = draft.get('rotations', {}).get(saved_category, {})
-            crops = draft.get('crops', {}).get(saved_category, {})
+            captions = data['captions'].get(saved_category, {})
+            rotations = data['rotations'].get(saved_category, {})
+            crops = data['crops'].get(saved_category, {})
             for path in paths:
-                if not os.path.exists(path):
+                if is_unsafe_draft_path(path):
+                    warnings.append(f"為了安全，已略過草稿裡的網路路徑或不正確的路徑，請重新加入照片：{str(path)[:80]}")
+                    continue
+                try:
+                    exists = os.path.exists(path)
+                except (OSError, ValueError):
+                    exists = False
+                if not exists:
                     warnings.append(f"找不到照片，已略過：{path}")
                     continue
                 self.photo_files[category].append(path)
                 if captions.get(path):
-                    self.photo_captions[category][path] = captions[path]
+                    self.photo_captions[category][path] = str(captions[path])
                 try:
                     angle = normalize_rotation(rotations.get(path, 0))
                 except (TypeError, ValueError):
                     angle = 0
                 if angle:
                     self.photo_rotations[category][path] = angle
-                crop = normalize_crop(crops.get(path)) if isinstance(crops, dict) else None
+                crop = normalize_crop(crops.get(path))
                 if crop:
                     self.photo_crops[category][path] = crop
             self._render_list(category)
@@ -3450,41 +3493,94 @@ class LauncherCard(tk.Frame):
 
 FEEDBACK_SUBJECT_TAG = '回報單生成器'   # 意見信主旨開頭的名稱：[回報單生成器 v0.5.17-12b4590] 標題
 FEEDBACK_TIMEOUT = 15        # 秒；Apps Script 第一次呼叫可能要幾秒
+FEEDBACK_TITLE_MAX = 100     # 標題最多幾個字
+FEEDBACK_CONTENT_MAX = 5000  # 內容最多幾個字
+FEEDBACK_EMAIL_MAX = 254     # Email 最長的合法長度
+FEEDBACK_BODY_MAX = 6000     # 送出前的最後防線（含自動附加的版本等文字）
+FEEDBACK_COOLDOWN = 30       # 秒：成功寄出一封後，要隔多久才能再寄（擋手滑連按與簡單的洗版）
+_feedback_last_sent = [0.0]  # 上次成功寄出的時間（time.monotonic）
+
+# 要拿掉的字元：控制字元（保留換行與 Tab）、行分隔符號、雙向文字覆寫字元（可以偽裝文字的順序）
+_UNSAFE_CHARS = ''.join(chr(c) for c in (*range(0, 9), 11, 12, *range(14, 32), 127, 0x2028, 0x2029,
+                                         *range(0x202a, 0x202f), *range(0x2066, 0x206a)))
+_UNSAFE_RE = re.compile('[' + re.escape(_UNSAFE_CHARS) + ']')
+EMAIL_PATTERN = re.compile(r'[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+')
 
 
-def feedback_endpoint_url():
-    """意見反應的 Google Apps Script 端點網址（放在 git 忽略的 yscv_feedback_endpoint.py，範本見
-    yscv_feedback_endpoint.example.py）；沒有設定回傳空字串。收件信箱只存在 Google 端的 Apps Script 裡。"""
+def clean_line(text, limit=None):
+    """單行文字（標題、主旨、Email）：拿掉控制字元，換行、Tab、連續空白都變成一個空白，避免夾帶郵件標頭。"""
+    text = re.sub(r'\s+', ' ', _UNSAFE_RE.sub('', str(text or ''))).strip()
+    return text[:limit] if limit else text
+
+
+def clean_body(text):
+    """多行文字（內文）：換行統一成 \n，拿掉控制字元。"""
+    return _UNSAFE_RE.sub('', str(text or '').replace('\r\n', '\n').replace('\r', '\n')).strip()
+
+
+def valid_email(text):
+    """聯絡 Email 的格式：只接受一般的 ASCII 信箱（沒有空白、逗號、分號、角括號、換行或控制字元）。"""
+    return bool(text) and len(text) <= FEEDBACK_EMAIL_MAX and EMAIL_PATTERN.fullmatch(text) is not None
+
+
+def feedback_cooldown_remaining():
+    """離下次可以寄意見還要等幾秒（0＝現在就可以寄）。"""
+    if not _feedback_last_sent[0]:
+        return 0.0
+    return max(0.0, FEEDBACK_COOLDOWN - (time.monotonic() - _feedback_last_sent[0]))
+
+
+def _feedback_config(name):
+    """讀 git 忽略的設定檔 yscv_feedback_endpoint.py 裡的設定；沒有這個檔案或設定回傳空字串。"""
     try:
         import yscv_feedback_endpoint
     except ImportError:
         return ''
-    return str(getattr(yscv_feedback_endpoint, 'URL', '') or '').strip()
+    return str(getattr(yscv_feedback_endpoint, name, '') or '').strip()
 
 
-EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+def feedback_endpoint_url():
+    """意見反應的 Google Apps Script 端點網址（設定檔範本見 yscv_feedback_endpoint.example.py）。
+    一定要是 https:// 開頭（file://、ftp://、http:// 都不接受）；沒有設定回傳空字串。收件信箱只存在 Google 端。"""
+    url = _feedback_config('URL')
+    if url and not url.lower().startswith('https://'):
+        logging.warning("意見反應端點網址必須以 https:// 開頭，已忽略")
+        return ''
+    return url
+
+
+def feedback_endpoint_token():
+    """端點的共用密鑰（選用，設定檔裡的 TOKEN）；沒有設定就不附。"""
+    return _feedback_config('TOKEN')
 
 
 def feedback_message(title, content, version, email=''):
-    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」；內文有聯絡 Email（沒填寫「未填」），最後附上版本。"""
-    title = (title or '').strip() or '意見反應'
+    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」；內文有聯絡 Email（沒填寫「未填」），最後附上版本。
+    標題與 Email 會先整理成單行、拿掉控制字元，避免在主旨或回信地址夾帶換行與郵件標頭。"""
+    title = clean_line(title, FEEDBACK_TITLE_MAX) or '意見反應'
+    version = clean_line(version, 40)
     subject = f"[{FEEDBACK_SUBJECT_TAG} {version}] {title}"
-    body = (f"{(content or '').strip()}\n\n聯絡 Email：{(email or '').strip() or '（未填）'}\n"
+    body = (f"{clean_body(content)}\n\n聯絡 Email：{clean_line(email, FEEDBACK_EMAIL_MAX) or '（未填）'}\n"
             f"----\n{APP_TITLE}　{version}")
     return subject, body
 
 
 def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT, reply_to=''):
     """把意見 POST（JSON）到 Apps Script 端點，由 Google 端用部署者的帳號寄信（郵件帳號密碼不進程式，
-    也不管使用者有沒有郵件程式）。回傳 (成功與否, 失敗原因)。"""
+    也不管使用者有沒有郵件程式）。送出前再整理一次內容、限制長度（不信任呼叫端）。回傳 (成功與否, 失敗原因)。"""
     import urllib.error
     import urllib.request
     url = feedback_endpoint_url() if url is None else url
     if not url:
         return False, "這個版本沒有設定意見反應的寄送功能"
-    payload = json.dumps({'subject': subject, 'body': body, 'app': APP_TITLE,
-                          'reply_to': (reply_to or '').strip()}).encode('utf-8')
-    request = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    reply_to = clean_line(reply_to, FEEDBACK_EMAIL_MAX)
+    fields = {'subject': clean_line(subject, 200), 'body': clean_body(body)[:FEEDBACK_BODY_MAX], 'app': APP_TITLE,
+              'reply_to': reply_to if valid_email(reply_to) else ''}
+    token = feedback_endpoint_token()
+    if token:
+        fields['token'] = token
+    request = urllib.request.Request(url, data=json.dumps(fields).encode('utf-8'),
+                                     headers={'Content-Type': 'application/json'})
     try:
         # Apps Script 會 302 轉址到 googleusercontent 取回結果，urllib 會自動跟隨
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -3605,10 +3701,23 @@ class FeedbackDialog(tk.Toplevel):
             messagebox.showerror("意見反應", "請先填寫內容")
             self.content_text.focus_set()
             return False
+        title_length = len(clean_line(self.title_entry.get()))
+        if title_length > FEEDBACK_TITLE_MAX:
+            messagebox.showerror("意見反應", f"標題太長了（{title_length} 字，最多 {FEEDBACK_TITLE_MAX} 字），請縮短。")
+            self.title_entry.focus_set()
+            return False
+        if len(content) > FEEDBACK_CONTENT_MAX:
+            messagebox.showerror("意見反應", f"內容太長了（{len(content)} 字，最多 {FEEDBACK_CONTENT_MAX} 字），請縮短後再寄。")
+            self.content_text.focus_set()
+            return False
         email = self.email_entry.get().strip()
-        if email and not EMAIL_PATTERN.match(email):
+        if email and not valid_email(email):
             messagebox.showerror("意見反應", "聯絡 Email 的格式看起來不正確，請檢查。\n（不需要回覆的話可以留空）")
             self.email_entry.focus_set()
+            return False
+        wait = feedback_cooldown_remaining()
+        if wait > 0:
+            messagebox.showerror("意見反應", f"剛剛才寄出一封，請等 {math.ceil(wait)} 秒後再寄。")
             return False
         subject, body = feedback_message(self.title_entry.get(), content, self.version, email)
         self.sending = True
@@ -3629,6 +3738,7 @@ class FeedbackDialog(tk.Toplevel):
         self.send_button.config(state=tk.NORMAL, text="寄出(Ctrl+Enter)")
         self.cancel_button.config(state=tk.NORMAL)
         if ok:
+            _feedback_last_sent[0] = time.monotonic()
             logging.info("意見反應已寄出")
             messagebox.showinfo("意見反應", "已寄出，謝謝你的意見！")
             self.destroy()

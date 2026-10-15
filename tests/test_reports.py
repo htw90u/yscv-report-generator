@@ -863,6 +863,11 @@ class FakeFeedbackServer:
 class FeedbackSendTest(unittest.TestCase):
     """send_feedback：POST 到端點（不管使用者的郵件程式），各種結果都要有清楚的回應。"""
 
+    def setUp(self):
+        patcher = mock.patch.object(g, 'feedback_endpoint_token', return_value='')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def server(self, mode='ok'):
         server = FakeFeedbackServer(mode)
         self.addCleanup(server.close)
@@ -930,6 +935,8 @@ class FeedbackTest(unittest.TestCase):
         self.root = tk.Tk()
         self.launcher = g.ReportLauncher(self.root, settings_path=os.path.join(self.tmp.name, 's.json'))
         self.sent, self.shown, self.reply_tos = [], [], []
+        g._feedback_last_sent[0] = 0.0
+        self.addCleanup(lambda: g._feedback_last_sent.__setitem__(0, 0.0))
         self.gate = None                                    # 讓假的寄送卡住，測試「寄送中」的畫面
         self.result = (True, '')
 
@@ -941,6 +948,7 @@ class FeedbackTest(unittest.TestCase):
             return self.result
 
         for p in (mock.patch.object(g, 'send_feedback', fake_send),
+                  mock.patch.object(g, 'FEEDBACK_COOLDOWN', 0),
                   mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', t, m))),
                   mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', t, m)))):
             p.start()
@@ -1059,14 +1067,74 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(entry.get(), '')
 
     def test_invalid_contact_email_is_refused(self):
-        for bad in ('abc', 'a@b', '@example.com', 'me@@example.com', 'me @example.com'):
+        for bad in ('abc', 'a@b', '@example.com', 'me@@example.com', 'me @example.com', 'a@b.co\x00', '<me@example.com>',
+                    'me@example.com,evil@example.com', 'me@example.com;evil@example.com', 'a' * 300 + '@x.io',
+                    'me@example.com\r\nBcc: evil@example.com', '我@例子.台灣'):
             dialog = self.dialog('標題', '內容', email=bad)
             self.assertFalse(dialog.send(), bad)
             self.assertIn('Email', self.shown[-1][2])
             self.assertTrue(dialog.winfo_exists())
         self.assertEqual(self.sent, [])
         for good in ('me@example.com', 'first.last+tag@sub.example.co.uk'):
-            self.assertTrue(g.EMAIL_PATTERN.match(good), good)
+            self.assertTrue(g.valid_email(good), good)
+
+    def test_header_injection_in_the_title_is_neutralised(self):
+        dialog = self.dialog('正常標題\r\nBcc: evil@example.com\r\nSubject: hacked', '內容')
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        subject, body = self.sent[0]
+        self.assertFalse('\r' in subject or '\n' in subject)
+        self.assertEqual(subject, '[回報單生成器 v9.9.3-abc1234] 正常標題 Bcc: evil@example.com Subject: hacked')
+
+    def test_control_characters_are_removed_from_the_message(self):
+        subject, body = g.feedback_message('標\x00題\u202e', '內\x00容\x1b\u202e反轉\r\n第二行\r第三行', 'v1\r\n', 'a@b.co\r\nBcc: x')
+        for text in (subject, body):
+            self.assertFalse(any(c in text for c in ('\x00', '\x1b', '\u202e', '\r')), repr(text))
+        self.assertEqual(subject, '[回報單生成器 v1] 標題')
+        self.assertTrue(body.startswith('內容反轉\n第二行\n第三行\n\n聯絡 Email：a@b.co Bcc: x\n'))     # Email 欄位的換行也被壓成單行
+
+    def test_title_and_content_length_limits(self):
+        dialog = self.dialog('T' * (g.FEEDBACK_TITLE_MAX + 1), '內容')
+        self.assertFalse(dialog.send())
+        self.assertIn('標題太長', self.shown[-1][2])
+        dialog = self.dialog('標題', 'C' * (g.FEEDBACK_CONTENT_MAX + 1))
+        self.assertFalse(dialog.send())
+        self.assertIn('內容太長', self.shown[-1][2])
+        self.assertEqual(self.sent, [])
+        dialog = self.dialog('T' * g.FEEDBACK_TITLE_MAX, 'C' * g.FEEDBACK_CONTENT_MAX)           # 剛好在上限內可以寄
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_cooldown_after_a_successful_send(self):
+        with mock.patch.object(g, 'FEEDBACK_COOLDOWN', 30), mock.patch.object(g.time, 'monotonic', return_value=1000.0):
+            first = self.dialog('第一封', '內容')
+            self.assertTrue(first.send())
+            self.finish(first)
+            second = self.dialog('連續寄', '洗版')
+            self.assertFalse(second.send())                                        # 馬上再寄：擋下
+            self.assertIn('請等 30 秒', self.shown[-1][2])
+            self.assertEqual(len(self.sent), 1)
+        with mock.patch.object(g, 'FEEDBACK_COOLDOWN', 30), mock.patch.object(g.time, 'monotonic', return_value=1010.4):
+            self.assertAlmostEqual(g.feedback_cooldown_remaining(), 19.6)
+            self.assertFalse(second.send())
+            self.assertIn('請等 20 秒', self.shown[-1][2])                          # 還剩的秒數無條件進位
+        with mock.patch.object(g, 'FEEDBACK_COOLDOWN', 30), mock.patch.object(g.time, 'monotonic', return_value=1030.0):
+            self.assertEqual(g.feedback_cooldown_remaining(), 0)
+            self.assertTrue(second.send())                                         # 過了冷卻時間可以再寄
+            self.finish(second)
+            self.assertEqual(len(self.sent), 2)
+
+    def test_failed_send_does_not_start_the_cooldown(self):
+        self.result = (False, '連不上')
+        with mock.patch.object(g, 'FEEDBACK_COOLDOWN', 30):
+            dialog = self.dialog('失敗', '內容')
+            dialog.send()
+            self.finish(dialog)
+            self.assertEqual(g.feedback_cooldown_remaining(), 0)
+            self.result = (True, '')
+            self.assertTrue(dialog.send())                                         # 失敗不用等，可以馬上重寄
+            self.finish(dialog)
 
     def test_buttons_are_locked_while_sending(self):
         import threading

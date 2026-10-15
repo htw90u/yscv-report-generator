@@ -24,11 +24,11 @@
 ## 需求
 
 - Windows、Python 3（開發與測試使用 3.14）
-- 套件：`python-docx`、`Pillow`
+- 套件：`python-docx`、`Pillow`（見 `requirements.txt`，建議保持最新版）
 - 轉成 PDF 需要安裝 Microsoft Word；沒有 Word 時仍會產生 .docx，只是不會有 PDF
 
 ```bash
-pip install python-docx Pillow
+pip install -r requirements.txt
 python yscv_report_generator.py
 ```
 
@@ -58,6 +58,12 @@ python -m unittest discover -s tests
 2. 複製 `yscv_feedback_endpoint.example.py` 為 `yscv_feedback_endpoint.py`，把 `URL` 換成那個網址（這個檔案已被 `.gitignore` 排除）。
 
 沒有設定時，按「寄出」會提示這個版本沒有設定寄送功能，其他功能不受影響。
+
+## 隱私與安全
+
+- 自動存檔、草稿與除錯記錄（`-d`）都是明文，裡面有姓名等資料，只放在你自己的電腦上；它們已被 `.gitignore` 排除，**但直接壓縮整個資料夾分享時會被一起帶出去**，分享前請先刪掉。
+- 草稿檔可能來自別人：載入時先檢查格式，格式不對不會動到畫面；草稿裡的照片只接受本機路徑，網路路徑（`\\主機\分享`）會被略過（Windows 開啟網路路徑時會向對方主機送出登入雜湊）。
+- 意見反應只會傳你填的標題、內容、聯絡 Email 和程式版本，用 https 送出；標題與 Email 會過濾換行與控制字元，標題 100 字、內容 5000 字為上限，成功寄出後 30 秒內不能再寄。端點的密鑰與頻率限制設定在 Apps Script 裡（見 `apps_script_feedback.gs`）。
 
 ## 授權
 

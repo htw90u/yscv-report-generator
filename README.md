@@ -15,13 +15,23 @@
 - 依固定範本填入基本資料與各項內容（範本放在程式旁邊，要更新表單格式直接換掉範本檔）
 - 服勤照片：從檔案總管拖進視窗、拖曳調整順序、拖到其他分類、旋轉、裁切（不改原檔）、填寫說明
 - 報告裡的照片依你排的順序放置（橫式與直式不並排），並放大到填滿儲存格
-- 入口選單右下角的「意見反應」：填標題與內容，按寄出就直接送出（主旨是「[回報單生成器 v0.5.17-12b4590] 你填的標題」，內文最後也附上版本；可選填聯絡 Email，會寫進信裡並設成回信地址），不用使用者的郵件程式；做法是 POST 到 Google Apps Script，由 Google 端寄信，設定方式見下方「意見反應的設定」
+- 入口選單右下角的「意見反應」：填標題與內容，按寄出就直接送出（主旨是「[回報單生成器 v1.0-96aa62e] 你填的標題」，內文最後也附上版本；可選填聯絡 Email，會寫進信裡並設成回信地址），不用使用者的郵件程式；做法是 POST 到 Google Apps Script，由 Google 端寄信，設定方式見下方「意見反應的設定」
 - 草稿存檔／載入、每 30 秒自動存檔（三種回報單各自存檔，草稿也不會載入到別種回報單）
-- 視窗標題顯示版本與 git 編號：`<tag>.<tag 之後第幾個 commit>-<sha>`，剛好在 tag 上是 `v0.5-76b5acc`，之後第 12 個 commit 是 `v0.5.12-3c1f9ab`
+- 版本與 git 編號用灰色小字顯示在視窗右下角（入口選單與三種回報單）：`<tag>.<tag 之後第幾個 commit>-<sha>`，剛好在 tag 上是 `v1.0-96aa62e`，之後第 12 個 commit 是 `v1.0.12-3c1f9ab`；打包成 .exe 時會把打包當下的版本烙進去
 - 產生前檢查未填欄位；產生後自動開啟檔案
 - 外觀主題（柔和淺色、色弱友善、高對比）
 
-## 需求
+## 下載使用（不需要安裝 Python）
+
+到 GitHub 的 Releases 下載最新的 `yscv-report-generator-v<版本>-win64.zip`，解壓縮後執行 `yscv-report-generator.exe`。下載後可以用 `Get-FileHash <zip 檔> -Algorithm SHA256` 核對 Release 說明裡的雜湊值。
+
+- 需要 Windows 10 或 11；要產生 PDF 需要安裝 Microsoft Word（沒有 Word 仍會產生 .docx）。
+- 這個程式沒有程式碼簽章，第一次執行 Windows SmartScreen 可能警告，按「其他資訊」→「仍要執行」；部分防毒軟體可能誤判，請先核對 SHA-256。
+- 設定、自動存檔與除錯記錄放在 `%LOCALAPPDATA%\yscv-report-generator\`（直接跑 .py 時則放在程式資料夾）。
+
+## 從原始碼執行
+
+### 需求
 
 - Windows、Python 3（開發與測試使用 3.14）
 - 套件：`python-docx`、`Pillow`（見 `requirements.txt`，建議保持最新版）
@@ -39,6 +49,16 @@ python yscv_report_generator.py
 ```bash
 python yscv_report_generator.py --debug
 ```
+
+## 打包成 .exe
+
+```bash
+pip install pyinstaller
+python build_exe.py
+```
+
+`build_exe.py` 會用 PyInstaller 打包成資料夾版（`dist/yscv-report-generator/`），並壓成 `dist/yscv-report-generator-v<版本>-win64.zip`、印出 SHA-256。圖示用 `icons/yscv.ico`；範本、字型與圖示都會一起包進去；打包當下的 `<tag>.<次數>-<sha>` 版本會烙進 .exe（打包後沒有 git）。
+如果本機有 `yscv_feedback_endpoint.py`，意見反應的網址與密鑰會被一起打包進 .exe（沒有就不內建寄送功能）。
 
 ## 測試
 
@@ -73,7 +93,7 @@ python -m unittest discover -s tests
 - 不想自動檢查：取消選單左下角的「啟動時自動檢查更新」，或用 `--no-update-check`、環境變數 `YSCV_NO_UPDATE_CHECK=1`。
 - 更新來源是 `yscv_updates.py` 的 `UPDATE_REPO`（目前是 `htw90u/yscv-report-generator`）；設成空字串，整個更新功能就不啟用，也不會連網。
 - **repo 必須公開，使用者才查得到新版**：私人 repo 對沒登入的人是 404，選單會顯示「找不到已發行的版本」，不會誤報成「已是最新版」。
-- 發行新版：先把 `yscv_report_generator.py` 的 `VERSION` 改成新版號再打同名 tag（例如 `VERSION = '0.9'`、tag `v0.9`），然後在 GitHub 建立 Release；測試會檢查 `VERSION` 沒有落後最新的 tag。
+- 發行新版：先把 `yscv_report_generator.py` 的 `VERSION` 改成新版號再打同名 tag（例如 `VERSION = '1.1'`、tag `v1.1`），執行 `python build_exe.py` 打包，再在 GitHub 建立 Release 並上傳 zip（說明裡附上 SHA-256）；測試會檢查 `VERSION` 沒有落後最新的 tag。
 
 ## 授權
 

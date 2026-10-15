@@ -35,7 +35,7 @@ from PIL import Image, ImageOps, ImageTk
 APP_TITLE = '玉山保育巡查回報單生成器'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
-TEMPLATE_PATH = os.path.join(BASE_DIR, '玉山國家公園高山保育志工協勤回報單.docx')
+TEMPLATE_PATH = os.path.join(BASE_DIR, '保育巡查回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
 LIST_MENU_EXTRA_PT = 1  # 「項目符號/編號」下拉選單比其他介面文字再大幾點
 GUI_FONT_WEIGHT = 'normal'  # 一般介面字型粗細；只有分頁標題與各頁標題用粗體（見 _apply_theme）

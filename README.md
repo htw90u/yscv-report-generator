@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 依固定範本 `玉山國家公園高山保育志工協勤回報單.docx` 填入基本資料與各項內容
+- 依固定範本 `保育巡查回報單.docx` 填入基本資料與各項內容
 - 服勤照片：從檔案總管拖進視窗、拖曳調整順序、拖到其他分類、旋轉、裁切（不改原檔）、填寫說明
 - 報告裡的照片依你排的順序放置（橫式與直式不並排），並放大到填滿儲存格
 - 草稿存檔／載入、每 30 秒自動存檔
@@ -31,3 +31,10 @@ python -m unittest discover -s tests
 ## 字型
 
 介面使用「芫荽 Iansui」（`fonts/Iansui-Regular.ttf`，SIL Open Font License，授權文字見 `fonts/OFL-Iansui.txt`），只在程式執行期間載入，不會安裝到系統。
+
+## 授權
+
+程式碼以 [MIT License](LICENSE) 授權。
+
+- 字型「芫荽 Iansui」維持它自己的 SIL Open Font License，不受 MIT 涵蓋。
+- 範本 `保育巡查回報單.docx` 是玉山國家公園高山保育志工協勤回報單的表單，其著作權屬於原機關，不在 MIT 授權的範圍內。

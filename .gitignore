@@ -20,3 +20,5 @@ yscv_*_autosave.json*
 *_*生態廁所回報單.pdf
 # 意見反應的 Apps Script 端點網址（範本為 yscv_feedback_endpoint.example.py）
 yscv_feedback_endpoint.py
+build/
+dist/

@@ -871,7 +871,10 @@ class FeedbackSendTest(unittest.TestCase):
         server = self.server()
         ok, error = g.send_feedback('[v1] 標題', '內容\n第二行', url=server.url)
         self.assertEqual((ok, error), (True, ''))
-        self.assertEqual(server.received, [{'subject': '[v1] 標題', 'body': '內容\n第二行', 'app': g.APP_TITLE}])
+        self.assertEqual(server.received, [{'subject': '[v1] 標題', 'body': '內容\n第二行', 'app': g.APP_TITLE,
+                                            'reply_to': ''}])
+        g.send_feedback('s', 'b', url=server.url, reply_to='  me@example.com ')
+        self.assertEqual(server.received[-1]['reply_to'], 'me@example.com')       # 回信地址，端點用來設定 Reply-To
 
     def test_follows_the_redirect_like_apps_script(self):
         server = self.server('redirect')
@@ -925,14 +928,15 @@ class FeedbackTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = tk.Tk()
         self.launcher = g.ReportLauncher(self.root, settings_path=os.path.join(self.tmp.name, 's.json'))
-        self.sent, self.shown = [], []
+        self.sent, self.shown, self.reply_tos = [], [], []
         self.gate = None                                    # 讓假的寄送卡住，測試「寄送中」的畫面
         self.result = (True, '')
 
-        def fake_send(subject, body):
+        def fake_send(subject, body, reply_to=''):
             if self.gate:
                 self.gate.wait(5)
             self.sent.append((subject, body))
+            self.reply_tos.append(reply_to)
             return self.result
 
         for p in (mock.patch.object(g, 'send_feedback', fake_send),
@@ -944,11 +948,12 @@ class FeedbackTest(unittest.TestCase):
         self.addCleanup(gc.collect)
         self.addCleanup(self.root.destroy)
 
-    def dialog(self, title='', content=''):
+    def dialog(self, title='', content='', email=''):
         dialog = g.FeedbackDialog(self.root, self.launcher.palette, self.launcher.font_family, 'v9.9.3-abc1234')
         self.addCleanup(lambda: dialog.winfo_exists() and dialog.destroy())
         dialog.title_entry.insert(0, title)
         dialog.content_text.insert('1.0', content)
+        dialog.email_entry.insert(0, email)
         return dialog
 
     def finish(self, dialog, timeout=5):
@@ -973,6 +978,8 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(subject, '[回報單生成器 v0.5.16-ca25953] 希望新增功能')
         self.assertTrue(body.startswith('請加上九宮格'))
         self.assertIn('v0.5.16-ca25953', body)
+        self.assertIn('聯絡 Email：（未填）', body)                                    # 沒填聯絡 Email
+        self.assertIn('聯絡 Email：me@example.com', g.feedback_message('t', 'c', 'v1', ' me@example.com ')[1])
         self.assertEqual(g.feedback_message('  ', '內容', 'v1')[0], '[回報單生成器 v1] 意見反應')        # 沒填標題用預設
 
     def test_dialog_does_not_show_a_recipient(self):
@@ -988,6 +995,7 @@ class FeedbackTest(unittest.TestCase):
         self.assertNotIn('@', everything)
         self.assertNotIn('收件人', everything)
         self.assertIn('v9.9.3-abc1234', everything)                                 # 但會說明會附上版本
+        self.assertIn('聯絡 Email', everything)                                      # 使用者可以留下自己的聯絡信箱
 
     def test_sending_posts_in_the_background_and_closes_on_success(self):
         dialog = self.dialog('照片太小', '預覽可以再大一點\n謝謝')
@@ -1000,6 +1008,28 @@ class FeedbackTest(unittest.TestCase):
         self.assertIn('v9.9.3-abc1234', body)
         self.assertEqual(self.shown[-1], ('info', '意見反應', '已寄出，謝謝你的意見！'))
         self.assertFalse(dialog.winfo_exists())                                   # 成功後關閉視窗
+
+    def test_contact_email_is_optional_and_goes_into_the_mail_and_reply_to(self):
+        dialog = self.dialog('要回覆', '請回信給我', email=' me@example.com ')
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        self.assertIn('聯絡 Email：me@example.com', self.sent[0][1])
+        self.assertEqual(self.reply_tos, ['me@example.com'])
+        dialog = self.dialog('不用回覆', '匿名意見')                                  # 留空也可以寄
+        self.assertTrue(dialog.send())
+        self.finish(dialog)
+        self.assertIn('聯絡 Email：（未填）', self.sent[1][1])
+        self.assertEqual(self.reply_tos[1], '')
+
+    def test_invalid_contact_email_is_refused(self):
+        for bad in ('abc', 'a@b', '@example.com', 'me@@example.com', 'me @example.com'):
+            dialog = self.dialog('標題', '內容', email=bad)
+            self.assertFalse(dialog.send(), bad)
+            self.assertIn('Email', self.shown[-1][2])
+            self.assertTrue(dialog.winfo_exists())
+        self.assertEqual(self.sent, [])
+        for good in ('me@example.com', 'first.last+tag@sub.example.co.uk'):
+            self.assertTrue(g.EMAIL_PATTERN.match(good), good)
 
     def test_buttons_are_locked_while_sending(self):
         import threading
@@ -1047,7 +1077,7 @@ class FeedbackTest(unittest.TestCase):
         server = FakeFeedbackServer('redirect')
         self.addCleanup(server.close)
         mock.patch.stopall()                                                        # 這個測試用真的 send_feedback（只連本機）
-        dialog = self.dialog('完整流程', '從畫面一路送到假伺服器')
+        dialog = self.dialog('完整流程', '從畫面一路送到假伺服器', email='me@example.com')
         with mock.patch.object(g, 'feedback_endpoint_url', return_value=server.url), \
                 mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', t, m))):
             dialog.send()
@@ -1055,6 +1085,7 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(len(server.received), 1)
         self.assertEqual(server.received[0]['subject'], '[回報單生成器 v9.9.3-abc1234] 完整流程')
         self.assertIn('從畫面一路送到假伺服器', server.received[0]['body'])
+        self.assertEqual(server.received[0]['reply_to'], 'me@example.com')
         self.assertEqual(self.shown[-1][0], 'info')
 
     def test_open_feedback_uses_the_current_version(self):

@@ -3462,15 +3462,19 @@ def feedback_endpoint_url():
     return str(getattr(yscv_feedback_endpoint, 'URL', '') or '').strip()
 
 
-def feedback_message(title, content, version):
-    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」，內文最後也附上版本。"""
+EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def feedback_message(title, content, version, email=''):
+    """意見反應信件的 (主旨, 內文)：主旨是「[回報單生成器 版本] 標題」；內文有聯絡 Email（沒填寫「未填」），最後附上版本。"""
     title = (title or '').strip() or '意見反應'
     subject = f"[{FEEDBACK_SUBJECT_TAG} {version}] {title}"
-    body = f"{(content or '').strip()}\n\n----\n{APP_TITLE}　{version}"
+    body = (f"{(content or '').strip()}\n\n聯絡 Email：{(email or '').strip() or '（未填）'}\n"
+            f"----\n{APP_TITLE}　{version}")
     return subject, body
 
 
-def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT):
+def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT, reply_to=''):
     """把意見 POST（JSON）到 Apps Script 端點，由 Google 端用部署者的帳號寄信（郵件帳號密碼不進程式，
     也不管使用者有沒有郵件程式）。回傳 (成功與否, 失敗原因)。"""
     import urllib.error
@@ -3478,7 +3482,8 @@ def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT):
     url = feedback_endpoint_url() if url is None else url
     if not url:
         return False, "這個版本沒有設定意見反應的寄送功能"
-    payload = json.dumps({'subject': subject, 'body': body, 'app': APP_TITLE}).encode('utf-8')
+    payload = json.dumps({'subject': subject, 'body': body, 'app': APP_TITLE,
+                          'reply_to': (reply_to or '').strip()}).encode('utf-8')
     request = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
     try:
         # Apps Script 會 302 轉址到 googleusercontent 取回結果，urllib 會自動跟隨
@@ -3519,10 +3524,14 @@ class FeedbackDialog(tk.Toplevel):
                                     undo=True, foreground=palette['text'], relief='solid', borderwidth=1,
                                     highlightthickness=0, padx=6, pady=4)
         self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=4)
-        ttk.Label(frame, text=f"寄出時會自動加上版本：{version}", style='Hint.TLabel').grid(
-            row=2, column=1, sticky=tk.W, pady=(4, 0))
+        ttk.Label(frame, text="聯絡 Email:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
+                                                                        padx=(0, 10))
+        self.email_entry = ttk.Entry(frame, width=52)
+        self.email_entry.grid(row=2, column=1, sticky=(tk.W, tk.E))
+        ttk.Label(frame, text=f"聯絡 Email 選填，希望收到回覆時才填，只用來回覆你的意見\n寄出時會自動加上版本：{version}",
+                  style='Hint.TLabel', justify=tk.LEFT).grid(row=3, column=1, sticky=tk.W, pady=(4, 0))
         bar = ttk.Frame(frame)
-        bar.grid(row=3, column=0, columnspan=2, pady=(14, 0))
+        bar.grid(row=4, column=0, columnspan=2, pady=(14, 0))
         self.send_button = ttk.Button(bar, text="寄出(Ctrl+Enter)", style='DialogDefault.TButton', command=self.send)
         self.send_button.pack(side=tk.LEFT, padx=8)
         self.cancel_button = ttk.Button(bar, text="取消", style='Dialog.TButton', command=self.cancel)
@@ -3554,11 +3563,17 @@ class FeedbackDialog(tk.Toplevel):
             messagebox.showerror("意見反應", "請先填寫內容")
             self.content_text.focus_set()
             return False
-        subject, body = feedback_message(self.title_entry.get(), content, self.version)
+        email = self.email_entry.get().strip()
+        if email and not EMAIL_PATTERN.match(email):
+            messagebox.showerror("意見反應", "聯絡 Email 的格式看起來不正確，請檢查。\n（不需要回覆的話可以留空）")
+            self.email_entry.focus_set()
+            return False
+        subject, body = feedback_message(self.title_entry.get(), content, self.version, email)
         self.sending = True
         self.send_button.config(state=tk.DISABLED, text="寄送中…")
         self.cancel_button.config(state=tk.DISABLED)
-        threading.Thread(target=lambda: self._results.put(send_feedback(subject, body)), daemon=True).start()
+        threading.Thread(target=lambda: self._results.put(send_feedback(subject, body, reply_to=email)),
+                         daemon=True).start()
         self.after(100, self._poll)
         return True
 

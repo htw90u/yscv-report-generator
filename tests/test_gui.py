@@ -2639,7 +2639,16 @@ class GuiTest(unittest.TestCase):
 
     def test_window_title(self):
         self.assertEqual(g.APP_TITLE, '玉山保育巡查回報單生成器')
-        self.assertEqual(self.root.title(), '玉山保育巡查回報單生成器')
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}　{g.version_label()}')
+        self.assertTrue(self.root.title().startswith(g.APP_TITLE + '　v' + g.VERSION))
+
+    def test_version_label_shows_version_and_git_revision(self):
+        with mock.patch.object(g, 'git_revision', return_value='abc1234'):
+            self.assertEqual(g.version_label(), f'v{g.VERSION} (abc1234)')
+        with mock.patch.object(g, 'git_revision', return_value=''):    # 不是 git 倉庫：只顯示版本
+            self.assertEqual(g.version_label(), f'v{g.VERSION}')
+        self.assertEqual(g.git_revision(self.tmp.name), '')            # 暫存資料夾不是 git 倉庫
+        self.assertRegex(g.git_revision(), r'^[0-9a-f]{7,}$')            # 本專案是 git 倉庫
 
     def test_date_entries_are_centered(self):
         for name in ('year', 'month', 'day', 'start_year', 'start_month', 'start_day',

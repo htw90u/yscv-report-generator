@@ -33,6 +33,7 @@ from docx.shared import Inches, Pt
 from PIL import Image, ImageOps, ImageTk
 
 APP_TITLE = '玉山保育巡查回報單生成器'
+VERSION = '0.5'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '保育巡查回報單.docx')
@@ -842,6 +843,23 @@ def open_file(path):
         logging.error(f"無法自動開啟 {path}: {e}")
 
 
+def git_revision(directory=None):
+    """程式所在 git 倉庫目前的簡短 commit 編號；不是 git 倉庫、或沒有安裝 git 時回傳空字串。"""
+    try:
+        flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        out = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=directory or BASE_DIR,
+                             capture_output=True, text=True, timeout=3, creationflags=flags)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return out.stdout.strip() if out.returncode == 0 else ''
+
+
+def version_label():
+    """顯示在視窗標題的版本：「v0.5 (b8a61a0)」；沒有 git 時只有「v0.5」。"""
+    revision = git_revision()
+    return f'v{VERSION} ({revision})' if revision else f'v{VERSION}'
+
+
 def current_date():
     """今天的日期（獨立成函式，方便測試時替換）。"""
     return datetime.now()
@@ -1462,7 +1480,7 @@ class ReportGeneratorGUI:
         self._style_dialog_default_button()
         self.autosave_path = autosave_path
         self.autosave_interval_ms = autosave_interval_ms
-        self.root.title(APP_TITLE)
+        self.root.title(f'{APP_TITLE}　{version_label()}')
         width = min(WINDOW_WIDTH, max(900, self.root.winfo_screenwidth() - 40))
         self.root.geometry(f"{width}x820")
 

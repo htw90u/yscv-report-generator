@@ -1,0 +1,577 @@
+"""塔塔加保育宣導回報單、生態廁所回報單：Word 填寫與畫面流程測試。執行：python -m unittest discover -s tests"""
+import gc
+import json
+import os
+import tempfile
+import time
+import tkinter as tk
+import unittest
+from tkinter import filedialog
+from unittest import mock
+
+from PIL import Image
+from docx import Document
+from docx.oxml.ns import qn
+
+from _common import TATAKA_TEMPLATE, ECO_TEMPLATE
+import yscv_report_generator as g
+import yscv_reports as r
+
+messagebox = g.messagebox
+
+
+def all_text(doc):
+    parts = [p.text for p in doc.paragraphs]
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts.append(cell.text)
+    return '\n'.join(parts)
+
+
+def cell_text(table, row, col):
+    return r._cell(table, row, col).text
+
+
+def checked_symbols(paragraph_el):
+    """段落裡所有方框符號的狀態，依序：True＝打勾。"""
+    return [sym.get(qn('w:char')) == r.CHECKED_SYMBOL for sym in paragraph_el.iter(qn('w:sym'))]
+
+
+TATAKA_DATA = dict(
+    year='115', month='10', day='15', volunteer='王小明', time_text='09:00～16:00', weather='陰',
+    guide_booked='1', guide_walkin='', center_on='', center_text='櫃檯諮詢', other_on='', other_text='',
+    incident='有', incident_text='遊客扭傷腳踝', facility='● 木棧板鬆動\n● 衛生紙不足', visitors='指標不清楚',
+    reflection='收穫很多', questions='1. 問：海拔多高？答：約2600公尺。')
+
+ECO_DATA = dict(
+    year='115', month='10', day='15', personnel='王小明', start_year='115', start_month='10', start_day='15',
+    end_year='115', end_month='10', end_day='17', location='玉山主峰線', nature='● 玉山杜鵑', environment='帶下山垃圾 2 袋',
+    reflection='狀況良好')
+for _prefix, _ in r.TOILETS:
+    for _spec, _value in zip(r.EXCRETA_FIELDS + r.COMPOST_FIELDS,
+                             ['12.5', '晴', '有', '1.2', '3', '4', f'{_prefix}備註一', '正常', '55%', '18℃', '0.5', '是',
+                              f'{_prefix}備註二']):
+        ECO_DATA[f'{_prefix}_{_spec[0]}'] = _value
+
+
+class ReportBuildTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def photos(self, count, size=(400, 200)):
+        paths = []
+        for i in range(count):
+            p = os.path.join(self.tmp.name, f'p{i}.png')
+            Image.new('RGB', size if i % 2 == 0 else size[::-1], 'red').save(p)
+            paths.append(p)
+        return paths
+
+    def tataka(self, data=None, count=0, captions=None):
+        out = os.path.join(self.tmp.name, 'tataka.docx')
+        paths = self.photos(count)
+        caps = {r.TATAKA_PHOTO_CATEGORY: captions or {p: f'名稱{i}\n地點{i}' for i, p in enumerate(paths)}}
+        warnings = r.build_tataka_report(TATAKA_TEMPLATE, data or TATAKA_DATA, {r.TATAKA_PHOTO_CATEGORY: paths},
+                                         caps, out)
+        return Document(out), warnings
+
+    def eco(self, data=None, count=0):
+        out = os.path.join(self.tmp.name, 'eco.docx')
+        paths = self.photos(count)
+        caps = {r.ECO_PHOTO_CATEGORY: {p: f'照片說明{i}' for i, p in enumerate(paths)}}
+        warnings = r.build_ecotoilet_report(ECO_TEMPLATE, data or ECO_DATA, {r.ECO_PHOTO_CATEGORY: paths}, caps, out)
+        return Document(out), warnings
+
+    # ---- 塔塔加
+    def test_tataka_header_cells_and_weather_box(self):
+        doc, warnings = self.tataka()
+        self.assertEqual(warnings, [])
+        table = doc.tables[0]
+        self.assertEqual(cell_text(table, 1, 0), '王小明')
+        self.assertEqual(cell_text(table, 1, 1).replace('\n', ''), '115年10月15日')
+        self.assertEqual(cell_text(table, 1, 2), '09:00～16:00')
+        weather = r._cell(table, 1, 3)._tc.findall(qn('w:p'))[0]
+        self.assertEqual(checked_symbols(weather), [False, True, False])   # 晴 陰 雨：只有「陰」打勾
+        self.assertEqual(r._cell(table, 1, 3).text, '晴陰雨')
+
+    def test_tataka_service_items_and_incident(self):
+        doc, _ = self.tataka()
+        table = doc.tables[0]
+        paragraphs = r._cell(table, 2, 1)._tc.findall(qn('w:p'))
+        self.assertEqual(checked_symbols(paragraphs[0]), [True, False])    # 預約打勾、散客沒有
+        self.assertEqual(checked_symbols(paragraphs[2]), [True])           # 有填遊客中心的文字，自動打勾
+        self.assertIn('櫃檯諮詢', ''.join(paragraphs[2].itertext()))
+        self.assertEqual(checked_symbols(paragraphs[3]), [False])          # 其他：沒填
+        incident = r._cell(table, 3, 1)._tc.findall(qn('w:p'))[0]
+        self.assertEqual(checked_symbols(incident), [False, True])         # 無／有：選「有」
+        self.assertIn('遊客扭傷腳踝', ''.join(incident.itertext()))
+
+    def test_tataka_no_incident_checks_none_box(self):
+        doc, _ = self.tataka(dict(TATAKA_DATA, incident='無', incident_text=''))
+        incident = r._cell(doc.tables[0], 3, 1)._tc.findall(qn('w:p'))[0]
+        self.assertEqual(checked_symbols(incident), [True, False])
+
+    def test_tataka_text_rows_are_filled_and_not_clipped(self):
+        doc, _ = self.tataka()
+        table = doc.tables[0]
+        self.assertIn('木棧板鬆動', cell_text(table, 4, 1))
+        self.assertIn('衛生紙不足', cell_text(table, 4, 1))
+        self.assertEqual(cell_text(table, 5, 1), '指標不清楚')
+        self.assertEqual(cell_text(table, 6, 1), '收穫很多')
+        for tr in table._tbl.tr_lst[1:5]:
+            height = tr.trPr.find(qn('w:trHeight'))
+            self.assertNotEqual(height.get(qn('w:hRule')), 'exact')        # 固定高度會切掉長文字
+
+    def test_tataka_question_sample_line_removed(self):
+        doc, _ = self.tataka()
+        text = cell_text(doc.tables[0], 7, 1)
+        self.assertNotIn('因為', text)
+        self.assertIn('海拔多高', text)
+        self.assertIn('將服勤期間相關疑問', text)             # 說明文字保留
+        doc, _ = self.tataka(dict(TATAKA_DATA, questions=''))
+        self.assertNotIn('因為', cell_text(doc.tables[0], 7, 1))   # 沒填也要拿掉範例
+
+    def test_tataka_one_row_per_photo_with_name_and_place(self):
+        doc, _ = self.tataka(count=3)
+        table = doc.tables[0]
+        self.assertEqual(len(table.rows), 9 + 3)                  # 範本 10 列：最後的空白列換成 3 張照片
+        self.assertEqual(len(doc.inline_shapes), 3)
+        self.assertEqual(cell_text(table, 9, 0), '名稱0\n地點0')
+        self.assertEqual(cell_text(table, 11, 0), '名稱2\n地點2')
+        for shape in doc.inline_shapes:                           # 照片放得進儲存格，不超過高度上限
+            self.assertLessEqual(shape.height / 914400, r.PHOTO_MAX_HEIGHT_IN + 0.01)
+            self.assertLess(shape.width / 914400, 4.5)
+
+    def test_tataka_name_only_caption_and_no_photos(self):
+        paths = self.photos(1)
+        doc, _ = self.tataka(count=1, captions={paths[0]: '只有名稱'})
+        self.assertEqual(cell_text(doc.tables[0], 9, 0), '只有名稱')
+        doc, _ = self.tataka(count=0)
+        self.assertEqual(len(doc.tables[0].rows), 10)             # 沒照片：維持範本的空白列
+        self.assertEqual(len(doc.inline_shapes), 0)
+
+    def test_tataka_bad_template_is_reported(self):
+        out = os.path.join(self.tmp.name, 'bad.docx')
+        with self.assertRaises(ValueError):
+            r.build_tataka_report(ECO_TEMPLATE, TATAKA_DATA, {}, {}, out)
+
+    # ---- 生態廁所
+    def test_eco_header_and_dates(self):
+        doc, warnings = self.eco()
+        self.assertEqual(warnings, [])
+        header = doc.tables[0]
+        self.assertIn('115 年 10 月 15 日', cell_text(header, 1, 0))
+        self.assertEqual(cell_text(header, 2, 1), '王小明')
+        self.assertEqual(cell_text(header, 3, 1), '115年10月15日　至　115年10月17日')
+        self.assertEqual(cell_text(header, 4, 1), '玉山主峰線')
+
+    def test_eco_records_go_into_the_right_toilet_row(self):
+        doc, _ = self.eco()
+        excreta, compost = doc.tables[1], doc.tables[2]
+        for row, prefix in ((3, 'm'), (7, 'b')):
+            values = [c.text for c in excreta.rows[row].cells]
+            self.assertEqual(values, ['12.5', '晴', '有', '1.2', '3', '4', f'{prefix}備註一'])
+            values = [c.text for c in compost.rows[row].cells]
+            self.assertEqual(values, ['正常', '55%', '18℃', '0.5', '是', f'{prefix}備註二'])
+        self.assertEqual(cell_text(excreta, 2, 0), 'kg')         # 單位列維持範本原樣
+
+    def test_eco_sections_fill_after_headings(self):
+        doc, _ = self.eco()
+        texts = [p.text.strip() for p in doc.paragraphs]
+        for heading, content in (('二、自然資源狀況', '● 玉山杜鵑'), ('三、環境清理及遊客宣導情形', '帶下山垃圾 2 袋'),
+                                 ('四、協勤心得與建議', '狀況良好')):
+            index = next(i for i, t in enumerate(texts) if t.startswith(heading))
+            following = [t for t in texts[index + 1:index + 4] if t]
+            self.assertIn(content, following, heading)
+        # 二、三的標題有兩行：內容放在第二行之後，不能插在標題中間
+        nature = next(i for i, t in enumerate(texts) if t.startswith('二、自然資源狀況'))
+        self.assertTrue(texts[nature + 1].endswith('等）'))
+        self.assertEqual(texts[nature + 2], '● 玉山杜鵑')
+
+    def test_eco_headings_stay_with_tables(self):
+        doc, _ = self.eco()
+        for p in doc.paragraphs:
+            if p.text.strip().startswith(('（一）', '（二）', '（三）')):
+                self.assertTrue(p.paragraph_format.keep_with_next, p.text)
+
+    def test_eco_photo_grid_grows_and_shrinks(self):
+        for count, rows in ((0, 2), (1, 2), (4, 4), (5, 6), (8, 8)):
+            doc, _ = self.eco(count=count)
+            grid = doc.tables[3]
+            self.assertEqual(len(grid.rows), rows, count)
+            self.assertEqual(len(doc.inline_shapes), count)
+            self.assertNotIn('照片圖檔', all_text(doc))
+            self.assertNotIn('照片文字', all_text(doc))
+        doc, _ = self.eco(count=3)
+        grid = doc.tables[3]
+        self.assertEqual([cell_text(grid, 1, 0), cell_text(grid, 1, 1)], ['照片說明0', '照片說明1'])
+        self.assertEqual([cell_text(grid, 3, 0), cell_text(grid, 3, 1)], ['照片說明2', ''])   # 單數張：最後一格空白
+
+    def test_eco_photos_fit_the_cell(self):
+        doc, _ = self.eco(count=4)
+        for shape in doc.inline_shapes:
+            self.assertLessEqual(shape.width / 914400, 3.4)
+            self.assertLessEqual(shape.height / 914400, r.PHOTO_MAX_HEIGHT_IN + 0.01)
+
+    def test_eco_bad_template_is_reported(self):
+        out = os.path.join(self.tmp.name, 'bad.docx')
+        with self.assertRaises(ValueError):
+            r.build_ecotoilet_report(TATAKA_TEMPLATE, ECO_DATA, {}, {}, out)
+
+
+class FormGuiTest(unittest.TestCase):
+    app_class = None
+
+    def setUp(self):
+        if self.app_class is None:
+            self.skipTest('基底類別')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = tk.Tk()
+        self.autosave = os.path.join(self.tmp.name, 'autosave.json')
+        self.app = self.app_class(self.root, autosave_path=self.autosave, restore_on_start=False,
+                                  settings_path=os.path.join(self.tmp.name, 'settings.json'))
+        self.shown, self.pdf_calls, self.confirm_calls = [], [], []
+
+        def fake_confirm(title, message, **kwargs):
+            self.confirm_calls.append(message)
+            return True
+
+        def fake_pdf(docx, pdf):
+            self.pdf_calls.append((docx, pdf))
+            with open(pdf, 'wb') as f:
+                f.write(b'%PDF-fake')
+
+        for p in (mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', m))),
+                  mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', m))),
+                  mock.patch.object(g, 'export_pdf', fake_pdf),
+                  mock.patch.object(g, 'open_file', lambda path: None),
+                  mock.patch.object(messagebox, 'askyesno', fake_confirm)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        if self.app_class is None:
+            return
+        self.root.destroy()
+        self.app = self.root = None
+        gc.collect()
+        self.tmp.cleanup()
+
+    def make_photos(self, names=('a.jpg', 'b.jpg')):
+        category = self.app.PHOTO_CATEGORIES[0]
+        paths = []
+        for n in names:
+            p = os.path.join(self.tmp.name, n)
+            Image.new('RGB', (400, 200), 'red').save(p)
+            paths.append(p)
+        self.app._add_photo_files(category, paths)
+        return category, self.app.listboxes[category], paths
+
+    def wait_done(self, timeout=20):
+        t0 = time.time()
+        while time.time() - t0 < timeout and str(self.app.generate_btn['state']) == 'disabled':
+            self.root.update()
+            time.sleep(0.05)
+        self.root.update()
+
+    def generate(self):
+        out = os.path.join(self.tmp.name, 'out.docx')
+        captured = {}
+
+        def ask(**kw):
+            captured.update(kw)
+            return out
+
+        with mock.patch.object(filedialog, 'asksaveasfilename', ask):
+            self.app.generate_report()
+            self.wait_done()
+        return out, captured
+
+    def fill(self, name, value):
+        g.widget_set(getattr(self.app, name), value)
+
+    def set_text(self, key, value):
+        self.app.text_fields[key].delete('1.0', tk.END)
+        self.app.text_fields[key].insert('1.0', value)
+
+
+class TatakaGuiTest(FormGuiTest):
+    app_class = r.TatakaReportGUI
+
+    def fill_all(self):
+        values = dict(year='115', month='10', day='15', volunteer='王小明', time_text='09:00～16:00', weather='晴',
+                      guide_booked='1', center_text='櫃檯諮詢', incident='無')
+        for name, value in values.items():
+            self.fill(name, value)
+        for key in ('facility', 'visitors', 'reflection', 'questions'):
+            self.set_text(key, f'{key}內容')
+
+    def test_window_title_names_the_report(self):
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－塔塔加保育宣導回報單　{g.version_label()}')
+
+    def test_tabs_and_default_date(self):
+        titles = [self.app.notebook.tab(t, 'text').replace(' ' + g.MARK_MISSING, '') for t in self.app.notebook.tabs()]
+        self.assertEqual(titles, ['基本資料', '服務項目', '設施與遊客意見', '心得與疑問解答', '相片記錄'])
+        self.assertEqual(self.app.year.get(), g.roc_date_parts()[0])      # 值勤日期預設今天
+
+    def test_blank_fields_and_tab_marks(self):
+        blanks = self.app.find_blank_fields({})
+        self.assertEqual(list(blanks), ['基本資料', '服務項目', '設施與遊客意見', '心得與疑問解答', '相片記錄'])
+        self.assertIn('志工姓名', blanks['基本資料'])
+        self.assertIn('服務項目（至少選一項）', blanks['服務項目'])
+        self.fill_all()
+        self.assertEqual(self.app.find_blank_fields({}), {'相片記錄': ['相片記錄（尚未加入照片）']})
+        self.make_photos(('a.jpg',))
+        self.assertEqual(self.app.find_blank_fields({}), {})
+        self.assertIn('相片記錄', self.app._tabs_with_blanks())          # 照片還沒填資料：分頁仍標 ●
+        self.fill('incident', '有')
+        self.assertIn('偶發事件的說明', self.app.find_blank_fields({})['服務項目'])
+
+    def test_two_caption_fields_are_joined_and_split(self):
+        category, table, (a, b) = self.make_photos()
+        table.set_selection([0])
+        self.app._on_photo_select(category, table)
+        self.app.caption_vars[0].set(' 塔塔加遊客中心 ')
+        self.app.caption_vars[1].set('入口大廳')
+        self.app._commit_caption()
+        self.assertEqual(self.app.photo_captions[category][a], '塔塔加遊客中心\n入口大廳')
+        self.assertEqual(table.item('0', 'values')[1], '塔塔加遊客中心／入口大廳')
+        table.set_selection([1])
+        self.app._on_photo_select(category, table)
+        self.assertEqual([v.get() for v in self.app.caption_vars], ['', ''])
+        table.set_selection([0])
+        self.app._on_photo_select(category, table)
+        self.assertEqual([v.get() for v in self.app.caption_vars], ['塔塔加遊客中心', '入口大廳'])
+        self.app.caption_vars[0].set('')
+        self.app.caption_vars[1].set('')
+        self.app._commit_caption()
+        self.assertNotIn(a, self.app.photo_captions[category])         # 兩欄都空＝沒填
+
+    def test_enter_moves_to_next_field_then_next_photo(self):
+        category, table, (a, b) = self.make_photos()
+        self.app._select_photo(category, 0)
+        self.app.caption_vars[0].set('甲')
+        self.assertEqual(self.app._caption_return(None, 0), 'break')
+        self.assertEqual(self.app.photo_captions[category].get(a), None)   # 還在第一張，還沒儲存
+        self.app.caption_vars[1].set('地點')
+        self.app._caption_return(None, 1)
+        self.assertEqual(self.app.photo_captions[category][a], '甲\n地點')
+        self.assertEqual(list(table.selected_indexes()), [1])           # 跳到下一張
+
+    def test_collect_data_validates_date(self):
+        self.fill_all()
+        self.fill('month', '2')
+        self.fill('day', '30')
+        data, error = self.app.collect_data()
+        self.assertIsNone(data)
+        self.assertIn('值勤日期', error)
+
+    def test_draft_roundtrip_keeps_checkboxes_and_choices(self):
+        self.fill_all()
+        self.fill('guide_walkin', '1')
+        category, table, (a, b) = self.make_photos()
+        self.app.photo_captions[category][a] = '名稱\n地點'
+        draft = json.loads(json.dumps(self.app.build_draft()))
+        self.assertEqual(draft['report'], 'tataka')
+        self.assertEqual(draft['fields']['guide_booked'], '1')
+        self.app._clear_widgets()
+        self.assertEqual(self.app.guide_booked.get(), '')
+        self.assertEqual(self.app.weather.get(), '')
+        self.assertEqual(self.app.apply_draft(draft), [])
+        self.assertEqual((self.app.guide_booked.get(), self.app.guide_walkin.get(), self.app.weather.get(),
+                          self.app.incident.get()), ('1', '1', '晴', '無'))
+        self.assertEqual(self.app.photo_captions[category][a], '名稱\n地點')
+        self.assertEqual(self.app.text_fields['facility'].get('1.0', tk.END).strip(), 'facility內容')
+
+    def test_checkbox_change_marks_the_tab_and_dirty(self):
+        before = self.app._signature()
+        self.assertFalse(self.app.is_dirty())
+        self.app.guide_booked.invoke()
+        self.assertEqual(self.app.guide_booked.get(), '1')
+        self.assertNotEqual(self.app._signature(), before)
+        self.assertTrue(self.app.is_dirty())
+
+    def test_draft_of_another_report_is_rejected(self):
+        patrol_draft = {'version': g.DRAFT_VERSION, 'fields': {}}              # 舊草稿沒有種類欄位＝保育巡查回報單
+        with self.assertRaises(ValueError) as caught:
+            self.app.apply_draft(patrol_draft)
+        self.assertIn('保育巡查回報單', str(caught.exception))
+        with self.assertRaises(ValueError):
+            self.app.apply_draft(dict(patrol_draft, report='ecotoilet'))
+        self.app.apply_draft(dict(patrol_draft, report='tataka'))
+
+    def test_file_names(self):
+        self.fill_all()
+        data, _ = self.app.collect_data()
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
+        name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王/小明'},
+                                   g.datetime(2026, 10, 15, 9, 30))
+        self.assertEqual(name, '1151015_塔塔加保育宣導回報單草稿_王小明_20261015_0930')
+        self.assertEqual(self.app.draft_name({}, g.datetime(2026, 10, 15, 9, 30)),
+                         '塔塔加保育宣導回報單草稿_20261015_0930')
+
+    def test_generate_report_end_to_end(self):
+        self.fill_all()
+        category, table, (a, b) = self.make_photos()
+        self.app.photo_captions[category] = {a: '甲\n地點甲', b: '乙'}
+        out, captured = self.generate()
+        self.assertEqual(captured['initialfile'], '1151015_塔塔加保育宣導回報單_王小明.docx')
+        self.assertEqual(self.confirm_calls, [])                        # 都填了：不會問「有欄位未填」
+        self.assertEqual(self.shown, [])
+        self.assertEqual(self.pdf_calls, [(out, out[:-5] + '.pdf')])
+        doc = Document(out)
+        self.assertEqual(len(doc.inline_shapes), 2)
+        self.assertEqual(cell_text(doc.tables[0], 9, 0), '甲\n地點甲')
+
+    def test_generate_asks_when_something_is_blank(self):
+        self.fill('volunteer', '王小明')
+        self.generate()
+        self.assertEqual(len(self.confirm_calls), 1)
+        self.assertIn('服務項目', self.confirm_calls[0])
+        self.assertNotIn('志工姓名', self.confirm_calls[0])      # 姓名已經填了
+
+
+class EcoToiletGuiTest(FormGuiTest):
+    app_class = r.EcoToiletReportGUI
+
+    def fill_all(self):
+        for name, value in dict(year='115', month='10', day='15', personnel='王小明', start_year='115',
+                                start_month='10', start_day='15', end_year='115', end_month='10', end_day='17',
+                                location='玉山主峰線').items():
+            self.fill(name, value)
+        for key in r.TOILET_FIELD_NAMES:
+            self.fill(key, ECO_DATA[key])
+        for key in ('nature', 'environment', 'reflection'):
+            self.set_text(key, f'{key}內容')
+
+    def test_window_title_and_tabs(self):
+        self.assertEqual(self.root.title(), f'{g.APP_TITLE}－生態廁所回報單　{g.version_label()}')
+        titles = [self.app.notebook.tab(t, 'text').replace(' ' + g.MARK_MISSING, '') for t in self.app.notebook.tabs()]
+        self.assertEqual(titles, ['基本資料', '孟祿亭', '白木林', '自然資源/環境清理', '協勤心得與建議', '監測及維護照片'])
+
+    def test_blank_fields_are_grouped_by_toilet_and_remarks_are_optional(self):
+        blanks = self.app.find_blank_fields({})
+        self.assertIn('本次收集桶總量（kg）', blanks['孟祿亭'])
+        self.assertIn('本次收集桶總量（kg）', blanks['白木林'])
+        self.assertNotIn('備註', blanks['孟祿亭'])
+        self.fill_all()
+        self.make_photos(('a.jpg',))
+        self.app.photo_captions[self.app.PHOTO_CATEGORIES[0]] = {self.app.photo_files[self.app.PHOTO_CATEGORIES[0]][0]: 'x'}
+        self.assertEqual(self.app.find_blank_fields({}), {})
+        self.fill('b_temp', '')
+        self.assertEqual(self.app.find_blank_fields({}), {'白木林': ['堆積溫度（範本：常溫）']})
+        self.assertIn('白木林', self.app._tabs_with_blanks())
+
+    def test_collect_data_includes_toilet_fields_and_validates_dates(self):
+        self.fill_all()
+        data, error = self.app.collect_data()
+        self.assertIsNone(error)
+        self.assertEqual(data['m_total'], '12.5')
+        self.assertEqual(data['b_remark2'], 'b備註二')
+        self.assertEqual(data['nature'], 'nature內容')
+        self.fill('end_day', '1')
+        data, error = self.app.collect_data()
+        self.assertIn('起日', error)
+
+    def test_draft_roundtrip_and_report_kind(self):
+        self.fill_all()
+        draft = json.loads(json.dumps(self.app.build_draft()))
+        self.assertEqual(draft['report'], 'ecotoilet')
+        self.app._clear_widgets()
+        self.assertEqual(self.app.m_weather.get(), '')
+        self.app.apply_draft(draft)
+        self.assertEqual((self.app.m_weather.get(), self.app.b_turned.get(), self.app.m_total.get()),
+                         ('晴', '是', '12.5'))
+        with self.assertRaises(ValueError):
+            self.app.apply_draft(dict(draft, report='tataka'))
+
+    def test_generate_report_end_to_end(self):
+        self.fill_all()
+        category, table, (a, b, c) = self.make_photos(('a.jpg', 'b.jpg', 'c.jpg'))
+        self.app.photo_captions[category] = {a: '甲', b: '乙', c: '丙'}
+        out, captured = self.generate()
+        self.assertEqual(captured['initialfile'], '1151015-17_玉山主峰線生態廁所回報單.docx')
+        self.assertEqual(self.confirm_calls, [])
+        self.assertEqual(self.shown, [])
+        doc = Document(out)
+        self.assertEqual(len(doc.inline_shapes), 3)
+        self.assertEqual(cell_text(doc.tables[1], 3, 0), '12.5')
+        self.assertEqual(cell_text(doc.tables[3], 1, 1), '乙')
+
+    def test_draft_file_name(self):
+        name = self.app.draft_name({'start_year': '115', 'start_month': '10', 'start_day': '15', 'end_year': '115',
+                                    'end_month': '10', 'end_day': '15', 'location': '玉山主峰線'},
+                                   g.datetime(2026, 10, 15, 9, 30))
+        self.assertEqual(name, '1151015_玉山主峰線生態廁所回報單草稿_20261015_0930')
+
+
+class LauncherTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = tk.Tk()
+
+    def tearDown(self):
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+        gc.collect()
+
+    def launcher(self):
+        return g.ReportLauncher(self.root, settings_path=os.path.join(self.tmp.name, 's.json'))
+
+    def test_lists_the_three_reports_in_order(self):
+        launcher = self.launcher()
+        self.assertEqual(list(launcher.buttons), ['patrol', 'tataka', 'ecotoilet'])
+        self.assertEqual([c[1] for c in g.REPORT_CHOICES], ['保育巡查回報單', '塔塔加保育宣導回報單', '生態廁所回報單'])
+        self.assertIn(g.version_label(), self.root.title())
+        self.assertTrue(self.root.title().startswith(g.APP_TITLE))
+
+    def test_clicking_a_button_chooses_and_closes(self):
+        launcher = self.launcher()
+        launcher.buttons['tataka'].invoke()
+        self.assertEqual(launcher.choice, 'tataka')
+        with self.assertRaises(tk.TclError):                      # 選完就關掉選單，換成回報單視窗
+            self.root.winfo_exists()
+
+    def test_number_keys_choose(self):
+        launcher = self.launcher()
+        self.root.update()
+        self.root.focus_force()
+        self.root.update()
+        self.root.event_generate('<Key-3>')
+        self.root.update()
+        self.assertEqual(launcher.choice, 'ecotoilet')
+
+    def test_escape_closes_without_choice(self):
+        launcher = self.launcher()
+        self.root.update()
+        self.root.event_generate('<Escape>')
+        self.root.update()
+        self.assertIsNone(launcher.choice)
+
+    def test_create_app_builds_each_report(self):
+        self.root.destroy()
+        for report_id, cls_name in (('patrol', 'ReportGeneratorGUI'), ('tataka', 'TatakaReportGUI'),
+                                    ('ecotoilet', 'EcoToiletReportGUI')):
+            root = tk.Tk()
+            try:
+                app = g.create_app(report_id, root, autosave_path=os.path.join(self.tmp.name, 'a.json'),
+                                   restore_on_start=False, settings_path=os.path.join(self.tmp.name, 's.json'))
+                self.assertEqual(type(app).__name__, cls_name)
+                self.assertEqual(app.REPORT_ID, report_id)
+                self.assertTrue(os.path.exists(app.template_path), app.template_path)
+            finally:
+                root.destroy()
+                gc.collect()
+        self.root = tk.Tk()
+
+    def test_each_report_has_its_own_autosave_file(self):
+        names = {cls.DEFAULT_AUTOSAVE_PATH for cls in (g.ReportGeneratorGUI, r.TatakaReportGUI, r.EcoToiletReportGUI)}
+        self.assertEqual(len(names), 3)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -130,6 +130,7 @@ PHOTO_SHORT_NAMES = {
     '道路、步道狀況及維護情形': '道路/步道', '設施狀況及維護情形': '設施', '自然資源狀況': '自然資源',
     '環境清理情形': '環境清理', '遊客宣導與違法情形': '遊客', '其他': '其他',
 }
+REPORT_NAMES = {'patrol': '保育巡查回報單', 'tataka': '塔塔加保育宣導回報單', 'ecotoilet': '生態廁所回報單'}
 TAB_BASIC = "基本資料"
 TAB_PHOTOS = "服勤照片"
 TAB_ROAD = "道路/步道"
@@ -1442,6 +1443,16 @@ def load_private_fonts():
     return loaded
 
 
+def load_theme_name(settings_path):
+    """讀取記住的外觀主題名稱；沒有設定或名稱無效就用預設主題。"""
+    try:
+        with open(settings_path, encoding='utf-8') as f:
+            name = json.load(f).get('theme')
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_THEME
+    return name if name in THEMES else DEFAULT_THEME
+
+
 def pick_font_family(root):
     """有載入到指定字型就用它，否則退回系統字型。"""
     load_private_fonts()
@@ -1466,9 +1477,57 @@ def scale_gui_fonts(root, delta, family=None, weight=None):
         if weight:
             font.configure(weight=weight)
 
+def widget_set(widget, value):
+    """設定欄位內容：輸入框、唯讀下拉選單、核取方塊都適用。"""
+    if isinstance(widget, CheckField):
+        widget.set_value(value)
+    elif isinstance(widget, ttk.Combobox):
+        widget.set(value)
+    else:
+        widget.delete(0, tk.END)
+        widget.insert(0, value)
+
+
+class CheckField(ttk.Checkbutton):
+    """核取方塊，介面和輸入框一樣有 get()：打勾是 '1'，沒打勾是 ''（草稿與未填檢查可以共用）。"""
+
+    def __init__(self, master, text, **kwargs):
+        self.var = tk.BooleanVar(master=master)
+        super().__init__(master, text=text, variable=self.var, **kwargs)
+
+    def get(self):
+        return '1' if self.var.get() else ''
+
+    def set_value(self, value):
+        self.var.set(str(value) in ('1', 'True', 'true'))
+
+    def on_change(self, callback):
+        self.configure(command=callback)
+
+
 class ReportGeneratorGUI:
-    def __init__(self, root, autosave_path=DEFAULT_AUTOSAVE_PATH, restore_on_start=True,
-                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=TEMPLATE_PATH,
+    """保育巡查回報單的畫面。其他回報單（塔塔加、生態廁所）繼承這個類別，只覆寫下面的類別屬性與
+    build_tabs / collect_data / blank_fields / make_report 等方法，照片、草稿、自動存檔等功能共用。"""
+
+    REPORT_ID = 'patrol'              # 草稿裡記錄是哪一種回報單，避免載入到別種回報單
+    REPORT_NAME = '保育巡查回報單'
+    DEFAULT_TEMPLATE_PATH = TEMPLATE_PATH
+    DEFAULT_AUTOSAVE_PATH = DEFAULT_AUTOSAVE_PATH
+    PHOTO_CATEGORIES = PHOTO_CATEGORIES
+    PHOTO_SHORT_NAMES = PHOTO_SHORT_NAMES
+    LEGACY_PHOTO_CATEGORIES = LEGACY_PHOTO_CATEGORIES
+    PHOTOS_TAB = TAB_PHOTOS
+    PHOTO_HEADING = "九、服勤照片"
+    PHOTO_PANEL_MIN_WIDTH = 0         # 照片表格區的最小寬度（只有一個分類時，小分頁列太窄，要另外撐寬）
+    CAPTION_LABELS = ('說明：',)       # 每張照片要填幾個欄位（多個欄位的內容以換行串在一起存成說明）
+    ENTRY_FIELDS = ENTRY_FIELDS
+    REPORT_DATE_FIELDS = REPORT_DATE_FIELDS
+    FIELD_TAB = FIELD_TAB
+    FIELD_NAMES = FIELD_NAMES
+    TAB_ORDER = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
+
+    def __init__(self, root, autosave_path=None, restore_on_start=True,
+                 autosave_interval_ms=AUTOSAVE_INTERVAL_MS, template_path=None,
                  settings_path=DEFAULT_SETTINGS_PATH):
         self.root = root
         self.settings_path = settings_path
@@ -1478,14 +1537,14 @@ class ReportGeneratorGUI:
         self.palette = THEMES[self.theme_name]
         self._setup_style()
         self._style_dialog_default_button()
-        self.autosave_path = autosave_path
+        self.autosave_path = autosave_path or self.DEFAULT_AUTOSAVE_PATH
         self.autosave_interval_ms = autosave_interval_ms
-        self.root.title(f'{APP_TITLE}　{version_label()}')
+        self.root.title(self.window_title())
         width = min(WINDOW_WIDTH, max(900, self.root.winfo_screenwidth() - 40))
         self.root.geometry(f"{width}x820")
 
-        self.template_path = template_path
-        self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
+        self.template_path = template_path or self.DEFAULT_TEMPLATE_PATH
+        self.photo_files = {c: [] for c in self.PHOTO_CATEGORIES}  # 依 Word 順序
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
         self._size_cache = {}  # (路徑, 修改時間) -> (寬, 高)，表格顯示橫／直用
         self.photo_crops = {c: {} for c in self.photo_files}  # category -> {path: (左, 上, 右, 下) 占原圖的比例}（不改原檔）
@@ -1523,6 +1582,9 @@ class ReportGeneratorGUI:
         self._fit_window_height()
         if not os.path.exists(self.template_path):
             self.root.after(200, lambda: messagebox.showerror("錯誤", self._missing_template_message()))
+
+    def window_title(self):
+        return f'{APP_TITLE}－{self.REPORT_NAME}　{version_label()}'
 
     def _tabs_extra_height(self):
         """所有可捲動分頁中，內容比可視區域高出最多的像素數（0 表示每一頁都放得下）。"""
@@ -1613,12 +1675,7 @@ class ReportGeneratorGUI:
         return f"找不到模板檔案：\n{self.template_path}\n\n請確認它和程式放在同一個資料夾。"
 
     def _load_theme_setting(self):
-        try:
-            with open(self.settings_path, encoding='utf-8') as f:
-                name = json.load(f).get('theme')
-        except (OSError, ValueError, AttributeError):
-            return DEFAULT_THEME
-        return name if name in THEMES else DEFAULT_THEME
+        return load_theme_name(self.settings_path)
 
     def _save_theme_setting(self):
         try:
@@ -1734,32 +1791,8 @@ class ReportGeneratorGUI:
         notebook.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 2))
         main_frame.rowconfigure(row, weight=1)
 
-        self.create_basic_info_tab(notebook)
-        self.create_text_tab(notebook, TAB_ROAD, [
-            ("一、道路、步道狀況及維護情形（如有坍方、雜草等地點及維護處理等）", None),
-            ("1、道路、步道狀況及維護情形：", "road_status"),
-            ("2、道路、步道雜草情形：", "road_grass"),
-            ("3、其他：", "road_other"),
-        ], height=5)
-        self.create_text_tab(notebook, TAB_FACILITY, [
-            ("二、設施狀況及維護情形（如山屋、牌誌、木棧道等設施損壞紀錄地點、種類數量及維護處理情形等）", None),
-            ("1、山屋：", "facility_house"),
-            ("2、牌示：", "facility_sign"),
-            ("3、木棧道：", "facility_bridge"),
-            ("4、其他：", "facility_other"),
-        ], height=5)
-        self.create_text_tab(notebook, TAB_NATURE, [
-            ("三、自然資源狀況（如特殊植物、動物、人文、地質地形、水文等資源之地點、數量及周圍環境紀錄等）：", "nature"),
-            ("四、環境清理及遊客宣導情形（如垃圾清理及帶下山、遊客登山安全、環境保護宣導等情形）：", "environment"),
-            ("五、遊客違法情形（如非法入園、亂丟垃圾、走捷徑等登山違法情形紀錄登山團體與人員）：", "violation"),
-        ], height=6)
-        self.create_text_tab(notebook, TAB_FEEDBACK, [
-            ("六、登山遊客反應意見：", "feedback"),
-            ("七、協勤心得與建議：", "reflection"),
-            ("八、相關疑問與解答：（將服勤期間相關疑問，以及透過職員或其他志工尋得之答案記錄下來）", "questions"),
-        ], height=6)
-        self.create_photo_tab(notebook, TAB_PHOTOS)
         self.notebook = notebook
+        self.build_tabs(notebook)
         notebook.bind('<<NotebookTabChanged>>', lambda e: self._refit_scroll_tabs())
 
         row += 1
@@ -1791,11 +1824,39 @@ class ReportGeneratorGUI:
         self.theme_box = theme_box
         self._center_theme_dropdown()
         self._recolor(self.root)
-        for name in ENTRY_FIELDS:
+        for name in self.ENTRY_FIELDS:
             self._watch(getattr(self, name))
         for widget in self.text_fields.values():
             self._watch(widget)
         self._update_marks()
+
+    def build_tabs(self, notebook):
+        """建立所有分頁（子類別覆寫這個方法，換成自己的欄位）。"""
+        self.create_basic_info_tab(notebook)
+        self.create_text_tab(notebook, TAB_ROAD, [
+            ("一、道路、步道狀況及維護情形（如有坍方、雜草等地點及維護處理等）", None),
+            ("1、道路、步道狀況及維護情形：", "road_status"),
+            ("2、道路、步道雜草情形：", "road_grass"),
+            ("3、其他：", "road_other"),
+        ], height=5)
+        self.create_text_tab(notebook, TAB_FACILITY, [
+            ("二、設施狀況及維護情形（如山屋、牌誌、木棧道等設施損壞紀錄地點、種類數量及維護處理情形等）", None),
+            ("1、山屋：", "facility_house"),
+            ("2、牌示：", "facility_sign"),
+            ("3、木棧道：", "facility_bridge"),
+            ("4、其他：", "facility_other"),
+        ], height=5)
+        self.create_text_tab(notebook, TAB_NATURE, [
+            ("三、自然資源狀況（如特殊植物、動物、人文、地質地形、水文等資源之地點、數量及周圍環境紀錄等）：", "nature"),
+            ("四、環境清理及遊客宣導情形（如垃圾清理及帶下山、遊客登山安全、環境保護宣導等情形）：", "environment"),
+            ("五、遊客違法情形（如非法入園、亂丟垃圾、走捷徑等登山違法情形紀錄登山團體與人員）：", "violation"),
+        ], height=6)
+        self.create_text_tab(notebook, TAB_FEEDBACK, [
+            ("六、登山遊客反應意見：", "feedback"),
+            ("七、協勤心得與建議：", "reflection"),
+            ("八、相關疑問與解答：（將服勤期間相關疑問，以及透過職員或其他志工尋得之答案記錄下來）", "questions"),
+        ], height=6)
+        self.create_photo_tab(notebook, TAB_PHOTOS)
 
     # ---- 共用：可捲動分頁
     @staticmethod
@@ -2004,7 +2065,7 @@ class ReportGeneratorGUI:
         inner.columnconfigure(0, weight=0)  # 左邊寬度由小分頁列決定
         inner.columnconfigure(1, weight=1)  # 右邊預覽吃掉剩下的寬度
         inner.rowconfigure(1, weight=1)
-        ttk.Label(inner, text="九、服勤照片", style='Heading.TLabel').grid(
+        ttk.Label(inner, text=self.PHOTO_HEADING, style='Heading.TLabel').grid(
             row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
         ttk.Label(inner, text=PHOTO_TAB_HINT, style='Hint.TLabel').grid(
             row=0, column=0, columnspan=2, sticky=tk.E)
@@ -2013,9 +2074,9 @@ class ReportGeneratorGUI:
         sub.grid(row=1, column=0, sticky=(tk.N, tk.S))
         self.photo_notebook = sub
         self.photo_pages = {}
-        for category in PHOTO_CATEGORIES:
+        for category in self.PHOTO_CATEGORIES:
             page = ttk.Frame(sub, padding=8)
-            sub.add(page, text=PHOTO_SHORT_NAMES[category])
+            sub.add(page, text=self.PHOTO_SHORT_NAMES[category])
             page.columnconfigure(0, weight=1)
             page.rowconfigure(1, weight=1)
             header = ttk.Label(page, text=category, style='Field.TLabel')
@@ -2063,7 +2124,9 @@ class ReportGeneratorGUI:
         caption_bar = ttk.Frame(right)
         caption_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(6, 2))
         caption_bar.columnconfigure(0, weight=1)
-        ttk.Label(caption_bar, text="說明：", style='Field.TLabel').grid(row=0, column=0, sticky=tk.W)
+        multi = len(self.CAPTION_LABELS) > 1
+        ttk.Label(caption_bar, text="照片資料：" if multi else self.CAPTION_LABELS[0], style='Field.TLabel').grid(
+            row=0, column=0, sticky=tk.W)
         self.crop_btn = ttk.Button(caption_bar, text="✂ 裁切", state='disabled', command=self.crop_current_photo)
         self.crop_btn.grid(row=0, column=1, padx=(0, 6))
         self.rotate_left_btn = ttk.Button(caption_bar, text="↺ 向左轉 90°", state='disabled',
@@ -2072,15 +2135,26 @@ class ReportGeneratorGUI:
         self.rotate_right_btn = ttk.Button(caption_bar, text="向右轉 90° ↻", state='disabled',
                                            command=lambda: self.rotate_current_photo(90))
         self.rotate_right_btn.grid(row=0, column=3, padx=(6, 0))
-        self.caption_var = tk.StringVar(master=self.root)
-        entry = ttk.Entry(right, textvariable=self.caption_var, state='disabled')
-        entry.grid(row=2, column=0, sticky=(tk.W, tk.E))
+        fields = ttk.Frame(right)
+        fields.grid(row=2, column=0, sticky=(tk.W, tk.E))
+        fields.columnconfigure(1 if multi else 0, weight=1)
+        self.caption_vars, self.caption_entries = [], []
+        for i, label in enumerate(self.CAPTION_LABELS):
+            var = tk.StringVar(master=self.root)
+            entry = ttk.Entry(fields, textvariable=var, state='disabled')
+            if multi:
+                ttk.Label(fields, text=label, style='Field.TLabel').grid(row=i, column=0, sticky=tk.W, padx=(0, 6))
+                entry.grid(row=i, column=1, sticky=(tk.W, tk.E), pady=1)
+            else:
+                entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
+            entry.bind('<Return>', lambda e, index=i: self._caption_return(e, index))
+            entry.bind('<FocusOut>', lambda e: self._commit_caption())
+            self.caption_vars.append(var)
+            self.caption_entries.append(entry)
+        self.caption_var, self.caption_entry = self.caption_vars[0], self.caption_entries[0]
         ttk.Label(right, text="Enter：儲存並跳到下一張", style='Hint.TLabel').grid(row=3, column=0, sticky=tk.W, pady=(2, 0))
-        entry.bind('<Return>', self._caption_return)
-        entry.bind('<FocusOut>', lambda e: self._commit_caption())
         self.photo_preview = preview
-        self.caption_entry = entry
-        for category in PHOTO_CATEGORIES:
+        for category in self.PHOTO_CATEGORIES:
             self.previews[category] = preview
 
     # ---- 事件處理
@@ -2125,7 +2199,7 @@ class ReportGeneratorGUI:
         rows = []
         for path in self.photo_files[category]:
             caption = self.photo_captions[category].get(path, '')
-            rows.append((self._photo_label(category, path), caption or "（未填說明）", not caption))
+            rows.append((self._photo_label(category, path), caption.replace('\n', '／') or "（未填說明）", not caption))
         table.set_rows(rows)
         table.restyle(self.palette)
         table.set_selection(selection)
@@ -2144,7 +2218,7 @@ class ReportGeneratorGUI:
         geometry = tab_geometry(sub, len(sub.tabs()) - 1)
         if not geometry:
             return
-        target = geometry[1] + 1
+        target = max(geometry[1] + 1, self.PHOTO_PANEL_MIN_WIDTH)
         for _ in range(3):  # 框的需求寬度含邊框內距，逐步逼近目標
             actual = sub.winfo_reqwidth()
             if abs(actual - target) <= 1:
@@ -2176,20 +2250,20 @@ class ReportGeneratorGUI:
             else:
                 button.config(text=f"全部都已填寫 {MARK_DONE}" if total else "尚無照片", state=tk.DISABLED)
             mark = MARK_MISSING if self._category_needs_attention(category) else MARK_DONE
-            self.photo_notebook.tab(self.photo_pages[category], text=f"{PHOTO_SHORT_NAMES[category]}  {mark}")
+            self.photo_notebook.tab(self.photo_pages[category], text=f"{self.PHOTO_SHORT_NAMES[category]}  {mark}")
         self._refresh_tab_marks()
         self._refit_scroll_tabs()
 
     def _tabs_with_blanks(self):
         """哪些分頁還有沒填的欄位（含沒有加入照片的分類、沒填說明的照片）。"""
         blank = set()
-        if any(not getattr(self, name).get().strip() for name in ENTRY_FIELDS):
+        if any(not getattr(self, name).get().strip() for name in self.ENTRY_FIELDS):
             blank.add(TAB_BASIC)
         for key, widget in self.text_fields.items():
             if not widget.get('1.0', tk.END).strip():
-                blank.add(FIELD_TAB[key])
-        if any(self._category_needs_attention(c) for c in PHOTO_CATEGORIES):
-            blank.add(TAB_PHOTOS)
+                blank.add(self.FIELD_TAB[key])
+        if any(self._category_needs_attention(c) for c in self.PHOTO_CATEGORIES):
+            blank.add(self.PHOTOS_TAB)
         return blank
 
     def _refresh_tab_marks(self):
@@ -2202,7 +2276,13 @@ class ReportGeneratorGUI:
 
     def _watch(self, widget):
         """欄位內容一改變就更新分頁上的 ●。"""
-        for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
+        if isinstance(widget, CheckField):
+            widget.on_change(self._refresh_tab_marks)
+            return
+        sequences = ['<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>']
+        if isinstance(widget, ttk.Combobox):
+            sequences.append('<<ComboboxSelected>>')
+        for sequence in sequences:
             widget.bind(sequence, lambda e: self._refresh_tab_marks(), add='+')
 
     def _enable_file_drop(self):
@@ -2215,7 +2295,7 @@ class ReportGeneratorGUI:
 
     # ---- 預覽、說明輸入
     def _current_photo_category(self):
-        return PHOTO_CATEGORIES[self.photo_notebook.index(self.photo_notebook.select())]
+        return self.PHOTO_CATEGORIES[self.photo_notebook.index(self.photo_notebook.select())]
 
     def _on_photo_subtab_changed(self):
         category = self._current_photo_category()
@@ -2228,8 +2308,9 @@ class ReportGeneratorGUI:
 
     def _reset_caption_panel(self):
         self._caption_target = None
-        self.caption_var.set('')
-        self.caption_entry.config(state='disabled')
+        for var, entry in zip(self.caption_vars, self.caption_entries):
+            var.set('')
+            entry.config(state='disabled')
         self.rotate_left_btn.config(state='disabled')
         self.rotate_right_btn.config(state='disabled')
         self.crop_btn.config(state='disabled')
@@ -2247,8 +2328,10 @@ class ReportGeneratorGUI:
         self.rotate_left_btn.config(state='normal')
         self.rotate_right_btn.config(state='normal')
         self._caption_target = (category, path)
-        self.caption_entry.config(state='normal')
-        self.caption_var.set(self.photo_captions[category].get(path, ''))
+        parts = self.photo_captions[category].get(path, '').split('\n')
+        for i, (var, entry) in enumerate(zip(self.caption_vars, self.caption_entries)):
+            entry.config(state='normal')
+            var.set(parts[i] if i < len(parts) else '')
 
     def rotate_current_photo(self, delta):
         """把預覽中的這張照片轉 delta 度（正的順時針、負的逆時針）；只記錄角度，不改原檔，報告也會照這個角度放。"""
@@ -2298,7 +2381,8 @@ class ReportGeneratorGUI:
         if path not in self.photo_files[category]:
             self._caption_target = None
             return
-        text = self.caption_var.get().strip()
+        parts = [var.get().strip() for var in self.caption_vars]
+        text = '\n'.join(parts) if any(parts) else ''
         if text != self.photo_captions[category].get(path, ''):
             if text:
                 self.photo_captions[category][path] = text
@@ -2306,8 +2390,12 @@ class ReportGeneratorGUI:
                 self.photo_captions[category].pop(path, None)
             self._render_list(category)
 
-    def _caption_return(self, event=None):
-        """說明輸入框按 Enter：儲存，並跳到同一分類的下一張。"""
+    def _caption_return(self, event=None, index=None):
+        """說明輸入框按 Enter：儲存，並跳到同一分類的下一張（有多個欄位時，先跳到下一個欄位）。"""
+        if index is not None and index + 1 < len(self.caption_entries):
+            self.caption_entries[index + 1].focus_set()
+            self.caption_entries[index + 1].select_range(0, tk.END)
+            return 'break'
         self._commit_caption()
         if self._caption_target:
             category, path = self._caption_target
@@ -2400,8 +2488,8 @@ class ReportGeneratorGUI:
         except tk.TclError:
             hit = None
         if hit is not None:
-            if PHOTO_CATEGORIES[hit] != self._current_photo_category():
-                sub.select(self.photo_pages[PHOTO_CATEGORIES[hit]])
+            if self.PHOTO_CATEGORIES[hit] != self._current_photo_category():
+                sub.select(self.photo_pages[self.PHOTO_CATEGORIES[hit]])
                 self.root.update_idletasks()
             self._hide_drop_marker()
             return 'break'
@@ -2486,7 +2574,7 @@ class ReportGeneratorGUI:
             return False
         self._commit_caption()
         if path in self.photo_files[dst]:
-            self.status_label.config(text=f"「{PHOTO_SHORT_NAMES[dst]}」已經有這張照片了，沒有移動")
+            self.status_label.config(text=f"「{self.PHOTO_SHORT_NAMES[dst]}」已經有這張照片了，沒有移動")
             self.photo_notebook.select(self.photo_pages[src])
             return False
         self.photo_files[src].remove(path)
@@ -2503,7 +2591,7 @@ class ReportGeneratorGUI:
         table.set_selection([position])
         table.show_index(position)
         self._on_photo_select(dst, table)
-        self.status_label.config(text=f"已把照片移到「{PHOTO_SHORT_NAMES[dst]}」（第 {position + 1} 張）")
+        self.status_label.config(text=f"已把照片移到「{self.PHOTO_SHORT_NAMES[dst]}」（第 {position + 1} 張）")
         logging.info(f"照片 {os.path.basename(path)} 從 {src} 移到 {dst}（第 {position + 1} 張）")
         return True
 
@@ -2565,11 +2653,11 @@ class ReportGeneratorGUI:
             if nb.winfo_ismapped():
                 try:
                     hit = nb.index(f'@{screen_x - nb.winfo_rootx()},{screen_y - nb.winfo_rooty()}')
-                    category = PHOTO_CATEGORIES[hit]
+                    category = self.PHOTO_CATEGORIES[hit]
                     over_tab = True
                 except tk.TclError:
                     pass
-        self.notebook.select(self._tab_by_title(TAB_PHOTOS))
+        self.notebook.select(self._tab_by_title(self.PHOTOS_TAB))
         self.photo_notebook.select(self.photo_pages[category])
         self.root.update_idletasks()
         index = self._drop_insert_index(category, screen_x, screen_y) if not over_tab else None
@@ -2611,8 +2699,8 @@ class ReportGeneratorGUI:
         self.status_label.config(text=f"已清除 {category} 的所有照片")
 
     def _clear_widgets(self):
-        for name in ENTRY_FIELDS:
-            getattr(self, name).delete(0, tk.END)
+        for name in self.ENTRY_FIELDS:
+            widget_set(getattr(self, name), '')
         for text_widget in self.text_fields.values():
             text_widget.delete('1.0', tk.END)
         for category in self.listboxes:
@@ -2643,8 +2731,9 @@ class ReportGeneratorGUI:
         self._commit_caption()  # 說明輸入框裡還沒按 Enter 的文字也要算進去
         return {
             'version': DRAFT_VERSION,
+            'report': self.REPORT_ID,
             'saved_at': datetime.now().isoformat(timespec='seconds'),
-            'fields': {name: getattr(self, name).get() for name in ENTRY_FIELDS},
+            'fields': {name: getattr(self, name).get() for name in self.ENTRY_FIELDS},
             'texts': {key: w.get('1.0', tk.END).rstrip('\n') for key, w in self.text_fields.items()},
             'photos': {c: list(p) for c, p in self.photo_files.items()},
             'captions': {c: dict(v) for c, v in self.photo_captions.items()},
@@ -2652,21 +2741,28 @@ class ReportGeneratorGUI:
             'crops': {c: {p: list(box) for p, box in v.items()} for c, v in self.photo_crops.items()},
         }
 
-    def apply_draft(self, draft):
-        """把草稿內容還原到畫面，回傳警告訊息清單（例如找不到的照片）。"""
+    def check_draft(self, draft):
+        """草稿格式、版本、種類不對就丟出 ValueError（舊草稿沒有種類欄位，視為保育巡查回報單）。"""
         if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
             raise ValueError("不是有效的草稿檔，或草稿版本不相容")
+        report = draft.get('report', 'patrol')
+        if report != self.REPORT_ID:
+            raise ValueError(f"這不是「{self.REPORT_NAME}」的草稿（草稿種類：{REPORT_NAMES.get(report, report)}）")
+
+    def apply_draft(self, draft):
+        """把草稿內容還原到畫面，回傳警告訊息清單（例如找不到的照片）。"""
+        self.check_draft(draft)
         warnings = []
         self._clear_widgets()
 
-        for name in ENTRY_FIELDS:
-            getattr(self, name).insert(0, str(draft.get('fields', {}).get(name, '')))
+        for name in self.ENTRY_FIELDS:
+            widget_set(getattr(self, name), str(draft.get('fields', {}).get(name, '')))
         self._fill_report_date()  # 草稿裡有日期就沿用（第一次填表的日期）；沒有才補上今天
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 
         for saved_category, paths in draft.get('photos', {}).items():
-            category = LEGACY_PHOTO_CATEGORIES.get(saved_category, saved_category)
+            category = self.LEGACY_PHOTO_CATEGORIES.get(saved_category, saved_category)
             if category not in self.photo_files:
                 continue
             captions = draft.get('captions', {}).get(saved_category, {})
@@ -2697,8 +2793,8 @@ class ReportGeneratorGUI:
             title="儲存草稿",
             defaultextension=".json",
             initialdir=self._last_dir,
-            initialfile=default_draft_name({n: getattr(self, n).get().strip() for n in ENTRY_FIELDS},
-                                           datetime.now()) + ".json",
+            initialfile=self.draft_name({n: getattr(self, n).get().strip() for n in self.ENTRY_FIELDS},
+                                        datetime.now()) + ".json",
             filetypes=[("草稿檔", "*.json")]
         )
         if not path:
@@ -2722,8 +2818,7 @@ class ReportGeneratorGUI:
         try:
             with open(path, encoding='utf-8') as f:
                 draft = json.load(f)
-            if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
-                raise ValueError("不是有效的草稿檔，或草稿版本不相容")
+            self.check_draft(draft)
         except (OSError, ValueError) as e:  # JSONDecodeError 是 ValueError 的子類別
             messagebox.showerror("錯誤", f"無法載入草稿：{e}")
             return
@@ -2739,10 +2834,10 @@ class ReportGeneratorGUI:
     # ---- 未存內容偵測、自動存檔、關閉提示
     def _fill_report_date(self):
         """「填表日期」自動帶入第一次填表的日期（今天，民國格式）。已經有日期（例如載入草稿）就不動。"""
-        if any(getattr(self, name).get().strip() for name in REPORT_DATE_FIELDS):
+        if any(getattr(self, name).get().strip() for name in self.REPORT_DATE_FIELDS):
             return
-        for name, value in zip(REPORT_DATE_FIELDS, roc_date_parts()):
-            getattr(self, name).insert(0, value)
+        for name, value in zip(self.REPORT_DATE_FIELDS, roc_date_parts()):
+            widget_set(getattr(self, name), value)
         self._refresh_tab_marks()
 
     def _signature(self, with_report_date=True):
@@ -2753,7 +2848,7 @@ class ReportGeneratorGUI:
         draft = self.build_draft()
         draft.pop('saved_at')
         if not with_report_date:
-            for name in REPORT_DATE_FIELDS:
+            for name in self.REPORT_DATE_FIELDS:
                 draft['fields'].pop(name, None)
         return json.dumps(draft, ensure_ascii=False, sort_keys=True)
 
@@ -2800,8 +2895,7 @@ class ReportGeneratorGUI:
         try:
             with open(self.autosave_path, encoding='utf-8') as f:
                 draft = json.load(f)
-            if not isinstance(draft, dict) or draft.get('version') != DRAFT_VERSION:
-                raise ValueError("版本不相容")
+            self.check_draft(draft)
             saved_at = str(draft.get('saved_at', '未知時間')).replace('T', ' ')
         except (OSError, ValueError) as e:
             logging.error(f"自動存檔無法讀取，已刪除: {e}")
@@ -2869,17 +2963,17 @@ class ReportGeneratorGUI:
 
     def find_missing_captions(self):
         """還沒填說明的照片數量，依 Word 的章節順序：{分類: 張數}（沒有的不列出）。"""
-        return {c: self.missing_caption_count(c) for c in PHOTO_CATEGORIES if self.missing_caption_count(c)}
+        return {c: self.missing_caption_count(c) for c in self.PHOTO_CATEGORIES if self.missing_caption_count(c)}
 
     def _show_first_problem(self, blanks, missing_captions):
         """選「否」之後：回到第一個有問題的分頁；若在服勤照片，直接選到第一個有問題的分類（和第一張沒填說明的照片）。"""
-        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
-        candidates = list(blanks) + ([TAB_PHOTOS] if missing_captions else [])
+        order = self.TAB_ORDER
+        candidates = list(blanks) + ([self.PHOTOS_TAB] if missing_captions else [])
         target = min(candidates, key=order.index)
         self.notebook.select(self._tab_by_title(target))
-        if target != TAB_PHOTOS:
+        if target != self.PHOTOS_TAB:
             return
-        for category in PHOTO_CATEGORIES:
+        for category in self.PHOTO_CATEGORIES:
             if self._category_needs_attention(category):
                 self.photo_notebook.select(self.photo_pages[category])
                 files = self.photo_files[category]
@@ -2901,14 +2995,13 @@ class ReportGeneratorGUI:
         if not data['location']:
             add(TAB_BASIC, "協勤地點")
         for tab in (TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK):
-            for key, name in FIELD_NAMES.items():
-                if FIELD_TAB.get(key) == tab and not data.get(key):
+            for key, name in self.FIELD_NAMES.items():
+                if self.FIELD_TAB.get(key) == tab and not data.get(key):
                     add(tab, name)
-        for category in PHOTO_CATEGORIES:
+        for category in self.PHOTO_CATEGORIES:
             if not self.photo_files[category]:
                 add(TAB_PHOTOS, f"{category}（尚未加入照片）")
-        order = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
-        return {tab: blanks[tab] for tab in order if tab in blanks}
+        return {tab: blanks[tab] for tab in self.TAB_ORDER if tab in blanks}
 
     @staticmethod
     def blank_fields_message(blanks, missing_captions=None):
@@ -2960,7 +3053,7 @@ class ReportGeneratorGUI:
             title="儲存報告（同時會產生同名的 PDF）",
             defaultextension=".docx",
             initialdir=self._last_dir,
-            initialfile=default_output_name(data) + ".docx",
+            initialfile=self.output_name(data) + ".docx",
             filetypes=[("Word文件", "*.docx")]
         )
         if not output_path:
@@ -2975,6 +3068,16 @@ class ReportGeneratorGUI:
         threading.Thread(target=self._generate_report_worker,
                          args=(data, photo_files, captions, output_path, rotations, crops),
                          daemon=True).start()
+
+    # ---- 各回報單不同的部分（子類別覆寫）
+    def output_name(self, data):
+        return default_output_name(data)
+
+    def draft_name(self, fields, now):
+        return default_draft_name(fields, now)
+
+    def make_report(self, data, photo_files, captions, output_path, rotations=None, crops=None):
+        return build_report(self.template_path, data, photo_files, captions, output_path, rotations, crops)
 
     def _start_busy(self, message):
         """狀態列顯示「message 已 N 秒」並出現來回移動的進度條，游標變成等待中。"""
@@ -3015,7 +3118,7 @@ class ReportGeneratorGUI:
 
     def _generate_report_worker(self, data, photo_files, captions, output_path, rotations=None, crops=None):
         try:
-            warnings = build_report(self.template_path, data, photo_files, captions, output_path, rotations, crops)
+            warnings = self.make_report(data, photo_files, captions, output_path, rotations, crops)
             logging.info(f"✓ SUCCESS: 文檔已產生 {output_path}")
 
             pdf_path = os.path.splitext(output_path)[0] + '.pdf'
@@ -3158,13 +3261,88 @@ def enable_dpi_awareness():
             return False
 
 
-def main():
-    enable_dpi_awareness()
+# 啟動選單裡的回報單：(代號, 名稱, 說明)
+REPORT_CHOICES = [
+    ('patrol', '保育巡查回報單', '高山保育志工協勤回報單：道路、設施、自然資源、遊客意見與服勤照片'),
+    ('tataka', '塔塔加保育宣導回報單', '塔塔加遊客中心的保育宣導服勤：服務項目、偶發事件與相片記錄'),
+    ('ecotoilet', '生態廁所回報單', '玉山主峰線生態廁所（孟祿亭、白木林）的監測及維護紀錄'),
+]
+
+
+class ReportLauncher:
+    """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。"""
+
+    def __init__(self, root, settings_path=DEFAULT_SETTINGS_PATH):
+        self.root = root
+        self.choice = None
+        family = pick_font_family(root)
+        scale_gui_fonts(root, GUI_FONT_DELTA, family, GUI_FONT_WEIGHT)
+        palette = THEMES[load_theme_name(settings_path)]
+        style = ttk.Style(root)
+        style.theme_use('clam')
+        root.configure(background=palette['bg'])
+        style.configure('.', background=palette['bg'], foreground=palette['text'])
+        style.configure('Heading.TLabel', font=(family, 14 + GUI_FONT_DELTA, 'bold'), foreground=palette['heading_fg'])
+        style.configure('Hint.TLabel', foreground=palette['muted'])
+        style.configure('Launcher.TButton', font=(family, 11 + GUI_FONT_DELTA), padding=(24, 14),
+                        foreground=palette['text'], justify='center')
+        root.title(f'{APP_TITLE}　{version_label()}')
+        frame = ttk.Frame(root, padding=(28, 22))
+        frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        root.columnconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0, pady=(0, 14))
+        self.buttons = {}
+        for row, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):
+            button = ttk.Button(frame, text=f"{row}. {name}\n{description}", style='Launcher.TButton',
+                                command=lambda r=report_id: self.pick(r))
+            button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=6)
+            self.buttons[report_id] = button
+            root.bind(str(row), lambda e, r=report_id: self.pick(r))
+        ttk.Label(frame, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=len(REPORT_CHOICES) + 1,
+                                                                                         column=0, pady=(10, 0))
+        root.bind('<Escape>', lambda e: root.destroy())
+        root.update_idletasks()
+        width, height = max(640, frame.winfo_reqwidth()), frame.winfo_reqheight()
+        x = max(0, (root.winfo_screenwidth() - width) // 2)
+        y = max(0, (root.winfo_screenheight() - height) // 3)
+        root.geometry(f"{width}x{height}+{x}+{y}")
+        self.buttons[REPORT_CHOICES[0][0]].focus_set()
+
+    def pick(self, report_id):
+        self.choice = report_id
+        self.root.destroy()
+
+
+def choose_report():
+    """顯示啟動選單，回傳選到的回報單代號；直接關閉視窗回傳 None。"""
     root = tk.Tk()
-    ReportGeneratorGUI(root)
+    launcher = ReportLauncher(root)
+    root.mainloop()
+    return launcher.choice
+
+
+def create_app(report_id, root, **kwargs):
+    """依代號建立該種回報單的畫面。"""
+    if report_id == 'patrol':
+        return ReportGeneratorGUI(root, **kwargs)
+    import yscv_reports  # 其他回報單放在另一個檔案，用到才載入
+    apps = {'tataka': yscv_reports.TatakaReportGUI, 'ecotoilet': yscv_reports.EcoToiletReportGUI}
+    return apps[report_id](root, **kwargs)
+
+
+def main(argv=None):
+    """啟動。可以在命令列直接指定回報單（patrol、tataka、ecotoilet）跳過選單，沒指定就先顯示選單。"""
+    enable_dpi_awareness()
+    argv = sys.argv[1:] if argv is None else argv
+    report_id = argv[0] if argv and argv[0] in dict((r[0], r) for r in REPORT_CHOICES) else choose_report()
+    if report_id is None:
+        return
+    root = tk.Tk()
+    create_app(report_id, root)
 
     logging.info("=" * 60)
-    logging.info(f"{APP_TITLE} 啟動")
+    logging.info(f"{APP_TITLE} 啟動（{report_id}）")
     logging.info(f"執行命令: {sys.executable} {' '.join(sys.argv)}")
     logging.info("=" * 60)
 
@@ -3172,4 +3350,6 @@ def main():
 
 
 if __name__ == '__main__':
+    # 當成主程式執行時，讓 yscv_reports 載入到的是同一份模組，而不是再載入第二份
+    sys.modules.setdefault('yscv_report_generator', sys.modules[__name__])
     main()

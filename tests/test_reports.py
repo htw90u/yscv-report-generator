@@ -684,6 +684,17 @@ class LauncherTest(unittest.TestCase):
         colors = {pixel[:3] for pixel in icon.getdata() if pixel[3] > 200}
         self.assertGreater(len(colors), 3)                               # 是彩色圖，不是單色字形
 
+    @unittest.skipUnless(os.path.exists(g.EMOJI_FONT), '需要 Windows 的彩色表情符號字型')
+    def test_icons_are_not_clipped(self):
+        # 廁所標誌是正方形：被切掉上緣的話，高度會明顯小於寬度
+        icon = g.emoji_image(g.REPORT_ICONS['ecotoilet'], 100)
+        self.assertLessEqual(abs(icon.width - icon.height), 4, icon.size)
+        # 圖示四邊都有透明邊或完整的圖案邊界（不是貼著圖片邊緣被切斷）：用大字級畫出完整圖，高度應等於寬度
+        for report_id, char in g.REPORT_ICONS.items():
+            big = g.emoji_image(char, 200)
+            self.assertEqual(max(big.size), 200, report_id)
+            self.assertGreaterEqual(min(big.size), 140, report_id)       # 最扁的圖示（健行靴）也不會被切成一條
+
     def test_launcher_still_works_without_the_emoji_font(self):
         with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):
             launcher = self.launcher()

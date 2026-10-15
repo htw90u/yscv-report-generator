@@ -3279,8 +3279,9 @@ def emoji_image(char, size_px):
     try:
         from PIL import ImageDraw, ImageFont
         font = ImageFont.truetype(EMOJI_FONT, 109, layout_engine=ImageFont.Layout.BASIC)
-        sheet = Image.new('RGBA', (136, 136), (0, 0, 0, 0))
-        ImageDraw.Draw(sheet).text((4, 0), char, font=font, embedded_color=True)
+        # 畫布要比字大很多、字畫在中間：有些圖示的上緣會超出文字起點，畫布太貼會被切掉
+        sheet = Image.new('RGBA', (400, 400), (0, 0, 0, 0))
+        ImageDraw.Draw(sheet).text((100, 100), char, font=font, embedded_color=True)
         box = sheet.getbbox()
         if not box:
             return None

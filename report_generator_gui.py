@@ -122,11 +122,13 @@ PAGE_SAFETY = 0.25      # 每頁預留的誤差空間，避免估算偏差造成
 
 # 產生 Word 時照片章節的順序（與畫面上放在哪個分頁無關）
 PHOTO_CATEGORIES = ['道路、步道狀況及維護情形', '設施狀況及維護情形', '自然資源狀況',
-                    '環境清理及遊客宣導情形', '遊客違法情形', '其他']
+                    '環境清理情形', '遊客宣導與違法情形', '其他']
+# 舊版草稿／自動存檔用的分類名稱 -> 現在的名稱（載入時自動轉換，照片不會掉）
+LEGACY_PHOTO_CATEGORIES = {'環境清理及遊客宣導情形': '環境清理情形', '遊客違法情形': '遊客宣導與違法情形'}
 # 服勤照片分頁裡各分類的小分頁名稱（完整名稱顯示在表格上方）
 PHOTO_SHORT_NAMES = {
     '道路、步道狀況及維護情形': '道路/步道', '設施狀況及維護情形': '設施', '自然資源狀況': '自然資源',
-    '環境清理及遊客宣導情形': '環境清理', '遊客違法情形': '遊客違法', '其他': '其他',
+    '環境清理情形': '環境清理', '遊客宣導與違法情形': '遊客', '其他': '其他',
 }
 TAB_BASIC = "基本資料"
 TAB_PHOTOS = "服勤照片"
@@ -1382,10 +1384,10 @@ class ReportGeneratorGUI:
         style.configure('TMenubutton', foreground=p['text'])
         style.configure('TButton', foreground=p['text'])
         style.configure('Hint.TLabel', foreground=p['muted'])
-        # 填寫框下方的調整高度拉桿：一條有邊框的灰色橫條，中間一個 ≡（常見的拖曳把手樣式）
-        style.configure('Grip.TLabel', background=p['tab_idle'], foreground=p['field_fg'], relief='raised',
-                        borderwidth=1, padding=(0, 0), font=(self.font_family, 12 + GUI_FONT_DELTA))
-        style.map('Grip.TLabel', background=[('active', p['tab_hover'])])
+        # 填寫框下方的調整高度拉桿：沒有邊框的細條，中間一小段淡色橫線；滑鼠移上去才加深
+        style.configure('Grip.TLabel', background=p['bg'], foreground=p['border'], relief='flat',
+                        borderwidth=0, padding=(0, 0), font=(self.font_family, 10 + GUI_FONT_DELTA))
+        style.map('Grip.TLabel', foreground=[('active', p['muted'])])
         style.configure('Sub.TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=1, tabmargins=(2, 4, 2, 0))
         style.configure('Sub.TNotebook.Tab', padding=(16, 6), font=(self.font_family, 10 + GUI_FONT_DELTA),  # 小分頁含 ✓，不用粗體
@@ -1654,7 +1656,7 @@ class ReportGeneratorGUI:
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
-            grip = ttk.Label(inner, text="≡", style='Grip.TLabel', anchor=tk.CENTER, cursor='sb_v_double_arrow')
+            grip = ttk.Label(inner, text="━━━", style='Grip.TLabel', anchor=tk.CENTER, cursor='sb_v_double_arrow')
             grip.grid(row=row_idx + 2, column=0, sticky=(tk.W, tk.E), padx=5)
             self._bind_resize_grip(grip, text_widget)
             self.text_grips[key] = grip
@@ -1673,6 +1675,8 @@ class ReportGeneratorGUI:
             lines = state['lines'] + round((event.y_root - state['y']) / line_px)
             self.set_text_height(text_widget, lines)
 
+        grip.bind('<Enter>', lambda e: grip.state(['active']))  # 滑鼠移上去線條加深
+        grip.bind('<Leave>', lambda e: grip.state(['!active']))
         grip.bind('<Button-1>', start)
         grip.bind('<B1-Motion>', drag)
 
@@ -2261,11 +2265,12 @@ class ReportGeneratorGUI:
         for key, widget in self.text_fields.items():
             widget.insert('1.0', str(draft.get('texts', {}).get(key, '')))
 
-        for category, paths in draft.get('photos', {}).items():
+        for saved_category, paths in draft.get('photos', {}).items():
+            category = LEGACY_PHOTO_CATEGORIES.get(saved_category, saved_category)
             if category not in self.photo_files:
                 continue
-            captions = draft.get('captions', {}).get(category, {})
-            rotations = draft.get('rotations', {}).get(category, {})
+            captions = draft.get('captions', {}).get(saved_category, {})
+            rotations = draft.get('rotations', {}).get(saved_category, {})
             for path in paths:
                 if not os.path.exists(path):
                     warnings.append(f"找不到照片，已略過：{path}")

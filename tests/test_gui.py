@@ -2150,6 +2150,24 @@ class GuiTest(unittest.TestCase):
         self.root.update()
         self.assertEqual(int(widget.cget('height')), g.TEXT_MIN_LINES)
 
+    def test_visitor_photo_categories_renamed_and_old_drafts_still_load(self):
+        self.assertEqual(g.PHOTO_CATEGORIES[3:5], ['環境清理情形', '遊客宣導與違法情形'])
+        self.assertEqual(g.PHOTO_SHORT_NAMES['環境清理情形'], '環境清理')
+        self.assertEqual(g.PHOTO_SHORT_NAMES['遊客宣導與違法情形'], '遊客')
+        tabs = [self.app.photo_notebook.tab(t, 'text') for t in self.app.photo_notebook.tabs()]
+        self.assertTrue(any(x.startswith('遊客 ') for x in tabs))
+        self.assertFalse(any('遊客違法' in x for x in tabs))
+        [a, b] = self._make_images(['x.jpg', 'y.jpg'])
+        draft = self.app.build_draft()
+        draft['photos'] = {'環境清理及遊客宣導情形': [a], '遊客違法情形': [b]}
+        draft['captions'] = {'環境清理及遊客宣導情形': {a: '清垃圾'}, '遊客違法情形': {b: '亂丟'}}
+        draft['rotations'] = {'遊客違法情形': {b: 90}}
+        self.assertEqual(self.app.apply_draft(draft), [])
+        self.assertEqual(self.app.photo_files['環境清理情形'], [a])
+        self.assertEqual(self.app.photo_files['遊客宣導與違法情形'], [b])
+        self.assertEqual(self.app.photo_captions['遊客宣導與違法情形'], {b: '亂丟'})
+        self.assertEqual(self.app.photo_rotations['遊客宣導與違法情形'], {b: 90})
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))

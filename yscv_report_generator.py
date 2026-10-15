@@ -3269,6 +3269,50 @@ REPORT_CHOICES = [
 ]
 
 
+class LauncherCard(tk.Frame):
+    """啟動選單的一張卡片：左邊大數字，右邊上面是粗體的回報單名稱、下面是較小較淡的說明。
+    整張卡片都可以按（也可以用 Tab 選取後按 Enter／空白鍵）；滑鼠移上去會變色。"""
+
+    def __init__(self, master, number, name, description, command, palette, family):
+        super().__init__(master, background='#ffffff', highlightthickness=2, highlightbackground=palette['border'],
+                         highlightcolor=palette['heading_fg'], cursor='hand2', takefocus=True)
+        self.command = command
+        self.hover_color = palette['tab_hover']
+        self.columnconfigure(1, weight=1)
+        self.parts = []
+        specs = [(str(number), (family, 22 + GUI_FONT_DELTA, 'bold'), palette['heading_fg'], dict(width=2)),
+                 (name, (family, 13 + GUI_FONT_DELTA, 'bold'), palette['heading_fg'], dict(anchor='w')),
+                 (description, (family, 10 + GUI_FONT_DELTA), palette['muted'], dict(anchor='w', justify='left'))]
+        for text, font, color, options in specs:
+            self.parts.append(tk.Label(self, text=text, font=font, foreground=color, background='#ffffff', **options))
+        number_label, name_label, description_label = self.parts
+        number_label.grid(row=0, column=0, rowspan=2, padx=(16, 8), pady=10)
+        name_label.grid(row=0, column=1, sticky=tk.W, pady=(12, 0))
+        description_label.grid(row=1, column=1, sticky=tk.W, pady=(2, 12))
+        for widget in (self, *self.parts):
+            widget.bind('<Button-1>', lambda e: self.invoke())
+            widget.bind('<Enter>', lambda e: self._paint(self.hover_color))
+            widget.bind('<Leave>', self._leave)
+        self.bind('<Return>', lambda e: self.invoke())
+        self.bind('<space>', lambda e: self.invoke())
+
+    def _paint(self, color):
+        self.configure(background=color)
+        for label in self.parts:
+            label.configure(background=color)
+
+    def _leave(self, event):
+        under = self.winfo_containing(event.x_root, event.y_root)
+        while under is not None:        # 只是從卡片移到卡片裡的文字上，不算離開
+            if under is self:
+                return
+            under = getattr(under, 'master', None)
+        self._paint('#ffffff')
+
+    def invoke(self):
+        self.command()
+
+
 class ReportLauncher:
     """啟動後先出現的選單：選擇要填寫哪一種回報單（按按鈕，或按數字鍵 1、2、3）。"""
 
@@ -3284,8 +3328,6 @@ class ReportLauncher:
         style.configure('.', background=palette['bg'], foreground=palette['text'])
         style.configure('Heading.TLabel', font=(family, 14 + GUI_FONT_DELTA, 'bold'), foreground=palette['heading_fg'])
         style.configure('Hint.TLabel', foreground=palette['muted'])
-        style.configure('Launcher.TButton', font=(family, 11 + GUI_FONT_DELTA), padding=(24, 14),
-                        foreground=palette['text'], justify='center')
         root.title(f'{APP_TITLE}　{version_label()}')
         frame = ttk.Frame(root, padding=(28, 22))
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -3294,20 +3336,19 @@ class ReportLauncher:
         ttk.Label(frame, text="請選擇要填寫的回報單", style='Heading.TLabel').grid(row=0, column=0, pady=(0, 14))
         self.buttons = {}
         for row, (report_id, name, description) in enumerate(REPORT_CHOICES, start=1):
-            button = ttk.Button(frame, text=f"{row}. {name}\n{description}", style='Launcher.TButton',
-                                command=lambda r=report_id: self.pick(r))
-            button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=6)
+            button = LauncherCard(frame, row, name, description, lambda r=report_id: self.pick(r), palette, family)
+            button.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=7)
             self.buttons[report_id] = button
             root.bind(str(row), lambda e, r=report_id: self.pick(r))
         ttk.Label(frame, text="按數字鍵 1～3 也可以選擇；按 Esc 離開", style='Hint.TLabel').grid(row=len(REPORT_CHOICES) + 1,
                                                                                          column=0, pady=(10, 0))
         root.bind('<Escape>', lambda e: root.destroy())
         root.update_idletasks()
-        width, height = max(640, frame.winfo_reqwidth()), frame.winfo_reqheight()
+        width, height = max(740, frame.winfo_reqwidth()), frame.winfo_reqheight()
         x = max(0, (root.winfo_screenwidth() - width) // 2)
         y = max(0, (root.winfo_screenheight() - height) // 3)
         root.geometry(f"{width}x{height}+{x}+{y}")
-        self.buttons[REPORT_CHOICES[0][0]].focus_set()
+        self.buttons[REPORT_CHOICES[0][0]].focus_set()   # Enter 直接進入第一個
 
     def pick(self, report_id):
         self.choice = report_id

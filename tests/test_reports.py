@@ -605,6 +605,33 @@ class LauncherTest(unittest.TestCase):
         with self.assertRaises(tk.TclError):                      # 選完就關掉選單，換成回報單視窗
             self.root.winfo_exists()
 
+    def test_card_names_are_bold_and_descriptions_are_not(self):
+        import tkinter.font as tkfont
+        card = self.launcher().buttons['tataka']
+        _, name, description = card.parts
+        self.assertEqual(name.cget('text'), '塔塔加保育宣導回報單')
+        self.assertEqual(tkfont.Font(root=self.root, font=name.cget('font')).actual('weight'), 'bold')
+        self.assertEqual(tkfont.Font(root=self.root, font=description.cget('font')).actual('weight'), 'normal')
+        size = lambda w: tkfont.Font(root=self.root, font=w.cget('font')).actual('size')
+        self.assertGreater(size(name), size(description))              # 名稱比說明大
+        self.assertNotEqual(name.cget('foreground'), description.cget('foreground'))
+
+    def test_enter_on_the_focused_card_chooses_it(self):
+        launcher = self.launcher()
+        self.root.update()
+        launcher.buttons['patrol'].focus_force()
+        self.root.update()
+        launcher.buttons['patrol'].event_generate('<Return>')
+        self.root.update()
+        self.assertEqual(launcher.choice, 'patrol')
+
+    def test_clicking_a_card_label_chooses_it(self):
+        launcher = self.launcher()
+        self.root.update()
+        launcher.buttons['ecotoilet'].parts[1].event_generate('<Button-1>')
+        self.root.update()
+        self.assertEqual(launcher.choice, 'ecotoilet')
+
     def test_number_keys_choose(self):
         launcher = self.launcher()
         self.root.update()

@@ -345,5 +345,48 @@ class RobustnessTest(unittest.TestCase):
         self.assertIn('AutomationSecurity = 3', g._PDF_SCRIPT)                          # 轉 PDF 時 Word 強制停用巨集
 
 
+class PackagedLayoutTest(unittest.TestCase):
+    """打包成 .exe 後：唯讀資源在內部資料夾，使用者資料（設定、自動存檔、記錄）寫到 %LOCALAPPDATA%。"""
+
+    def test_running_from_source_keeps_everything_next_to_the_program(self):
+        self.assertFalse(g.FROZEN)
+        self.assertEqual(g.user_data_dir(), g.BASE_DIR)
+        self.assertEqual(g.default_save_dir(), g.BASE_DIR)
+
+    def test_packaged_user_data_goes_to_local_app_data(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(g, 'FROZEN', True),                 mock.patch.dict(os.environ, {'LOCALAPPDATA': tmp}):
+            self.assertEqual(g.user_data_dir(), os.path.join(tmp, 'yscv-report-generator'))
+            self.assertNotEqual(g.user_data_dir(), g.BASE_DIR)
+            self.assertTrue(os.path.isdir(g.default_save_dir()))
+
+    def test_files_are_written_into_a_data_folder_that_does_not_exist_yet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = os.path.join(tmp, 'new', 'folder', 'settings.json')
+            self.assertTrue(g.save_settings(settings, theme='x'))
+            self.assertEqual(g.load_settings(settings), {'theme': 'x'})
+            log = os.path.join(tmp, 'logs', 'a.log')
+            with mock.patch.object(g, 'LOG_FILE', log):
+                g.setup_logging(debug=True)
+                logging = g.logging
+                logging.info('hello')
+                for handler in list(logging.getLogger().handlers):
+                    handler.close()
+                g.setup_logging(debug=False)
+            self.assertTrue(os.path.exists(log))
+
+    def test_user_data_paths_do_not_point_into_the_resource_folder_when_packaged(self):
+        import importlib
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sys, 'frozen', True, create=True),                 mock.patch.object(sys, '_MEIPASS', os.path.join(tmp, 'bundle'), create=True),                 mock.patch.dict(os.environ, {'LOCALAPPDATA': os.path.join(tmp, 'local')}):
+            spec = importlib.util.spec_from_file_location('yscv_probe', os.path.join(ROOT, 'yscv_report_generator.py'))
+            probe = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(probe)
+            data = os.path.join(tmp, 'local', 'yscv-report-generator')
+            self.assertEqual(probe.BASE_DIR, os.path.join(tmp, 'bundle'))
+            self.assertEqual(probe.TEMPLATE_PATH, os.path.join(tmp, 'bundle', '保育巡查回報單.docx'))
+            self.assertEqual(probe.ICON_DIR, os.path.join(tmp, 'bundle', 'icons'))
+            for path in (probe.LOG_FILE, probe.DEFAULT_AUTOSAVE_PATH, probe.DEFAULT_SETTINGS_PATH):
+                self.assertEqual(os.path.dirname(path), data, path)
+
+
 if __name__ == '__main__':
     unittest.main()

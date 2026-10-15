@@ -614,7 +614,7 @@ class TatakaReportGUI(_FormGUI):
     REPORT_ID = 'tataka'
     REPORT_NAME = '塔塔加保育宣導回報單'
     DEFAULT_TEMPLATE_PATH = os.path.join(g.BASE_DIR, '塔塔加保育宣導回報單.docx')
-    DEFAULT_AUTOSAVE_PATH = os.path.join(g.BASE_DIR, 'yscv_tataka_autosave.json')
+    DEFAULT_AUTOSAVE_PATH = os.path.join(g.DATA_DIR, 'yscv_tataka_autosave.json')
     TAB_SERVICE = '服務項目'
     TAB_OPINION = '設施與遊客意見'
     TAB_REFLECT = '心得與疑問解答'
@@ -765,7 +765,7 @@ class EcoToiletReportGUI(_FormGUI):
     REPORT_ID = 'ecotoilet'
     REPORT_NAME = '生態廁所回報單'
     DEFAULT_TEMPLATE_PATH = os.path.join(g.BASE_DIR, '生態廁所回報單.docx')
-    DEFAULT_AUTOSAVE_PATH = os.path.join(g.BASE_DIR, 'yscv_ecotoilet_autosave.json')
+    DEFAULT_AUTOSAVE_PATH = os.path.join(g.DATA_DIR, 'yscv_ecotoilet_autosave.json')
     TAB_NATURE = '自然資源/環境清理'
     TAB_REFLECT = '協勤心得與建議'
     TAB_PHOTO = '監測及維護照片'

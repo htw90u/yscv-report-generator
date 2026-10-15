@@ -38,7 +38,36 @@ import yscv_updates
 APP_TITLE = '玉山保育志工回報單生成器'
 VERSION = '0.9'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FROZEN = bool(getattr(sys, 'frozen', False))     # 打包成 .exe（PyInstaller）執行時是 True
+# 唯讀資源（範本、字型、圖示）的位置：打包後在 PyInstaller 的內部資料夾（執行時才解開或唯讀），不能寫入
+BASE_DIR = getattr(sys, '_MEIPASS', None) if FROZEN else None
+BASE_DIR = BASE_DIR or os.path.dirname(os.path.abspath(__file__))
+
+
+def user_data_dir():
+    """使用者資料（設定、自動存檔、除錯記錄）的資料夾。直接跑 .py 時就是程式資料夾（和以前一樣）；
+    打包成 .exe 後改放 %LOCALAPPDATA% 底下的 yscv-report-generator 資料夾（程式資料夾可能唯讀，例如放在 Program Files）。"""
+    if not FROZEN:
+        return BASE_DIR
+    root = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    return os.path.join(root, 'yscv-report-generator')
+
+
+def default_save_dir():
+    """存檔對話框一開始的資料夾：直接跑 .py 時是程式資料夾；打包後是「文件」資料夾（沒有就用家目錄）。"""
+    if not FROZEN:
+        return BASE_DIR
+    documents = os.path.join(os.path.expanduser('~'), 'Documents')
+    return documents if os.path.isdir(documents) else os.path.expanduser('~')
+
+
+DATA_DIR = user_data_dir()
+
+
+def ensure_parent_dir(path):
+    """寫檔前確認所在資料夾存在（第一次執行時 %LOCALAPPDATA% 底下的資料夾還沒建立）。"""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '保育巡查回報單.docx')
 GUI_FONT_DELTA = 2  # 產生器介面的字體在系統預設上加大的點數
@@ -51,13 +80,14 @@ FONT_FILES = ('Iansui-Regular.ttf',)
 FONT_LICENSE = 'OFL-Iansui.txt'
 FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
-LOG_FILE = os.path.join(BASE_DIR, 'yscv_report_generator.log')
+LOG_FILE = os.path.join(DATA_DIR, 'yscv_report_generator.log')
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
 
 def setup_logging(debug=False):
     """平常只把警告與錯誤印在命令列，不產生記錄檔；除錯模式（-d、-D、--debug）才把完整的執行記錄寫進 LOG_FILE。"""
     if debug:
+        ensure_parent_dir(LOG_FILE)
         logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT, force=True,
                             handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()])
         logging.info(f"除錯模式：執行記錄寫入 {LOG_FILE}")
@@ -69,7 +99,7 @@ BODY_FONT_PT = 12   # 內容字級（與參考回報單相同，未特別指定�
 LINE_TWIPS = 440    # 固定行高 22pt（參考回報單）
 
 DRAFT_VERSION = 1
-DEFAULT_AUTOSAVE_PATH = os.path.join(BASE_DIR, 'yscv_report_generator_autosave.json')
+DEFAULT_AUTOSAVE_PATH = os.path.join(DATA_DIR, 'yscv_report_generator_autosave.json')
 AUTOSAVE_INTERVAL_MS = 30_000  # 每 30 秒檢查一次，有變動才寫檔
 # 基本資料欄位（同時是 ReportGeneratorGUI 上的屬性名稱）
 REPORT_DATE_FIELDS = ('year', 'month', 'day')  # 「填表日期」：自動帶入第一次填表的日期
@@ -104,7 +134,7 @@ THEMES = {
         danger='#b34700', danger_fg='#ffffff', danger_active='#8a3700', danger_border='#000000'),
 }
 DEFAULT_THEME = '柔和淺色'
-DEFAULT_SETTINGS_PATH = os.path.join(BASE_DIR, 'yscv_report_generator_settings.json')
+DEFAULT_SETTINGS_PATH = os.path.join(DATA_DIR, 'yscv_report_generator_settings.json')
 DATE_UNIT_PADX = 4     # 年/月/日 單位字左右的間距（對稱）
 DATE_RANGE_PADX = 12   # 「至」左右的間距（對稱）
 TAB_PADDING = (18, 8)         # 一般分頁內距（左右, 上下）
@@ -1551,6 +1581,7 @@ def save_settings(settings_path, **changes):
     data.update(changes)
     try:
         tmp_path = settings_path + '.tmp'
+        ensure_parent_dir(tmp_path)
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp_path, settings_path)       # 原子替換，寫到一半當機不會留下壞掉的設定檔
@@ -1672,7 +1703,7 @@ class ReportGeneratorGUI:
         self._size_cache = {}  # (路徑, 修改時間) -> (寬, 高)，表格顯示橫／直用
         self.photo_crops = {c: {} for c in self.photo_files}  # category -> {path: (左, 上, 右, 下) 占原圖的比例}（不改原檔）
         self.photo_rotations = {c: {} for c in self.photo_files}  # category -> {path: 順時針角度 90/180/270}（不改原檔）
-        self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
+        self._last_dir = default_save_dir()  # 存檔對話框預設資料夾
         self.listboxes = {}
         self._scroll_tabs = {}  # 分頁標題 -> (canvas, 內容框)
         self._tab_frames = {}   # 分頁標題 -> 分頁的框架（分頁名稱後面會加 ●，不能靠名稱找）
@@ -3017,6 +3048,7 @@ class ReportGeneratorGUI:
             return False
         tmp_path = self.autosave_path + '.tmp'
         try:
+            ensure_parent_dir(tmp_path)
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self.build_draft(), f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.autosave_path)  # 原子替換，避免寫到一半當機留下壞檔

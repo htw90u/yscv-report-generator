@@ -80,4 +80,5 @@ python -m unittest discover -s tests
 程式碼以 [MIT License](LICENSE) 授權。
 
 - 字型「芫荽 Iansui」維持它自己的 SIL Open Font License，不受 MIT 涵蓋。
+- 視窗與 .exe 圖示用 Google 的 Noto Emoji 圖片（Apache License 2.0，說明見 `icons/NOTICE.txt`），不受 MIT 涵蓋。
 - 三份範本（`保育巡查回報單.docx`、`塔塔加保育宣導回報單.docx`、`生態廁所回報單.docx`）是玉山國家公園志工回報單的表單，其著作權屬於原機關，不在 MIT 授權的範圍內。

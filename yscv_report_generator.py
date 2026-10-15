@@ -3452,18 +3452,30 @@ WINDOW_ICON_SIZES = (16, 20, 24, 32, 48, 64)   # 標題列、工作列、Alt+Tab
 _icon_cache = {}
 
 
+ICON_DIR = os.path.join(BASE_DIR, 'icons')
+
+
 def report_icon(size_px):
-    """視窗圖示：表單（夾板）右下角加一座小雪山；沒有彩色表情符號字型時回傳 None。"""
+    """視窗圖示：表單（夾板）加一座雪山（偏左上、蓋住夾板的右下角）。用 icons/ 裡的開源 Noto Emoji 圖片畫，
+    不依賴系統字型；圖片不見或壞掉時回傳 None（維持預設圖示）。"""
     if 'base' not in _icon_cache:
-        form, mountain = emoji_image('📋', 256), emoji_image('🏔', 150)
-        if form is None or mountain is None:
+        try:
+            with Image.open(os.path.join(ICON_DIR, 'emoji_u1f4cb.png')) as form,                     Image.open(os.path.join(ICON_DIR, 'emoji_u1f3d4.png')) as mountain:
+                canvas = Image.new('RGBA', (512, 512), (0, 0, 0, 0))
+                canvas.alpha_composite(form.convert('RGBA').resize((440, 440), Image.Resampling.LANCZOS), (0, 0))
+                canvas.alpha_composite(mountain.convert('RGBA').resize((300, 300), Image.Resampling.LANCZOS), (150, 150))
+        except (OSError, ValueError):
             return None             # 失敗不快取，下次還會再試
-        canvas = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
-        canvas.alpha_composite(form.convert('RGBA').resize((220, 220), Image.Resampling.LANCZOS), (0, 0))
-        mountain = mountain.convert('RGBA')
-        canvas.alpha_composite(mountain, (256 - mountain.width, 256 - mountain.height))
         _icon_cache['base'] = canvas
     return _icon_cache['base'].resize((size_px, size_px), Image.Resampling.LANCZOS)
+
+
+def save_app_icon(path, sizes=(16, 24, 32, 48, 64, 128, 256)):
+    """把視窗圖示存成 .ico（打包 .exe 時使用），內含多種尺寸。"""
+    base = report_icon(256)
+    if base is None:
+        raise OSError("找不到 icons/ 裡的圖片")
+    base.save(path, sizes=[(n, n) for n in sizes])
 
 
 def set_window_icon(root):

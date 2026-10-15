@@ -1,0 +1,4 @@
+視窗與 .exe 圖示使用 Google 的 Noto Emoji 圖片（emoji_u1f4cb.png 表單、emoji_u1f3d4.png 雪山），
+來源：https://github.com/googlefonts/noto-emoji ，圖片以 Apache License 2.0 授權
+（https://www.apache.org/licenses/LICENSE-2.0），© Google LLC。
+yscv.ico 是用這兩張圖組合出來的（表單＋山），重新產生：python -c "import yscv_report_generator as g; g.save_app_icon('icons/yscv.ico')"

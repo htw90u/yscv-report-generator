@@ -74,6 +74,33 @@ def clean_notes(text):
     return text if len(text) <= NOTES_MAX_CHARS else text[:NOTES_MAX_CHARS].rstrip() + '\n…（內容太長，完整說明請看發行頁面）'
 
 
+_HEADING_RE = re.compile(r'^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$')
+_BOLD_RE = re.compile(r'\*\*(?=\S)(.+?)(?<=\S)\*\*|__(?=\S)(.+?)(?<=\S)__')
+
+
+def render_notes(text):
+    """把更新說明裡的標題（# 標題）與粗體（**粗體**、__粗體__）轉成樣式，其餘維持純文字。
+    回傳每一行的片段清單：[[(文字, 樣式), ...], ...]，樣式是 ''（一般）、'bold'（粗體）、'heading'（標題整行）。
+    不處理的 Markdown（連結、圖片、程式碼區塊等）原樣顯示，沒有成對的 ** 也原樣保留。"""
+    lines = []
+    for line in str(text or '').split('\n'):
+        heading = _HEADING_RE.match(line)
+        if heading:
+            title = _BOLD_RE.sub(lambda m: m.group(1) or m.group(2), heading.group(1))
+            lines.append([(title, 'heading')] if title else [])
+            continue
+        segments, position = [], 0
+        for match in _BOLD_RE.finditer(line):
+            if match.start() > position:
+                segments.append((line[position:match.start()], ''))
+            segments.append((match.group(1) or match.group(2), 'bold'))
+            position = match.end()
+        if position < len(line):
+            segments.append((line[position:], ''))
+        lines.append(segments)
+    return lines
+
+
 def fetch_latest_release(repo, api_base=API_BASE, timeout=TIMEOUT, user_agent='yscv-report-generator'):
     """查詢最新的正式發行。回傳 (ReleaseInfo 或 None, 錯誤訊息)；沒有錯誤時訊息是空字串，
     找不到發行時（404）錯誤訊息是 NO_RELEASE_MESSAGE；草稿與預告版不算發行（回傳 None 與空訊息）。"""

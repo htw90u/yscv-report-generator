@@ -3786,7 +3786,15 @@ class UpdateNotesDialog(tk.Toplevel):
         self.text = tk.Text(frame, width=64, height=14, wrap='word', font=(family, 10 + GUI_FONT_DELTA),
                             foreground=palette['text'], relief='solid', borderwidth=1, highlightthickness=0,
                             padx=8, pady=6)
-        self.text.insert('1.0', release.notes or "（這一版沒有附更新說明）")
+        self.text.tag_configure('bold', font=(family, 10 + GUI_FONT_DELTA, 'bold'))
+        self.text.tag_configure('heading', font=(family, 11 + GUI_FONT_DELTA, 'bold'), foreground=palette['heading_fg'],
+                                spacing1=8, spacing3=2)
+        lines = yscv_updates.render_notes(release.notes) if release.notes else [[("（這一版沒有附更新說明）", '')]]
+        for index, segments in enumerate(lines):          # 標題與粗體轉成樣式，其餘維持純文字
+            for text, style in segments:
+                self.text.insert(tk.END, text, (style,) if style else ())
+            if index < len(lines) - 1:
+                self.text.insert(tk.END, chr(10))
         self.text.configure(state='disabled')
         self.text.grid(row=1, column=0, sticky=(tk.W, tk.E))
         bar = ttk.Frame(frame)

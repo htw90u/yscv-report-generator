@@ -17,6 +17,7 @@ import yscv_updates as u
 
 messagebox = g.messagebox
 REPO = 'owner/yscv-report-generator'
+NL = chr(10)
 
 
 def release_json(tag='v0.9', **overrides):
@@ -136,6 +137,37 @@ class VersionLogicTest(unittest.TestCase):
         self.assertLessEqual(len(long), u.NOTES_MAX_CHARS + 40)
         self.assertIn('完整說明請看發行頁面', long)
         self.assertEqual(u.clean_notes(None), '')
+
+    def test_render_notes_turns_headings_and_bold_into_styles(self):
+        text = NL.join(['## 新功能', '- 加了 **粗體** 與 __另一種粗體__ 的說明', '**完整變更**：見下方', '### 小標題 ###', '一般文字'])
+        self.assertEqual(u.render_notes(text), [
+            [('新功能', 'heading')],
+            [('- 加了 ', ''), ('粗體', 'bold'), (' 與 ', ''), ('另一種粗體', 'bold'), (' 的說明', '')],
+            [('完整變更', 'bold'), ('：見下方', '')],
+            [('小標題', 'heading')],
+            [('一般文字', '')]])
+
+    def test_render_notes_leaves_everything_else_as_plain_text(self):
+        text = NL.join(['#沒有空白不是標題', '壞的 **沒有結尾', '**  前後有空白不算粗體  **', '`程式碼` 與 [連結](https://example.com)',
+                        '    ## 縮排太多不是標題', '****', '', '# ', '2 ** 3 ** 4'])
+        rendered = u.render_notes(text)
+        self.assertEqual(rendered[0], [('#沒有空白不是標題', '')])
+        self.assertEqual(rendered[1], [('壞的 **沒有結尾', '')])
+        self.assertEqual(rendered[2], [('**  前後有空白不算粗體  **', '')])
+        self.assertEqual(rendered[3], [('`程式碼` 與 [連結](https://example.com)', '')])
+        self.assertEqual(rendered[4], [('    ## 縮排太多不是標題', '')])
+        self.assertEqual(rendered[5], [('****', '')])
+        self.assertEqual(rendered[6], [])
+        self.assertEqual(rendered[8], [('2 ** 3 ** 4', '')])
+        self.assertEqual(u.render_notes(''), [[]])
+        self.assertEqual(u.render_notes(None), [[]])
+        flat = NL.join(''.join(t for t, _ in line) for line in u.render_notes('## A' + NL + '**B** c'))
+        self.assertEqual(flat, 'A' + NL + 'B c')                                          # 組回去只少了標記符號，內容沒掉
+
+    def test_render_notes_keeps_all_the_text(self):
+        for sample in ('純文字沒有任何記號', '# 只有標題', '**只有粗體**', 'a **b** c __d__ e'):
+            marks = ''.join(t for line in u.render_notes(sample) for t, _ in line)
+            self.assertEqual(marks, sample.replace('# ', '').replace('**', '').replace('__', ''))
 
     def test_should_check_throttle(self):
         now = datetime(2026, 10, 20, 12, 0, 0)
@@ -361,6 +393,39 @@ class LauncherUpdateTest(unittest.TestCase):
         self.assertFalse(launcher.open_release_page())                                    # 網址被改過：拒絕開啟
         self.assertEqual(len(self.opened), 1)
         self.assertEqual(self.shown[-1][0], 'err')
+
+    def test_notes_dialog_shows_headings_and_bold_as_styles(self):
+        launcher = self.launcher()
+        notes = NL.join(['## 新功能', '- 加了 **粗體** 的說明', '', '**完整變更**：見網頁'])
+        launcher.update_release = u.ReleaseInfo('v0.9', (0, 9, 0, 0), 'v0.9', u.clean_notes(notes),
+                                                u.release_page_url(REPO, 'v0.9'), '2026-10-27')
+        dialog = launcher.show_update_notes()
+        self.addCleanup(dialog.destroy)
+        text = dialog.text
+        shown = text.get('1.0', 'end').rstrip(NL)
+        self.assertEqual(shown, NL.join(['新功能', '- 加了 粗體 的說明', '', '完整變更：見網頁']))      # 標記符號不見了
+        self.assertNotIn('##', shown)
+        self.assertNotIn('**', shown)
+
+        def styled(tag):
+            ranges = text.tag_ranges(tag)
+            return [text.get(ranges[i], ranges[i + 1]) for i in range(0, len(ranges), 2)]
+
+        self.assertEqual(styled('heading'), ['新功能'])
+        self.assertEqual(styled('bold'), ['粗體', '完整變更'])
+        import tkinter.font as tkfont
+        weight = lambda tag: tkfont.Font(root=self.root, font=text.tag_cget(tag, 'font')).actual('weight')
+        self.assertEqual((weight('heading'), weight('bold')), ('bold', 'bold'))
+        normal = tkfont.Font(root=self.root, font=text.cget('font')).actual('weight')
+        self.assertEqual(normal, 'normal')                                                  # 其餘仍是一般字
+        self.assertEqual(str(text.cget('state')), 'disabled')                              # 仍然唯讀
+
+    def test_notes_dialog_without_notes(self):
+        launcher = self.launcher()
+        launcher.update_release = u.ReleaseInfo('v0.9', (0, 9, 0, 0), 'v0.9', '', u.release_page_url(REPO, 'v0.9'), '')
+        dialog = launcher.show_update_notes()
+        self.addCleanup(dialog.destroy)
+        self.assertIn('沒有附更新說明', dialog.text.get('1.0', 'end'))
 
     def test_download_from_the_notes_dialog(self):
         launcher = self.launcher()

@@ -20,7 +20,7 @@ import threading
 import time
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import ttk, filedialog, scrolledtext
 from tkinter import messagebox as native_messagebox
 from tkinter import font as tkfont
@@ -34,6 +34,7 @@ from PIL import Image, ImageOps, ImageTk
 
 APP_TITLE = '玉山保育志工回報單生成器'
 VERSION = '0.5'
+ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 固定使用的模板（與程式放在同一個資料夾）
 TEMPLATE_PATH = os.path.join(BASE_DIR, '保育巡查回報單.docx')
@@ -869,7 +870,7 @@ def current_date():
 def roc_date_parts(day=None):
     """回傳 (民國年, 月, 日) 的字串，例如 2026-10-14 -> ('115', '10', '14')。"""
     day = day or current_date()
-    return str(day.year - 1911), str(day.month), str(day.day)
+    return str(day.year - ROC_YEAR_OFFSET), str(day.month), str(day.day)
 
 
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
@@ -1522,6 +1523,7 @@ class ReportGeneratorGUI:
     CAPTION_LABELS = ('說明：',)       # 每張照片要填幾個欄位（多個欄位的內容以換行串在一起存成說明）
     ENTRY_FIELDS = ENTRY_FIELDS
     REPORT_DATE_FIELDS = REPORT_DATE_FIELDS
+    DEFAULT_FIELDS = {}               # 欄位預設值 {欄位名稱: 文字}：欄位是空的就自動帶入，之後可以自由修改
     FIELD_TAB = FIELD_TAB
     FIELD_NAMES = FIELD_NAMES
     TAB_ORDER = [TAB_BASIC, TAB_ROAD, TAB_FACILITY, TAB_NATURE, TAB_FEEDBACK, TAB_PHOTOS]
@@ -2833,11 +2835,14 @@ class ReportGeneratorGUI:
 
     # ---- 未存內容偵測、自動存檔、關閉提示
     def _fill_report_date(self):
-        """「填表日期」自動帶入第一次填表的日期（今天，民國格式）。已經有日期（例如載入草稿）就不動。"""
-        if any(getattr(self, name).get().strip() for name in self.REPORT_DATE_FIELDS):
-            return
-        for name, value in zip(self.REPORT_DATE_FIELDS, roc_date_parts()):
-            widget_set(getattr(self, name), value)
+        """「填表日期」自動帶入第一次填表的日期（今天，民國格式），空白的欄位帶入預設值（DEFAULT_FIELDS）。
+        已經有內容（例如載入草稿）就不動。"""
+        for name, value in self.DEFAULT_FIELDS.items():
+            if not getattr(self, name).get().strip():
+                widget_set(getattr(self, name), value)
+        if not any(getattr(self, name).get().strip() for name in self.REPORT_DATE_FIELDS):
+            for name, value in zip(self.REPORT_DATE_FIELDS, roc_date_parts()):
+                widget_set(getattr(self, name), value)
         self._refresh_tab_marks()
 
     def _signature(self, with_report_date=True):
@@ -2850,6 +2855,9 @@ class ReportGeneratorGUI:
         if not with_report_date:
             for name in self.REPORT_DATE_FIELDS:
                 draft['fields'].pop(name, None)
+            for name, value in self.DEFAULT_FIELDS.items():   # 還是預設值的欄位不算「已經填寫」
+                if draft['fields'].get(name) == value:
+                    draft['fields'].pop(name, None)
         return json.dumps(draft, ensure_ascii=False, sort_keys=True)
 
     def is_dirty(self):

@@ -175,6 +175,8 @@ def _grid_widths(table):
 TATAKA_PHOTO_CATEGORY = '相片記錄'
 TATAKA_WEATHERS = ('晴', '陰', '雨')
 NEWLINE = chr(10)
+ECO_DEFAULT_LOCATION = '孟祿亭、白木林生態廁所'
+DATE_PARTS = ('year', 'month', 'day')
 TAB_ICON_PX = 22        # 分頁標籤上的圖示大小（96 dpi 時的像素）
 NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
 HAN = re.compile('[' + chr(0x3400) + '-' + chr(0x4dbf) + chr(0x4e00) + '-' + chr(0x9fff) + chr(0xf900) + '-' + chr(0xfaff) + ']')
@@ -799,6 +801,7 @@ class EcoToiletReportGUI(_FormGUI):
     CAPTION_LABELS = ('照片文字：',)
     ENTRY_FIELDS = list(g.ENTRY_FIELDS) + TOILET_FIELD_NAMES
     REPORT_DATE_FIELDS = g.REPORT_DATE_FIELDS
+    DEFAULT_FIELDS = {'location': ECO_DEFAULT_LOCATION}
     FIELD_TAB = {'nature': TAB_NATURE, 'environment': TAB_NATURE, 'reflection': TAB_REFLECT}
     FIELD_NAMES = {'nature': '二、自然資源狀況', 'environment': '三、環境清理及遊客宣導情形',
                    'reflection': '四、協勤心得與建議'}
@@ -806,6 +809,8 @@ class EcoToiletReportGUI(_FormGUI):
 
     def build_tabs(self, notebook):
         self.create_basic_info_tab(notebook)
+        self._end_auto = None      # 迄日目前是自動帶入的哪一天（使用者自己改過就不再自動更新）
+        self._setup_two_day_duty()
         for prefix, name in TOILETS:
             self._toilet_tab(notebook, prefix, name)
         self.create_text_tab(notebook, self.TAB_NATURE, [
@@ -815,6 +820,46 @@ class EcoToiletReportGUI(_FormGUI):
         self.create_text_tab(notebook, self.TAB_REFLECT, [("四、協勤心得與建議：", 'reflection')], height=10)
         self.create_photo_tab(notebook, self.TAB_PHOTO)
         self._add_toilet_icons(notebook)
+
+    def _setup_two_day_duty(self):
+        """主峰線生態廁所的勤務是兩天：起日填好之後，迄日自動帶入隔天（使用者可以再改）。"""
+        frame = self._tab_frames[g.TAB_BASIC]
+        ttk.Label(frame, text="兩天的勤務：填好協勤日期的起日，迄日會自動帶入隔天（可自行修改）", style='Hint.TLabel').grid(
+            row=4, column=1, sticky=tk.W, padx=5)
+        for part in DATE_PARTS:
+            entry = getattr(self, f'start_{part}')
+            for sequence in ('<KeyRelease>', '<FocusOut>', '<<Paste>>', '<<Cut>>'):
+                entry.bind(sequence, self._sync_end_date, add='+')
+
+    def _start_date(self):
+        """起日轉成 datetime（年可以是民國年或西元年）；還沒填好或不是有效日期回傳 None。"""
+        try:
+            year, month, day = (int(getattr(self, f'start_{part}').get()) for part in DATE_PARTS)
+            return g.datetime(year + (g.ROC_YEAR_OFFSET if year < g.ROC_YEAR_OFFSET else 0), month, day), year
+        except ValueError:
+            return None
+
+    def _sync_end_date(self, _event=None):
+        """起日是有效日期時，迄日是空白、或還是上次自動帶入的值，就改成起日的隔天。"""
+        parsed = self._start_date()
+        if parsed is None:
+            return
+        start, typed_year = parsed
+        nxt = start + g.timedelta(days=1)
+        roc = typed_year < g.ROC_YEAR_OFFSET
+        value = (str(nxt.year - g.ROC_YEAR_OFFSET if roc else nxt.year), str(nxt.month), str(nxt.day))
+        current = tuple(getattr(self, f'end_{part}').get().strip() for part in DATE_PARTS)
+        if current != ('', '', '') and current != self._end_auto:
+            return              # 使用者自己填過迄日，不要蓋掉
+        for part, text in zip(DATE_PARTS, value):
+            g.widget_set(getattr(self, f'end_{part}'), text)
+        self._end_auto = value
+        self.status_label.config(text=f"已自動帶入迄日：{value[0]}年{value[1]}月{value[2]}日（隔天），需要的話請直接修改")
+        self._refresh_tab_marks()
+
+    def _clear_widgets(self):
+        super()._clear_widgets()
+        self._end_auto = None
 
     def _add_toilet_icons(self, notebook):
         """兩座廁所的分頁標籤前面放廁所圖示（找不到彩色表情符號字型就不放，標籤文字不變）。"""
@@ -870,18 +915,22 @@ class EcoToiletReportGUI(_FormGUI):
             data[key] = getattr(self, key).get().strip()
         return data, None
 
+    @staticmethod
+    def _place_name(fields):
+        """檔名裡的地點；地點本身已經以「生態廁所」結尾（預設值）就不再重複加。"""
+        location = g._INVALID_FILENAME_CHARS.sub('', fields.get('location', '')).strip()
+        return location[:-len('生態廁所')] if location.endswith('生態廁所') else location
+
     def output_name(self, data):
-        location = g._INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
-        return f"{g.roc_date_range(data)}_{location}生態廁所回報單"
+        return f"{g.roc_date_range(data)}_{self._place_name(data)}生態廁所回報單"
 
     def draft_name(self, fields, now):
         try:
             date_part = g.roc_date_range(fields)
         except (KeyError, ValueError):
             date_part = ''
-        location = g._INVALID_FILENAME_CHARS.sub('', fields.get('location', '')).strip()
         prefix = f"{date_part}_" if date_part else ""
-        return f"{prefix}{location}生態廁所回報單草稿_{now.strftime('%Y%m%d_%H%M')}"
+        return f"{prefix}{self._place_name(fields)}生態廁所回報單草稿_{now.strftime('%Y%m%d_%H%M')}"
 
     def make_report(self, data, photo_files, captions, output_path, rotations=None, crops=None):
         return build_ecotoilet_report(self.template_path, data, photo_files, captions, output_path, rotations, crops)

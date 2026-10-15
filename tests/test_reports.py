@@ -576,6 +576,100 @@ class EcoToiletGuiTest(FormGuiTest):
         self.assertEqual(str(app.notebook.tab(app._tab_by_title('白木林'), 'image')), '')
         self.assertEqual(app._tab_icons, [])
 
+    def test_location_defaults_to_both_toilets_and_can_be_edited(self):
+        self.assertEqual(self.app.location.get(), '孟祿亭、白木林生態廁所')
+        self.assertEqual(self.app.find_blank_fields({}).get('基本資料', []).count('協勤地點'), 0)
+        self.assertFalse(self.app.is_dirty())                                # 預設值不算使用者改過
+        self.fill('location', '玉山主峰線')
+        self.assertTrue(self.app.is_dirty())
+        self.app._clear_widgets()
+        self.assertEqual(self.app.location.get(), '')
+        with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
+            self.app.clear_all()                                             # 清除全部：回到預設值
+        self.assertEqual(self.app.location.get(), '孟祿亭、白木林生態廁所')
+        self.assertFalse(self.app.is_dirty())
+
+    def test_default_location_alone_does_not_count_as_content_to_autosave(self):
+        self.assertFalse(self.app.autosave_now())                            # 只有預設值＝空白，不寫自動存檔
+        self.fill('personnel', '王小明')
+        self.assertTrue(self.app.autosave_now())
+
+    def test_draft_keeps_a_changed_location(self):
+        self.fill('location', '玉山主峰線')
+        draft = json.loads(json.dumps(self.app.build_draft()))
+        self.app._clear_widgets()
+        self.app.apply_draft(draft)
+        self.assertEqual(self.app.location.get(), '玉山主峰線')
+
+    def type_start(self, year, month, day):
+        for name, value in (('start_year', year), ('start_month', month), ('start_day', day)):
+            self.fill(name, value)
+        self.app._sync_end_date()
+
+    def end_date(self):
+        return tuple(getattr(self.app, f'end_{p}').get() for p in ('year', 'month', 'day'))
+
+    def test_end_date_follows_start_date_by_one_day(self):
+        self.type_start('115', '10', '15')
+        self.assertEqual(self.end_date(), ('115', '10', '16'))
+        self.type_start('115', '10', '31')                                   # 跨月
+        self.assertEqual(self.end_date(), ('115', '11', '1'))
+        self.type_start('115', '12', '31')                                   # 跨年（民國年）
+        self.assertEqual(self.end_date(), ('116', '1', '1'))
+        self.type_start('113', '2', '28')                                    # 閏年（民國 113 年 = 2024）
+        self.assertEqual(self.end_date(), ('113', '2', '29'))
+        self.type_start('2026', '10', '15')                                  # 輸入西元年就維持西元年
+        self.assertEqual(self.end_date(), ('2026', '10', '16'))
+
+    def test_end_date_waits_for_a_complete_valid_start_date(self):
+        self.fill('start_year', '115')
+        self.fill('start_month', '2')
+        self.app._sync_end_date()
+        self.assertEqual(self.end_date(), ('', '', ''))                       # 日還沒填
+        self.type_start('115', '2', '30')                                    # 2/30 不是有效日期
+        self.assertEqual(self.end_date(), ('', '', ''))
+
+    def test_end_date_tracks_edits_until_the_user_changes_it(self):
+        self.type_start('115', '10', '1')                                    # 輸入「1」的當下就帶入
+        self.assertEqual(self.end_date(), ('115', '10', '2'))
+        self.type_start('115', '10', '15')                                   # 接著打成 15：迄日跟著更新
+        self.assertEqual(self.end_date(), ('115', '10', '16'))
+        self.fill('end_day', '20')                                           # 使用者自己改了迄日
+        self.type_start('115', '10', '17')
+        self.assertEqual(self.end_date(), ('115', '10', '20'))               # 不再蓋掉
+        self.app._clear_widgets()                                            # 清除後重新開始自動帶入
+        self.type_start('115', '10', '3')
+        self.assertEqual(self.end_date(), ('115', '10', '4'))
+
+    def test_typing_in_start_entries_triggers_the_end_date(self):
+        self.app.notebook.select(self.app._tab_by_title('基本資料'))
+        self.root.deiconify()
+        self.root.update()
+        for entry, text in ((self.app.start_year, '115'), (self.app.start_month, '10'), (self.app.start_day, '15')):
+            entry.focus_force()
+            self.root.update()
+            entry.insert(0, text)
+            entry.event_generate('<KeyRelease>')
+            self.root.update()
+        self.assertEqual(self.end_date(), ('115', '10', '16'))
+        self.assertIn('已自動帶入迄日', self.app.status_label.cget('text'))
+
+    def test_end_date_is_not_changed_by_loading_a_draft(self):
+        self.fill_all()
+        draft = json.loads(json.dumps(self.app.build_draft()))               # 起 10/15、迄 10/17
+        self.app._clear_widgets()
+        self.app.apply_draft(draft)
+        self.assertEqual(self.end_date(), ('115', '10', '17'))
+        self.app._sync_end_date()                                            # 使用者沒動過起日，也不會蓋掉草稿裡的迄日
+        self.assertEqual(self.end_date(), ('115', '10', '17'))
+
+    def test_file_names_do_not_repeat_the_toilet_suffix(self):
+        data = dict(start_year='115', start_month='10', start_day='15', end_year='115', end_month='10', end_day='16',
+                    location='孟祿亭、白木林生態廁所')
+        self.assertEqual(self.app.output_name(data), '1151015-16_孟祿亭、白木林生態廁所回報單')
+        self.assertEqual(self.app.draft_name(data, g.datetime(2026, 10, 15, 9, 30)),
+                         '1151015-16_孟祿亭、白木林生態廁所回報單草稿_20261015_0930')
+
     def test_blank_fields_are_grouped_by_toilet_and_remarks_are_optional(self):
         blanks = self.app.find_blank_fields({})
         self.assertIn('本次收集桶總量（kg）', blanks['孟祿亭'])

@@ -3501,6 +3501,49 @@ def send_feedback(subject, body, url=None, timeout=FEEDBACK_TIMEOUT, reply_to=''
     return False, (result.get('error') if isinstance(result, dict) else '') or "伺服器回報寄送失敗"
 
 
+class PlaceholderEntry(ttk.Entry):
+    """沒有內容時顯示灰色淡字提示的輸入框。提示只是顯示用：get() 在顯示提示時回傳空字串（欄位沒有預設值）；
+    點進去提示就消失，離開時還是空的就再顯示。"""
+
+    PLACEHOLDER_COLOR = '#9ca3af'
+
+    def __init__(self, master, placeholder, normal_color='#000000', **kwargs):
+        super().__init__(master, **kwargs)
+        self.placeholder = placeholder
+        self.normal_color = normal_color
+        self.showing = False
+        self.bind('<FocusIn>', lambda e: self._hide())
+        self.bind('<FocusOut>', lambda e: self._show())
+        self._show()
+
+    def _show(self):
+        if not self.showing and not super().get():
+            self.showing = True
+            super().insert(0, self.placeholder)
+            self.configure(foreground=self.PLACEHOLDER_COLOR)
+
+    def _hide(self):
+        if self.showing:
+            self.showing = False
+            super().delete(0, tk.END)
+            self.configure(foreground=self.normal_color)
+
+    def get(self):
+        return '' if self.showing else super().get()
+
+    def insert(self, index, string):
+        if not string:
+            return
+        self._hide()
+        super().insert(index, string)
+
+    def delete(self, first, last=None):
+        self._hide()
+        super().delete(first, last)
+        if self.focus_get() is not self:
+            self._show()
+
+
 class FeedbackDialog(tk.Toplevel):
     """意見反應：填標題、內容與選填的聯絡 Email，按「寄出」就在背景送出（版本由程式自動加進信裡，不特別告訴使用者）。
     不顯示收件人，也不依賴使用者的郵件程式。"""
@@ -3525,9 +3568,9 @@ class FeedbackDialog(tk.Toplevel):
                                     undo=True, foreground=palette['text'], relief='solid', borderwidth=1,
                                     highlightthickness=0, padx=6, pady=4)
         self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=4)
-        ttk.Label(frame, text="聯絡 Email(選填):", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
-                                                                              padx=(0, 10))
-        self.email_entry = ttk.Entry(frame, width=52)
+        ttk.Label(frame, text="聯絡 Email:", style='Field.TLabel').grid(row=2, column=0, sticky=tk.W, pady=4,
+                                                                        padx=(0, 10))
+        self.email_entry = PlaceholderEntry(frame, "選填", normal_color=palette['text'], width=52)
         self.email_entry.grid(row=2, column=1, sticky=(tk.W, tk.E))
         bar = ttk.Frame(frame)
         bar.grid(row=3, column=0, columnspan=2, pady=(14, 0))

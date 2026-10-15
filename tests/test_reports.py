@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from tkinter import filedialog
 from unittest import mock
@@ -996,7 +997,9 @@ class FeedbackTest(unittest.TestCase):
         self.assertNotIn('收件人', everything)
         self.assertNotIn('v9.9.3-abc1234', everything)                              # 版本自動加進信裡，不用告訴使用者
         self.assertNotIn('版本', everything)
-        self.assertIn('聯絡 Email(選填)', everything)                                # 使用者可以留下自己的聯絡信箱，說明就這樣
+        self.assertIn('聯絡 Email', everything)                                      # 使用者可以留下自己的聯絡信箱
+        self.assertNotIn('選填', everything)                                         # 「選填」只是輸入框裡的灰色淡字
+        self.assertEqual(ttk.Entry.get(dialog.email_entry), '選填')
 
     def test_sending_posts_in_the_background_and_closes_on_success(self):
         dialog = self.dialog('照片太小', '預覽可以再大一點\n謝謝')
@@ -1021,6 +1024,39 @@ class FeedbackTest(unittest.TestCase):
         self.finish(dialog)
         self.assertIn('聯絡 Email：（未填）', self.sent[1][1])
         self.assertEqual(self.reply_tos[1], '')
+
+    def test_email_field_shows_a_gray_hint_but_has_no_value(self):
+        dialog = self.dialog()
+        entry = dialog.email_entry
+        self.root.deiconify()
+        self.root.update()
+        self.assertEqual(ttk.Entry.get(entry), '選填')                              # 畫面上看到的提示
+        self.assertEqual(entry.get(), '')                                          # 但欄位沒有值
+        self.assertEqual(str(entry.cget('foreground')), g.PlaceholderEntry.PLACEHOLDER_COLOR)     # 灰色淡字
+        self.assertTrue(dialog.send() is False)                                    # 空內容擋下；提示文字不會被當成 Email
+        dialog.content_text.insert('1.0', '內容')
+        self.assertTrue(dialog.send())                                             # 沒填 Email 照樣能寄
+        self.finish(dialog)
+        self.assertEqual(self.reply_tos, [''])
+        self.assertIn('聯絡 Email：（未填）', self.sent[0][1])                       # 信裡也不會出現「選填」
+
+    def test_hint_disappears_on_focus_and_returns_when_left_empty(self):
+        dialog = self.dialog()
+        entry = dialog.email_entry
+        self.root.deiconify()
+        self.root.update()
+        entry.focus_force()
+        self.root.update()
+        self.assertEqual(ttk.Entry.get(entry), '')                                 # 點進去提示消失
+        self.assertNotEqual(str(entry.cget('foreground')), g.PlaceholderEntry.PLACEHOLDER_COLOR)
+        entry.insert(0, 'me@example.com')
+        self.assertEqual(entry.get(), 'me@example.com')
+        dialog.title_entry.focus_force()
+        self.root.update()
+        self.assertEqual(ttk.Entry.get(entry), 'me@example.com')                   # 有填內容，離開後不會被提示蓋掉
+        entry.delete(0, tk.END)
+        self.assertEqual(ttk.Entry.get(entry), '選填')                              # 清空後（沒有在輸入）又顯示提示
+        self.assertEqual(entry.get(), '')
 
     def test_invalid_contact_email_is_refused(self):
         for bad in ('abc', 'a@b', '@example.com', 'me@@example.com', 'me @example.com'):

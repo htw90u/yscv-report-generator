@@ -1382,6 +1382,10 @@ class ReportGeneratorGUI:
         style.configure('TMenubutton', foreground=p['text'])
         style.configure('TButton', foreground=p['text'])
         style.configure('Hint.TLabel', foreground=p['muted'])
+        # 填寫框下方的調整高度拉桿：一條有邊框的灰色橫條，中間一個 ≡（常見的拖曳把手樣式）
+        style.configure('Grip.TLabel', background=p['tab_idle'], foreground=p['field_fg'], relief='raised',
+                        borderwidth=1, padding=(0, 0), font=(self.font_family, 12 + GUI_FONT_DELTA))
+        style.map('Grip.TLabel', background=[('active', p['tab_hover'])])
         style.configure('Sub.TNotebook', background=p['bg'], bordercolor=p['border'], lightcolor=p['border'],
                         darkcolor=p['border'], borderwidth=1, tabmargins=(2, 4, 2, 0))
         style.configure('Sub.TNotebook.Tab', padding=(16, 6), font=(self.font_family, 10 + GUI_FONT_DELTA),  # 小分頁含 ✓，不用粗體
@@ -1650,7 +1654,7 @@ class ReportGeneratorGUI:
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
-            grip = ttk.Label(inner, text="· · · · ·", style='Hint.TLabel', anchor=tk.CENTER, cursor='sb_v_double_arrow')
+            grip = ttk.Label(inner, text="≡", style='Grip.TLabel', anchor=tk.CENTER, cursor='sb_v_double_arrow')
             grip.grid(row=row_idx + 2, column=0, sticky=(tk.W, tk.E), padx=5)
             self._bind_resize_grip(grip, text_widget)
             self.text_grips[key] = grip

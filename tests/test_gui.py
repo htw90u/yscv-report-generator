@@ -1812,10 +1812,18 @@ class GuiTest(unittest.TestCase):
         now = datetime(2026, 10, 14, 20, 40)
         data = {'start_year': '115', 'start_month': '10', 'start_day': '1', 'end_year': '115', 'end_month': '10',
                 'end_day': '2', 'location': '排雲/山莊'}
-        self.assertEqual(g.default_draft_name(data, now), '1151001-02_排雲山莊協勤回報單草稿_20261014_2040')
-        self.assertEqual(g.default_draft_name(dict(data, location=''), now), '1151001-02_巡查回報單草稿_20261014_2040')
-        self.assertEqual(g.default_draft_name(dict(data, start_day='abc'), now), '排雲山莊協勤回報單草稿_20261014_2040')
-        self.assertEqual(g.default_draft_name({}, now), '巡查回報單草稿_20261014_2040')
+        self.assertEqual(g.default_draft_name(data, now), '1151001-02_排雲山莊協勤回報單草稿_1014_2040')
+        self.assertEqual(g.default_draft_name(dict(data, location=''), now), '1151001-02_巡查回報單草稿_1014_2040')
+        self.assertEqual(g.default_draft_name(dict(data, start_day='abc'), now), '排雲山莊協勤回報單草稿_1014_2040')
+        self.assertEqual(g.default_draft_name({}, now), '巡查回報單草稿_1014_2040')
+        # 人員姓名：只取第一位，多位加「等」
+        self.assertEqual(g.default_draft_name(dict(data, personnel='王小明'), now),
+                         '1151001-02_排雲山莊協勤回報單草稿_王小明_1014_2040')
+        self.assertEqual(g.default_draft_name(dict(data, personnel='王小明、李小華 陳大文'), now),
+                         '1151001-02_排雲山莊協勤回報單草稿_王小明等_1014_2040')
+        self.assertEqual(g.default_output_name(dict(data, personnel='李/小華, 王小明')), '1151001-02_排雲山莊協勤回報單_李等')
+        self.assertEqual(g.name_label(''), '')
+        self.assertEqual(g.name_label('John Smith, Mary Jane'), 'John Smith等')
 
     def test_save_draft_dialog_suggests_name_with_duty_name(self):
         self.fill_dates()

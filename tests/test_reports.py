@@ -508,15 +508,17 @@ class TatakaGuiTest(FormGuiTest):
         self.fill_all()
         data, _ = self.app.collect_data()
         self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
-        data['volunteer'] = '王小明 李小華,John Smith'
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明、李小華、John Smith')
-        data['volunteer'] = '王小明 李小華,陳大文'
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明、李小華、陳大文')
+        data['volunteer'] = '王小明 李小華,John Smith'                       # 多位：只取第一位加「等」
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明等')
+        data['volunteer'] = 'John Smith'
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_John Smith')
+        data['volunteer'] = '王小明、'                                         # 只有一位（多餘的分隔符號不算）
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
         name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王小:明'},
                                    g.datetime(2026, 10, 15, 9, 30))
-        self.assertEqual(name, '1151015_塔塔加保育宣導回報單草稿_王小明_20261015_0930')
+        self.assertEqual(name, '1151015_塔塔加保育宣導回報單草稿_王小明_1015_0930')
         self.assertEqual(self.app.draft_name({}, g.datetime(2026, 10, 15, 9, 30)),
-                         '塔塔加保育宣導回報單草稿_20261015_0930')
+                         '塔塔加保育宣導回報單草稿_1015_0930')
 
     def test_generate_report_end_to_end(self):
         self.fill_all()
@@ -663,12 +665,21 @@ class EcoToiletGuiTest(FormGuiTest):
         self.app._sync_end_date()                                            # 使用者沒動過起日，也不會蓋掉草稿裡的迄日
         self.assertEqual(self.end_date(), ('115', '10', '17'))
 
+    def test_file_names_carry_the_first_name_plus_deng(self):
+        data = dict(start_year='115', start_month='10', start_day='15', end_year='115', end_month='10', end_day='16',
+                    location='玉山主峰線', personnel='王小明 李小華')
+        now = g.datetime(2026, 10, 15, 9, 30)
+        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單_王小明等')
+        self.assertEqual(self.app.draft_name(data, now), '1151015-16_玉山主峰線生態廁所回報單草稿_王小明等_1015_0930')
+        data['personnel'] = '王小明'
+        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單_王小明')
+
     def test_file_names_do_not_repeat_the_toilet_suffix(self):
         data = dict(start_year='115', start_month='10', start_day='15', end_year='115', end_month='10', end_day='16',
                     location='孟祿亭、白木林生態廁所')
         self.assertEqual(self.app.output_name(data), '1151015-16_孟祿亭、白木林生態廁所回報單')
         self.assertEqual(self.app.draft_name(data, g.datetime(2026, 10, 15, 9, 30)),
-                         '1151015-16_孟祿亭、白木林生態廁所回報單草稿_20261015_0930')
+                         '1151015-16_孟祿亭、白木林生態廁所回報單草稿_1015_0930')
 
     def test_blank_fields_are_grouped_by_toilet_and_remarks_are_optional(self):
         blanks = self.app.find_blank_fields({})
@@ -711,7 +722,7 @@ class EcoToiletGuiTest(FormGuiTest):
         category, table, (a, b, c) = self.make_photos(('a.jpg', 'b.jpg', 'c.jpg'))
         self.app.photo_captions[category] = {a: '甲', b: '乙', c: '丙'}
         out, captured = self.generate()
-        self.assertEqual(captured['initialfile'], '1151015-17_玉山主峰線生態廁所回報單.docx')
+        self.assertEqual(captured['initialfile'], '1151015-17_玉山主峰線生態廁所回報單_王小明.docx')
         self.assertEqual(self.confirm_calls, [])
         self.assertEqual(self.shown, [])
         doc = Document(out)
@@ -723,7 +734,7 @@ class EcoToiletGuiTest(FormGuiTest):
         name = self.app.draft_name({'start_year': '115', 'start_month': '10', 'start_day': '15', 'end_year': '115',
                                     'end_month': '10', 'end_day': '15', 'location': '玉山主峰線'},
                                    g.datetime(2026, 10, 15, 9, 30))
-        self.assertEqual(name, '1151015_玉山主峰線生態廁所回報單草稿_20261015_0930')
+        self.assertEqual(name, '1151015_玉山主峰線生態廁所回報單草稿_1015_0930')
 
 
 class LauncherTest(unittest.TestCase):

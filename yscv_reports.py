@@ -178,31 +178,7 @@ NEWLINE = chr(10)
 ECO_DEFAULT_LOCATION = '孟祿亭、白木林生態廁所'
 DATE_PARTS = ('year', 'month', 'day')
 TAB_ICON_PX = 22        # 分頁標籤上的圖示大小（96 dpi 時的像素）
-NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
-HAN = re.compile('[' + chr(0x3400) + '-' + chr(0x4dbf) + chr(0x4e00) + '-' + chr(0x9fff) + chr(0xf900) + '-' + chr(0xfaff) + ']')
-
-
-def split_names(text):
-    """把「王小明 李小華、陳大文,林小美」這類輸入拆成一人一筆（連續的分隔符號視為一個）。
-
-    頓號、逗號、分號、斜線、換行一定是分隔。空白（含全形空白）只用來分隔中文姓名：
-    含漢字的詞各自是一個姓名；沒有漢字的詞（英文、韓文、日文假名等外文）連在一起時，中間的空白不拆，
-    視為同一個姓名，例如「王小明 John Smith 李小華」是三位。多位外文姓名請用逗號或頓號隔開。
-    """
-    names = []
-    for part in NAME_SEPARATORS.split(text or ''):
-        foreign = []        # 連續的外文詞，合成一個姓名
-        for token in part.split():
-            if HAN.search(token):
-                if foreign:
-                    names.append(' '.join(foreign))
-                    foreign = []
-                names.append(token)
-            else:
-                foreign.append(token)
-        if foreign:
-            names.append(' '.join(foreign))
-    return names
+split_names = g.split_names
 
 
 
@@ -768,8 +744,7 @@ class TatakaReportGUI(_FormGUI):
             date = f"{int(fields['year'])}{int(fields['month']):02d}{int(fields['day']):02d}"
         except (KeyError, ValueError):
             date = ''
-        who = '、'.join(g._INVALID_FILENAME_CHARS.sub('', name) for name in split_names(fields.get('volunteer', '')))
-        return date, who
+        return date, g.name_label(fields.get('volunteer', ''))
 
     def output_name(self, data):
         date, who = self._name_parts(data)
@@ -777,7 +752,7 @@ class TatakaReportGUI(_FormGUI):
 
     def draft_name(self, fields, now):
         date, who = self._name_parts(fields)
-        parts = [date, '塔塔加保育宣導回報單草稿', who, now.strftime('%Y%m%d_%H%M')]
+        parts = [date, '塔塔加保育宣導回報單草稿', who, now.strftime('%m%d_%H%M')]
         return '_'.join(part for part in parts if part)
 
     def make_report(self, data, photo_files, captions, output_path, rotations=None, crops=None):
@@ -922,15 +897,17 @@ class EcoToiletReportGUI(_FormGUI):
         return location[:-len('生態廁所')] if location.endswith('生態廁所') else location
 
     def output_name(self, data):
-        return f"{g.roc_date_range(data)}_{self._place_name(data)}生態廁所回報單"
+        parts = [g.roc_date_range(data), f"{self._place_name(data)}生態廁所回報單", g.name_label(data.get('personnel', ''))]
+        return '_'.join(part for part in parts if part)
 
     def draft_name(self, fields, now):
         try:
             date_part = g.roc_date_range(fields)
         except (KeyError, ValueError):
             date_part = ''
-        prefix = f"{date_part}_" if date_part else ""
-        return f"{prefix}{self._place_name(fields)}生態廁所回報單草稿_{now.strftime('%Y%m%d_%H%M')}"
+        parts = [date_part, f"{self._place_name(fields)}生態廁所回報單草稿", g.name_label(fields.get('personnel', '')),
+                 now.strftime('%m%d_%H%M')]
+        return '_'.join(part for part in parts if part)
 
     def make_report(self, data, photo_files, captions, output_path, rotations=None, crops=None):
         return build_ecotoilet_report(self.template_path, data, photo_files, captions, output_path, rotations, crops)

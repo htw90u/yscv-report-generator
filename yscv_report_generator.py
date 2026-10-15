@@ -876,6 +876,42 @@ def roc_date_parts(day=None):
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
 
+NAME_SEPARATORS = re.compile(r'[、,，;；/／|｜\r\n]+')   # 一定是分隔的符號：頓號、逗號、分號、斜線、換行
+HAN = re.compile('[' + chr(0x3400) + '-' + chr(0x4dbf) + chr(0x4e00) + '-' + chr(0x9fff) + chr(0xf900) + '-' + chr(0xfaff) + ']')
+
+
+def split_names(text):
+    """把「王小明 李小華、陳大文,林小美」這類輸入拆成一人一筆（連續的分隔符號視為一個）。
+
+    頓號、逗號、分號、斜線、換行一定是分隔。空白（含全形空白）只用來分隔中文姓名：
+    含漢字的詞各自是一個姓名；沒有漢字的詞（英文、韓文、日文假名等外文）連在一起時，中間的空白不拆，
+    視為同一個姓名，例如「王小明 John Smith 李小華」是三位。多位外文姓名請用逗號或頓號隔開。
+    """
+    names = []
+    for part in NAME_SEPARATORS.split(text or ''):
+        foreign = []        # 連續的外文詞，合成一個姓名
+        for token in part.split():
+            if HAN.search(token):
+                if foreign:
+                    names.append(' '.join(foreign))
+                    foreign = []
+                names.append(token)
+            else:
+                foreign.append(token)
+        if foreign:
+            names.append(' '.join(foreign))
+    return names
+
+
+def name_label(text):
+    """檔名裡的人員姓名：只取第一位，有多位就加「等」（例如「王小明 李小華」→「王小明等」）。沒有姓名回傳空字串。"""
+    names = [_INVALID_FILENAME_CHARS.sub('', name) for name in split_names(text)]
+    names = [name for name in names if name]
+    if not names:
+        return ''
+    return names[0] + ('等' if len(names) > 1 else '')
+
+
 def roc_date_range(data):
     """協勤日期轉成檔名用的字串，例如 1150925-28（同月）、1150930-1002（跨月）。"""
     y1, m1, d1 = int(data['start_year']), int(data['start_month']), int(data['start_day'])
@@ -893,7 +929,8 @@ def roc_date_range(data):
 def default_output_name(data):
     """<協勤日期>_<協勤地點>協勤回報單（不含副檔名），日期放最前面方便依日期排序。"""
     location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
-    return f"{roc_date_range(data)}_{location}協勤回報單"
+    parts = [roc_date_range(data), f"{location}協勤回報單", name_label(data.get('personnel', ''))]
+    return '_'.join(part for part in parts if part)
 
 
 def default_draft_name(data, now):
@@ -904,8 +941,8 @@ def default_draft_name(data, now):
         date_part = ''
     location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
     name = f"{location}協勤回報單草稿" if location else "巡查回報單草稿"
-    prefix = f"{date_part}_" if date_part else ""
-    return f"{prefix}{name}_{now.strftime('%Y%m%d_%H%M')}"
+    parts = [date_part, name, name_label(data.get('personnel', '')), now.strftime('%m%d_%H%M')]
+    return '_'.join(part for part in parts if part)
 
 
 _PDF_SCRIPT = r"""

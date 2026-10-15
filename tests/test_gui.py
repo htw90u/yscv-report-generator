@@ -25,6 +25,11 @@ def style_lookup(root, style_name, option, state=None):
 
 _REAL_EXPORT_PDF = g.export_pdf  # setUp 會把 g.export_pdf 換成假的，這裡留一份真的給「沒有 Word」的測試用
 
+
+def tkfont_linespace(root, widget):
+    import tkinter.font as tkfont
+    return tkfont.Font(root=root, font=widget.cget('font')).metrics('linespace')
+
 class GuiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1241,9 +1246,9 @@ class GuiTest(unittest.TestCase):
         cat, table, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
         self.app.photo_captions[cat][a] = '山屋'
         self.app._render_list(cat)
-        self.assertEqual(tuple(table.item('0', 'values')), ('✓ a.jpg', '山屋'))
+        self.assertEqual(tuple(table.item('0', 'values')), ('✓ (橫) a.jpg', '山屋'))
         self.assertEqual(tuple(table.item('0', 'tags')), ('done',))
-        self.assertEqual(tuple(table.item('1', 'values')), ('● b.jpg', '（未填說明）'))
+        self.assertEqual(tuple(table.item('1', 'values')), ('● (橫) b.jpg', '（未填說明）'))
         self.assertEqual(tuple(table.item('1', 'tags')), ('missing',))
         palette = g.THEMES[g.DEFAULT_THEME]
         self.assertEqual(str(table.tag_configure('missing', 'background')), palette['missing_bg'])
@@ -2033,6 +2038,118 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.apply_draft(draft), [])
         self.assertEqual(self.app.photo_rotations[cat], {})
 
+    # ---- 檔名左側的 (橫)/(直)
+    def test_filename_column_shows_landscape_or_portrait(self):
+        cat = g.PHOTO_CATEGORIES[0]
+        table = self.app.listboxes[cat]
+        wide, tall, exif, square = self._make_images(['w.jpg', 't.jpg', 'e.jpg', 's.jpg'])
+        Image.new('RGB', (100, 300), 'red').save(tall)
+        im = Image.new('RGB', (300, 100), 'red')
+        ex = im.getexif()
+        ex[0x0112] = 6  # 轉正後變直式
+        im.save(exif, exif=ex)
+        Image.new('RGB', (100, 100), 'red').save(square)
+        self.app._add_photo_files(cat, [wide, tall, exif, square])
+        self.assertEqual([table.row_text(i) for i in range(4)],
+                         ['● (橫) w.jpg', '● (直) t.jpg', '● (直) e.jpg', '● (橫) s.jpg'])  # 正方形算橫式（跟報告一致）
+        bad = os.path.join(self.tmp.name, 'bad.jpg')
+        open(bad, 'wb').close()
+        self.app._add_photo_files(cat, [bad])
+        self.assertEqual(table.row_text(4), '● (？) bad.jpg')
+
+    def test_rotating_a_photo_flips_its_orientation_tag_in_the_table(self):
+        cat, table, (a,) = self._photos(names=('r.jpg',), size=(400, 200))
+        self._select_first(cat, table)
+        self.assertEqual(table.row_text(0), '● (橫) r.jpg')
+        self.app.rotate_right_btn.invoke()
+        self.assertEqual(table.row_text(0), '● (直) r.jpg')
+        self.app.rotate_right_btn.invoke()
+        self.assertEqual(table.row_text(0), '● (橫) r.jpg')
+
+    # ---- 拖曳加入：安插在滑鼠放開的位置
+    def _drop_point(self, table, index, upper=True):
+        self.root.update()
+        box = table.bbox(str(index))
+        return (table.winfo_rootx() + 20, table.winfo_rooty() + box[1] + (box[3] // 4 if upper else box[3] * 3 // 4))
+
+    def test_drop_on_upper_half_of_a_row_inserts_before_it(self):
+        cat, table, (a, b, c) = self._photos()
+        new = self._make_images(['n1.jpg', 'n2.jpg'])
+        self._show_photos_tab()
+        x, y = self._drop_point(table, 1, upper=True)
+        self.app.handle_dropped_files(new, x, y)
+        self.assertEqual(self.app.photo_files[cat], [a, new[0], new[1], b, c])
+        self.assertEqual(table.selected_indexes(), (1, 2))  # 剛放進來的照片被選取
+
+    def test_drop_on_lower_half_of_a_row_inserts_after_it(self):
+        cat, table, (a, b, c) = self._photos()
+        new = self._make_images(['n1.jpg'])
+        self._show_photos_tab()
+        x, y = self._drop_point(table, 1, upper=False)
+        self.app.handle_dropped_files(new, x, y)
+        self.assertEqual(self.app.photo_files[cat], [a, b, new[0], c])
+
+    def test_drop_on_table_heading_inserts_at_the_top_and_below_rows_appends(self):
+        cat, table, (a, b, c) = self._photos()
+        first, last = self._make_images(['n1.jpg', 'n2.jpg'])
+        self._show_photos_tab()
+        self.app.handle_dropped_files([first], table.winfo_rootx() + 20, table.winfo_rooty() + 5)  # 表頭
+        self.assertEqual(self.app.photo_files[cat][0], first)
+        self.root.update()
+        x, y = table.winfo_rootx() + 20, table.winfo_rooty() + table.winfo_height() - 3  # 最後一列下面的空白
+        self.app.handle_dropped_files([last], x, y)
+        self.assertEqual(self.app.photo_files[cat][-1], last)
+
+    def test_drop_outside_the_table_appends_to_the_end(self):
+        cat, table, (a, b, c) = self._photos()
+        new = self._make_images(['n1.jpg'])
+        self._show_photos_tab()
+        x = self.app.photo_right_panel.winfo_rootx() + 30  # 放在右邊預覽區
+        y = self.app.photo_right_panel.winfo_rooty() + 30
+        self.app.handle_dropped_files(new, x, y)
+        self.assertEqual(self.app.photo_files[cat], [a, b, c, new[0]])
+
+    def test_drop_with_duplicates_inserts_only_new_ones_at_the_position(self):
+        cat, table, (a, b, c) = self._photos()
+        new = self._make_images(['n1.jpg'])
+        self._show_photos_tab()
+        x, y = self._drop_point(table, 0, upper=True)
+        self.app.handle_dropped_files([b, new[0]], x, y)
+        self.assertEqual(self.app.photo_files[cat], [new[0], a, b, c])
+
+    # ---- 填寫框可上下調整高度
+    def test_every_text_box_has_a_resize_grip_that_changes_its_height(self):
+        self.assertEqual(set(self.app.text_grips), set(self.app.text_fields))
+        key = 'road_status'
+        widget, grip = self.app.text_fields[key], self.app.text_grips[key]
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_ROAD))
+        self.root.update()
+        before = int(widget.cget('height'))
+        line = tkfont_linespace(self.root, widget)
+        grip.event_generate('<Button-1>', x=5, y=2, rootx=100, rooty=100)
+        grip.event_generate('<B1-Motion>', x=5, y=2, rootx=100, rooty=100 + 3 * line)
+        self.root.update()
+        self.assertEqual(int(widget.cget('height')), before + 3)
+        grip.event_generate('<B1-Motion>', x=5, y=2, rootx=100, rooty=100 - 20 * line)
+        self.root.update()
+        self.assertEqual(int(widget.cget('height')), g.TEXT_MIN_LINES)  # 不會小於下限
+        grip.event_generate('<B1-Motion>', x=5, y=2, rootx=100, rooty=100 + 500 * line)
+        self.root.update()
+        self.assertEqual(int(widget.cget('height')), g.TEXT_MAX_LINES)  # 不會大於上限
+
+    def test_resizing_a_text_box_updates_the_tab_scroll_region(self):
+        self.app.notebook.select(self.app._tab_by_title(g.TAB_ROAD))
+        self.root.update()
+        canvas, inner, scrollbar = self.app._scroll_tabs[g.TAB_ROAD]
+        widget = self.app.text_fields['road_status']
+        self.app.set_text_height(widget, g.TEXT_MAX_LINES)
+        self.root.update()
+        self.assertGreater(inner.winfo_reqheight(), canvas.winfo_height())
+        self.assertTrue(scrollbar.winfo_manager())  # 內容變高，出現捲動軸
+        self.app.set_text_height(widget, g.TEXT_MIN_LINES)
+        self.root.update()
+        self.assertEqual(int(widget.cget('height')), g.TEXT_MIN_LINES)
+
     def test_font_is_iansui(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
@@ -2381,7 +2498,7 @@ class GuiTest(unittest.TestCase):
         table.set_selection([0])
         self._drag(cat, table, 0, 1, 2)
         self.assertEqual(self.app.photo_files[cat], [b, c, a])
-        self.assertEqual([table.row_text(i) for i in range(3)], ['● b.jpg', '● c.jpg', '● a.jpg'])
+        self.assertEqual([table.row_text(i) for i in range(3)], ['● (橫) b.jpg', '● (橫) c.jpg', '● (橫) a.jpg'])
         self.assertEqual(table.selected_indexes(), (2,))
         self._drag(cat, table, 2, 0)
         self.assertEqual(self.app.photo_files[cat], [a, b, c])

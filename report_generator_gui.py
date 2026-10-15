@@ -145,6 +145,8 @@ FIELD_TAB = {
 MARK_DONE = '✓'      # 已填說明／已填完的記號
 MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
 PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明；按 Delete 移除所選照片）"
+TEXT_MIN_LINES = 2      # 填寫框最少／最多幾行（可用下方的拉桿調整）
+TEXT_MAX_LINES = 40
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
 PHOTO_TABLE_ROWS_COMPACT = 5  # 螢幕高度不夠時改用的列數
 PHOTO_NAME_COL_PX = 240       # 照片表格「檔名」「說明」兩欄的初始寬度（之後會隨表格寬度對半分）
@@ -1230,6 +1232,7 @@ class ReportGeneratorGUI:
         self.template_path = template_path
         self.photo_files = {c: [] for c in PHOTO_CATEGORIES}  # 依 Word 順序
         self.photo_captions = {c: {} for c in self.photo_files}  # category -> {path: caption}
+        self._size_cache = {}  # (路徑, 修改時間) -> (寬, 高)，表格顯示橫／直用
         self.photo_rotations = {c: {} for c in self.photo_files}  # category -> {path: 順時針角度 90/180/270}（不改原檔）
         self._last_dir = BASE_DIR  # 存檔對話框預設資料夾
         self.listboxes = {}
@@ -1242,6 +1245,7 @@ class ReportGeneratorGUI:
         self._caption_target = None  # 說明輸入框目前對應的 (分類, 路徑)
         self._drag = None    # 拖曳排序中：[分類, 目前索引]
         self.text_fields = {}
+        self.text_grips = {}
 
         self._ui_queue = queue.Queue()
         self.create_widgets()
@@ -1646,7 +1650,36 @@ class ReportGeneratorGUI:
             text_widget.grid(row=row_idx + 1, column=0, sticky=(tk.W, tk.E), padx=5)
             text_widget.bind('<Return>', lambda e, w=text_widget: self._on_return(w))
             self.text_fields[key] = text_widget
-            row_idx += 2
+            grip = ttk.Label(inner, text="· · · · ·", style='Hint.TLabel', anchor=tk.CENTER, cursor='sb_v_double_arrow')
+            grip.grid(row=row_idx + 2, column=0, sticky=(tk.W, tk.E), padx=5)
+            self._bind_resize_grip(grip, text_widget)
+            self.text_grips[key] = grip
+            row_idx += 3
+
+    def _bind_resize_grip(self, grip, text_widget):
+        """文字框下方的拉桿：按住上下拖曳可以調整這個填寫框的高度（行數）。"""
+        state = {}
+
+        def start(event):
+            state['y'] = event.y_root
+            state['lines'] = int(text_widget.cget('height'))
+
+        def drag(event):
+            line_px = max(1, tkfont.Font(root=self.root, font=text_widget.cget('font')).metrics('linespace'))
+            lines = state['lines'] + round((event.y_root - state['y']) / line_px)
+            self.set_text_height(text_widget, lines)
+
+        grip.bind('<Button-1>', start)
+        grip.bind('<B1-Motion>', drag)
+
+    def set_text_height(self, text_widget, lines):
+        """設定填寫框的高度（行數，限制在 TEXT_MIN_LINES～TEXT_MAX_LINES），並重新計算分頁的捲動範圍。"""
+        lines = max(TEXT_MIN_LINES, min(TEXT_MAX_LINES, int(lines)))
+        if lines != int(text_widget.cget('height')):
+            text_widget.configure(height=lines)
+            self.root.update_idletasks()
+            self._refit_scroll_tabs()
+        return lines
 
     def _list_menu_pt(self):
         """下拉選單的字級 = 一般介面字級 + LIST_MENU_EXTRA_PT。"""
@@ -1786,10 +1819,31 @@ class ReportGeneratorGUI:
             self.previews[category] = preview
 
     # ---- 事件處理
+    def _photo_orientation(self, category, filepath):
+        """照片現在的方向（含 EXIF 與使用者旋轉）：'橫'、'直'；讀不到檔案回傳 '？'。尺寸有快取，不會每次重畫都開檔。"""
+        try:
+            key = (filepath, os.path.getmtime(filepath))
+        except OSError:
+            return '？'
+        size = self._size_cache.get(key)
+        if size is None:
+            try:
+                with Image.open(filepath) as img:
+                    width, height = img.size
+                    if img.getexif().get(0x0112, 1) in (5, 6, 7, 8):  # EXIF 旋轉後寬高互換
+                        width, height = height, width
+            except Exception:
+                return '？'
+            size = self._size_cache[key] = (width, height)
+        width, height = size
+        if self.photo_rotations[category].get(filepath, 0) in (90, 270):
+            width, height = height, width
+        return '橫' if width >= height else '直'
+
     def _photo_label(self, category, filepath):
-        """表格「檔名」欄的文字：已填說明「✓ 檔名」，沒填「● 檔名」。"""
+        """表格「檔名」欄的文字：「記號 (橫) 檔名」；已填說明記號是 ✓，沒填是 ●。"""
         mark = MARK_DONE if self.photo_captions[category].get(filepath) else MARK_MISSING
-        return f"{mark} {os.path.basename(filepath)}"
+        return f"{mark} ({self._photo_orientation(category, filepath)}) {os.path.basename(filepath)}"
 
     def missing_caption_count(self, category):
         return sum(1 for p in self.photo_files[category] if not self.photo_captions[category].get(p))
@@ -1936,6 +1990,7 @@ class ReportGeneratorGUI:
         else:
             self.photo_rotations[category].pop(path, None)
         self.photo_preview.show(category, path, angle)
+        self._render_list(category)  # 表格上的 (橫)/(直) 跟著變
         self.status_label.config(text=f"已旋轉照片（目前 {angle}°）")
 
     def _commit_caption(self):
@@ -2060,17 +2115,38 @@ class ReportGeneratorGUI:
             return
         self._add_photo_files(category, filepaths)
 
-    def _add_photo_files(self, category, filepaths):
-        """把照片加到某一類（已經加過的略過），回傳實際新增的張數。"""
-        added = 0
+    def _add_photo_files(self, category, filepaths, index=None):
+        """把照片加到某一類（已經加過的略過），回傳實際新增的張數。index 有給就安插在那個位置，沒給就接在最後面。"""
+        new = []
         for filepath in filepaths:
-            if filepath not in self.photo_files[category]:
-                self.photo_files[category].append(filepath)
-                added += 1
+            if filepath not in self.photo_files[category] and filepath not in new:
+                new.append(filepath)
+        files = self.photo_files[category]
+        position = len(files) if index is None else max(0, min(index, len(files)))
+        files[position:position] = new
         self._render_list(category)
-        self.status_label.config(text=f"已新增 {added} 張照片到 {category}")
-        logging.info(f"新增 {added} 張照片到 {category}")
-        return added
+        where = "" if index is None else f"（從第 {position + 1} 張開始）"
+        self.status_label.config(text=f"已新增 {len(new)} 張照片到 {category}{where}")
+        logging.info(f"新增 {len(new)} 張照片到 {category}{where}")
+        self._last_added = (category, position, len(new))
+        return len(new)
+
+    def _drop_insert_index(self, category, screen_x, screen_y):
+        """滑鼠放開的位置在表格內時，回傳要安插的位置：放在某列上半部＝插在那列前面，下半部＝插在後面；
+        放在表頭＝最前面；放在表格下方空白處或表格外＝None（接在最後面）。"""
+        table = self.listboxes[category]
+        if screen_x is None or not table.winfo_ismapped():
+            return None
+        x, y = screen_x - table.winfo_rootx(), screen_y - table.winfo_rooty()
+        if not (0 <= x < table.winfo_width() and 0 <= y < table.winfo_height()):
+            return None
+        if table.identify_region(x, y) == 'heading':
+            return 0
+        iid = table.identify_row(y)
+        if not iid:
+            return None
+        top, height = table.bbox(iid)[1], table.bbox(iid)[3]
+        return int(iid) + (1 if y > top + height / 2 else 0)
 
     def handle_dropped_files(self, paths, screen_x=None, screen_y=None):
         """從檔案總管拖進視窗的檔案／資料夾：圖片加到「服勤照片」；放在哪個小分頁上就加到哪一類，否則加到目前的那一類。"""
@@ -2079,17 +2155,26 @@ class ReportGeneratorGUI:
             self.status_label.config(text="拖進來的檔案裡沒有圖片（支援 jpg、jpeg、png、gif、bmp）")
             return 0
         category = self._current_photo_category()
+        over_tab = False
         if screen_x is not None:
             nb = self.photo_notebook
             if nb.winfo_ismapped():
                 try:
                     hit = nb.index(f'@{screen_x - nb.winfo_rootx()},{screen_y - nb.winfo_rooty()}')
                     category = PHOTO_CATEGORIES[hit]
+                    over_tab = True
                 except tk.TclError:
                     pass
         self.notebook.select(self._tab_by_title(TAB_PHOTOS))
         self.photo_notebook.select(self.photo_pages[category])
-        added = self._add_photo_files(category, images)
+        self.root.update_idletasks()
+        index = self._drop_insert_index(category, screen_x, screen_y) if not over_tab else None
+        added = self._add_photo_files(category, images, index)
+        if added:  # 選取剛加入的照片，讓使用者看到它們插在哪裡
+            _, first, count = self._last_added
+            table = self.listboxes[category]
+            table.set_selection(range(first, first + count))
+            table.show_index(first)
         notes = []
         if len(images) - added:
             notes.append(f"{len(images) - added} 張已加入過")

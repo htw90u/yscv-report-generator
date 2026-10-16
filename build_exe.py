@@ -1,7 +1,7 @@
 """打包成 Windows 資料夾版（PyInstaller --onedir），並壓成可上傳到 GitHub Release 的 zip，同時印出 SHA-256。
 
 用法：python build_exe.py          （需要 pip install pyinstaller）
-輸出：dist/玉山保育志工回報單產生器/（可直接執行「玉山保育志工回報單產生器.exe」）與 dist/yscv-report-generator-v<版本>-win64.zip
+輸出：build/stage/玉山保育志工回報單產生器/（可直接執行「玉山保育志工回報單產生器.exe」）與 dist/yscv-report-generator-v<版本>-win64.zip
 （zip 檔名維持英文，GitHub 會把附件檔名裡的中文拿掉）
 意見反應的設定檔 yscv_feedback_endpoint.py 存在的話會一起打包（網址與 TOKEN 會在 .exe 裡）；不存在就不內建意見反應的寄送。
 """
@@ -21,10 +21,11 @@ sys.path.insert(0, ROOT)
 
 def main():
     import yscv_report_generator as g
-    dist = os.path.join(ROOT, 'dist')
-    work = os.path.join(ROOT, 'build')
-    for path in (os.path.join(dist, NAME), work):
-        shutil.rmtree(path, ignore_errors=True)
+    dist = os.path.join(ROOT, 'dist')                 # 只放最後的 zip
+    work = os.path.join(ROOT, 'build')                # 暫存與打包出來的資料夾（stage），每次重新建立
+    stage = os.path.join(work, 'stage')               # 資料夾版放這裡：就算 dist 裡舊版的程式還開著也不會卡住
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(dist, exist_ok=True)
     info_path = os.path.join(ROOT, 'yscv_build_info.py')
     label = g.version_label()
     with open(info_path, 'w', encoding='utf-8') as f:
@@ -32,7 +33,7 @@ def main():
     print('烙入版本：', label)
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--windowed',
                '--name', NAME, '--icon', os.path.join(ROOT, 'icons', 'yscv.ico'),
-               '--distpath', dist, '--workpath', work, '--specpath', work,
+               '--distpath', stage, '--workpath', work, '--specpath', work,
                '--hidden-import', 'yscv_reports', '--hidden-import', 'yscv_updates',
                '--hidden-import', 'yscv_build_info']
     if os.path.exists(os.path.join(ROOT, 'yscv_feedback_endpoint.py')):
@@ -48,7 +49,7 @@ def main():
         if os.path.exists(info_path):
             os.remove(info_path)               # 烙入檔只給打包用，開發環境走 git describe
 
-    folder = os.path.join(dist, NAME)
+    folder = os.path.join(stage, NAME)
     for extra in ('README.md', 'LICENSE'):
         shutil.copy(os.path.join(ROOT, extra), folder)
     manual = os.path.join(ROOT, 'docs', '使用說明.pdf')            # 給使用者的 PDF 使用說明（python tools/make_manual.py 產生）

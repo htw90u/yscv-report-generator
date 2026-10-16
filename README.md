@@ -72,7 +72,7 @@ pip install pyinstaller
 python build_exe.py
 ```
 
-`build_exe.py` 會用 PyInstaller 打包成資料夾版（`dist/玉山保育志工回報單產生器/`，裡面的執行檔就叫「玉山保育志工回報單產生器.exe」），並壓成 `dist/yscv-report-generator-v<版本>-win64.zip`、印出 SHA-256。圖示用 `icons/yscv.ico`；範本、字型與圖示都會一起包進去；打包當下的 `<tag>.<次數>-<sha>` 版本會烙進 .exe（打包後沒有 git）。
+`build_exe.py` 會用 PyInstaller 打包成資料夾版（`build/stage/玉山保育志工回報單產生器/`，裡面的執行檔就叫「玉山保育志工回報單產生器.exe」），並壓成 `dist/yscv-report-generator-v<版本>-win64.zip`、印出 SHA-256。圖示用 `icons/yscv.ico`；範本、字型與圖示都會一起包進去；打包當下的 `<tag>.<次數>-<sha>` 版本會烙進 .exe（打包後沒有 git）。
 如果本機有 `yscv_feedback_endpoint.py`，意見反應的網址與密鑰會被一起打包進 .exe（沒有就不內建寄送功能）。
 
 ## 測試

@@ -80,6 +80,9 @@ FONT_FILES = ('Iansui-Regular.ttf',)
 FONT_LICENSE = 'OFL-Iansui.txt'
 FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
+# 使用者可以選的介面字型：顯示名稱 -> 字型家族名稱；選擇記在設定檔（鍵 font），下次開啟程式才生效
+FONT_CHOICES = {'芫荽': FONT_FAMILY, '微軟正黑體': FALLBACK_FONT_FAMILY}
+DEFAULT_FONT_NAME = '芫荽'
 LOG_FILE = os.path.join(DATA_DIR, 'yscv_report_generator.log')
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
@@ -1616,13 +1619,21 @@ def load_theme_name(settings_path):
     return name if name in THEMES else DEFAULT_THEME
 
 
-def pick_font_family(root):
-    """有載入到指定字型就用它，否則退回系統字型。"""
+def load_font_name(settings_path):
+    """讀取記住的介面字型選擇（顯示名稱）；沒有設定或名稱無效就用預設字型。"""
+    name = load_settings(settings_path).get('font')
+    return name if isinstance(name, str) and name in FONT_CHOICES else DEFAULT_FONT_NAME     # 設定檔可能被亂改成清單等
+
+
+def pick_font_family(root, choice=None):
+    """依選擇（FONT_CHOICES 的顯示名稱，沒給就用預設）挑字型家族；選的字型找不到就依序退回另一個字型、Arial。"""
     load_private_fonts()
     families = set(tkfont.families(root))
-    if FONT_FAMILY in families:
-        return FONT_FAMILY
-    return FALLBACK_FONT_FAMILY if FALLBACK_FONT_FAMILY in families else 'Arial'
+    wanted = FONT_CHOICES.get(choice, FONT_FAMILY) if isinstance(choice, str) else FONT_FAMILY
+    for family in (wanted, FONT_FAMILY, FALLBACK_FONT_FAMILY):
+        if family in families:
+            return family
+    return 'Arial'
 
 
 def scale_gui_fonts(root, delta, family=None, weight=None):
@@ -1703,7 +1714,8 @@ class ReportGeneratorGUI:
                  settings_path=DEFAULT_SETTINGS_PATH):
         self.root = root
         self.settings_path = settings_path
-        self.font_family = pick_font_family(root)
+        self.font_name = load_font_name(settings_path)
+        self.font_family = pick_font_family(root, self.font_name)
         scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family, GUI_FONT_WEIGHT)
         self.theme_name = self._load_theme_setting()
         self.palette = THEMES[self.theme_name]
@@ -1853,6 +1865,16 @@ class ReportGeneratorGUI:
     def _save_theme_setting(self):
         save_settings(self.settings_path, theme=self.theme_name)
 
+    def choose_font(self, name):
+        """選擇介面字型：只記住選擇，下次開啟程式才生效（目前畫面的版面是依現在的字型量好的，不即時重排）。"""
+        if name not in FONT_CHOICES:
+            return
+        save_settings(self.settings_path, font=name)
+        if name == self.font_name:
+            self.status_label.config(text=f"字型維持「{name}」")
+        else:
+            self.status_label.config(text=f"字型已改成「{name}」，重新開啟程式後生效")
+
     def _setup_style(self):
         """依目前主題設定外觀：分頁是一個個分開的標籤（目前分頁較突出），按鈕採淺底深字。"""
         p = self.palette
@@ -1931,9 +1953,10 @@ class ReportGeneratorGUI:
         self.status_label.config(text=f"已套用外觀：{name}")
 
     def _center_theme_dropdown(self):
-        """外觀下拉選單：選項文字置中（展開的清單也置中；Tk 8.6 的清單支援 -justify）。"""
-        popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {self.theme_box}')
-        self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
+        """外觀、字型下拉選單：選項文字置中（展開的清單也置中；Tk 8.6 的清單支援 -justify）。"""
+        for box in (self.theme_box, self.font_box):
+            popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {box}')
+            self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
 
     def _recolor(self, widget):
         """ttk 元件會自動跟著樣式變色；原生 tk 的容器（Canvas/Frame/Label）要手動換底色。"""
@@ -1984,6 +2007,13 @@ class ReportGeneratorGUI:
         self.busy_bar = ttk.Progressbar(self.status_label, mode='indeterminate', length=160)
         theme_frame = ttk.Frame(main_frame)
         theme_frame.grid(row=row, column=2, sticky=tk.E, padx=(10, 0))
+        ttk.Label(theme_frame, text="字型：").pack(side=tk.LEFT)
+        self.font_var = tk.StringVar(master=self.root, value=self.font_name)
+        font_box = ttk.Combobox(theme_frame, textvariable=self.font_var, values=list(FONT_CHOICES),
+                                state='readonly', width=9, justify=tk.CENTER)
+        font_box.pack(side=tk.LEFT, padx=(0, 12))
+        font_box.bind('<<ComboboxSelected>>', lambda e: self.choose_font(self.font_var.get()))
+        self.font_box = font_box
         ttk.Label(theme_frame, text="外觀：").pack(side=tk.LEFT)
         self.theme_var = tk.StringVar(master=self.root, value=self.theme_name)
         theme_box = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=list(THEMES),
@@ -3919,7 +3949,7 @@ class ReportLauncher:
         self.update_release = None
         self._update_queue = queue.Queue()
         self._update_checking = False
-        family = pick_font_family(root)
+        family = pick_font_family(root, load_font_name(settings_path))
         scale_gui_fonts(root, GUI_FONT_DELTA, family, GUI_FONT_WEIGHT)
         palette = THEMES[load_theme_name(settings_path)]
         style = ttk.Style(root)

@@ -213,7 +213,7 @@ class CheckForUpdateTest(unittest.TestCase):
         self.assertNotIn('evil.example', repr(result.release))                          # 伺服器回傳的網址與檔案連結完全沒被採用
 
     def test_same_older_prerelease_and_draft_are_not_updates(self):
-        self.assertEqual(self.check('same', current='0.8')[0].status, 'up_to_date')
+        self.assertEqual(self.check('same', current=g.VERSION)[0].status, 'up_to_date')
         self.assertEqual(self.check('older')[0].status, 'up_to_date')                   # 不會降版
         self.assertEqual(self.check('prerelease')[0].status, 'up_to_date')
         self.assertEqual(self.check('draft')[0].status, 'up_to_date')
@@ -332,7 +332,8 @@ class LauncherUpdateTest(unittest.TestCase):
         self.addCleanup(self.server.close)
         self.root = tk.Tk()
         self.opened, self.shown = [], []
-        for p in (mock.patch.object(g, 'open_url', lambda url: self.opened.append(url) or True),
+        for p in (mock.patch.object(g, 'VERSION', '0.8'),           # 假伺服器的新版是 v0.9：固定目前版本，不跟著正式發行的版號變
+                  mock.patch.object(g, 'open_url', lambda url: self.opened.append(url) or True),
                   mock.patch.object(messagebox, 'showinfo', lambda t, m: self.shown.append(('info', t, m))),
                   mock.patch.object(messagebox, 'showerror', lambda t, m: self.shown.append(('err', t, m)))):
             p.start()

@@ -2842,6 +2842,64 @@ class GuiTest(unittest.TestCase):
                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
             self.assertEqual(g.pick_font_family(self.root), g.FALLBACK_FONT_FAMILY)
 
+    # ---- 字型選擇：下次開啟才生效
+    def test_font_box_offers_both_fonts_and_defaults_to_the_bundled_one(self):
+        self.assertEqual(tuple(self.app.font_box.cget('values')), ('芫荽', '微軟正黑體'))
+        self.assertEqual(self.app.font_var.get(), g.DEFAULT_FONT_NAME)
+        self.assertEqual(str(self.app.font_box.cget('state')), 'readonly')
+        self.assertEqual(str(self.app.font_box.cget('justify')), 'center')
+        self.assertEqual(self.app.font_box.master, self.app.theme_box.master)      # 和「外觀」同一排
+
+    def test_choosing_a_font_is_saved_but_does_not_change_the_current_window(self):
+        before = self.app.font_family
+        self.app.font_var.set('微軟正黑體')
+        self.app.font_box.event_generate('<<ComboboxSelected>>')
+        self.root.update()
+        self.assertEqual(g.load_settings(self.settings).get('font'), '微軟正黑體')
+        self.assertEqual(self.app.font_family, before)                              # 這次的畫面不動
+        self.assertIn('重新開啟程式後生效', self.app.status_label.cget('text'))
+        self.app.font_var.set('芫荽')
+        self.app.font_box.event_generate('<<ComboboxSelected>>')
+        self.assertEqual(g.load_settings(self.settings).get('font'), '芫荽')
+        self.assertNotIn('重新開啟', self.app.status_label.cget('text'))             # 選回目前的字型就不用重開
+        self.app.choose_font('不存在的字型')                                         # 不認得的名稱忽略
+        self.assertEqual(g.load_settings(self.settings).get('font'), '芫荽')
+
+    def test_saved_font_choice_is_used_next_time(self):
+        g.save_settings(self.settings, font='微軟正黑體')
+        root2 = tk.Tk()
+        self.addCleanup(root2.destroy)
+        app2 = g.ReportGeneratorGUI(root2, autosave_path=self.autosave, restore_on_start=False,
+                                    settings_path=self.settings)
+        self.assertEqual(app2.font_name, '微軟正黑體')
+        self.assertEqual(app2.font_var.get(), '微軟正黑體')
+        self.assertEqual(app2.font_family, g.FALLBACK_FONT_FAMILY)
+        self.assertEqual(g.load_font_name(self.settings), '微軟正黑體')
+        launcher_root = tk.Tk()
+        self.addCleanup(launcher_root.destroy)
+        launcher = g.ReportLauncher(launcher_root, settings_path=self.settings)       # 入口選單也用同一個字型
+        self.assertEqual(launcher.font_family, g.FALLBACK_FONT_FAMILY)
+
+    def test_bad_font_setting_falls_back_to_the_default(self):
+        for bad in ('Comic Sans', 5, None, ['芫荽'], ''):
+            g.save_settings(self.settings, font=bad)
+            self.assertEqual(g.load_font_name(self.settings), g.DEFAULT_FONT_NAME, repr(bad))
+        with open(self.settings, 'w', encoding='utf-8') as f:
+            f.write('{壞掉')
+        self.assertEqual(g.load_font_name(self.settings), g.DEFAULT_FONT_NAME)
+
+    def test_pick_font_family_follows_the_choice_and_falls_back(self):
+        both = ['Arial', g.FONT_FAMILY, g.FALLBACK_FONT_FAMILY]
+        with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: both):
+            self.assertEqual(g.pick_font_family(self.root, '芫荽'), g.FONT_FAMILY)
+            self.assertEqual(g.pick_font_family(self.root, '微軟正黑體'), g.FALLBACK_FONT_FAMILY)
+            self.assertEqual(g.pick_font_family(self.root, '亂寫'), g.FONT_FAMILY)
+            self.assertEqual(g.pick_font_family(self.root), g.FONT_FAMILY)
+        with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
+            self.assertEqual(g.pick_font_family(self.root, '芫荽'), g.FALLBACK_FONT_FAMILY)   # 選的字型找不到：退回另一個
+        with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FONT_FAMILY]):
+            self.assertEqual(g.pick_font_family(self.root, '微軟正黑體'), g.FONT_FAMILY)
+
     # ---- 照片預覽與拖曳排序
     class _Ev:
         def __init__(self, y, x_root=0, y_root=0):

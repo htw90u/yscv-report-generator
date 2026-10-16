@@ -1816,14 +1816,20 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(g.default_draft_name(dict(data, location=''), now), '1151001-02_巡查回報單草稿_1014_2040')
         self.assertEqual(g.default_draft_name(dict(data, start_day='abc'), now), '排雲山莊協勤回報單草稿_1014_2040')
         self.assertEqual(g.default_draft_name({}, now), '巡查回報單草稿_1014_2040')
-        # 人員姓名：只取第一位，多位加「等」
+        # 草稿檔名帶全部的人員姓名（以 _ 分隔）；報告檔名不放姓名
         self.assertEqual(g.default_draft_name(dict(data, personnel='王小明'), now),
                          '1151001-02_排雲山莊協勤回報單草稿_王小明_1014_2040')
         self.assertEqual(g.default_draft_name(dict(data, personnel='王小明、李小華 陳大文'), now),
-                         '1151001-02_排雲山莊協勤回報單草稿_王小明等_1014_2040')
-        self.assertEqual(g.default_output_name(dict(data, personnel='李/小華, 王小明')), '1151001-02_排雲山莊協勤回報單_李等')
+                         '1151001-02_排雲山莊協勤回報單草稿_王小明_李小華_陳大文_1014_2040')
+        self.assertEqual(g.default_output_name(dict(data, personnel='李/小華, 王小明')), '1151001-02_排雲山莊協勤回報單')
         self.assertEqual(g.name_label(''), '')
-        self.assertEqual(g.name_label('John Smith, Mary Jane'), 'John Smith等')
+        self.assertEqual(g.name_label('John Smith, Mary Jane'), 'John Smith_Mary Jane')
+        self.assertEqual(g.name_label('王:小明、、李小華,'), '王小明_李小華')               # 檔名不能有的符號拿掉、多餘分隔符號不算
+        many = '、'.join(f'志工{n:02d}號' for n in range(60))                           # 人很多：只留放得下的前幾位，不切到姓名中間
+        label = g.name_label(many)
+        self.assertLessEqual(len(label), g.NAME_LABEL_MAX_CHARS)
+        self.assertTrue(label.startswith('志工00號_志工01號_'))
+        self.assertTrue(all(part.startswith('志工') and part.endswith('號') for part in label.split('_')))
 
     def test_save_draft_dialog_suggests_name_with_duty_name(self):
         self.fill_dates()

@@ -20,17 +20,20 @@ FONT = 'Microsoft JhengHei'
 RED = '#d92d20'
 
 
+LEFT_TRIM = 8      # 左邊的視窗陰影也裁掉；標註座標都已扣掉這 8 像素
+
+
 def load(name, trim=7):
     """載入截圖；視窗截圖右邊與下面各有幾個像素的黑邊（視窗陰影），裁掉。"""
     image = Image.open(os.path.join(IMAGES, name)).convert('RGB')
-    return image.crop((0, 0, image.width - trim, image.height - trim))
+    return image.crop((LEFT_TRIM, 0, image.width - trim, image.height - trim))
 
 
 def annotate(image, boxes, notes):
     """boxes：要圈起來的 (x0, y0, x1, y1)；notes：(x, y, 文字)，紅字加白底。"""
     image = image.copy()
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype(os.path.join(ROOT, 'fonts', 'Iansui-Regular.ttf'), 21)
+    font = ImageFont.truetype(os.path.join(ROOT, 'fonts', 'Iansui-Regular.ttf'), 25)
     for box in boxes:
         draw.rounded_rectangle(box, radius=8, outline=RED, width=3)
     for x, y, text in notes:
@@ -73,7 +76,10 @@ def bullets(doc, items):
         p.paragraph_format.left_indent = Cm(0.9)
 
 
-def picture(doc, image, caption, width_cm=16.0):
+FULL_WIDTH_CM = 18.4        # A4 寬 21 cm − 左右邊界各 1.2 cm
+
+
+def picture(doc, image, caption, width_cm=FULL_WIDTH_CM):
     path = os.path.join(tempfile.mkdtemp(), 'figure.png')
     image.save(path)
     p = doc.add_paragraph()
@@ -89,8 +95,8 @@ def build(docx_path):
     doc = Document()
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(21), Cm(29.7)
-    section.left_margin = section.right_margin = Cm(2)
-    section.top_margin = section.bottom_margin = Cm(1.8)
+    section.left_margin = section.right_margin = Cm(1.2)      # 邊界縮小，圖才放得夠大
+    section.top_margin = section.bottom_margin = Cm(1.5)
 
     para(doc, '玉山保育志工回報單產生器', size=22, bold=True, color='1F3A93', after=0)
     para(doc, f'使用說明（適用 v{g.VERSION}）', size=13, color='555555', after=8)
@@ -105,7 +111,7 @@ def build(docx_path):
     heading(doc, '二、選擇回報單')
     para(doc, '開啟後先選要填寫的回報單：用滑鼠點選，或按數字鍵 1～3；按 Esc 離開。右下角的「檢查更新」可以查看有沒有新版，'
               '「意見反應」可以直接把問題或建議送給開發者，最右下角的灰色小字是目前的版本。')
-    picture(doc, load('01_入口選單.png'), '圖 1　入口選單', 11.5)
+    picture(doc, load('01_入口選單.png'), '圖 1　入口選單', 14.5)
 
     heading(doc, '三、填寫內容')
     bullets(doc, [
@@ -113,12 +119,12 @@ def build(docx_path):
         '日期會自動帶入今天，可以直接修改；志工姓名有多位時，用空白、頓號（、）或逗號隔開即可。',
     ])
     top = load('02_基本資料.png')
-    picture(doc, top.crop((0, 0, top.width, 255)), '圖 2　基本資料分頁（只截上半部）', 16.0)
+    picture(doc, top.crop((0, 0, 1105, 255)), '圖 2　基本資料分頁（只截上半部）')
     para(doc, '需要寫比較多字時，可以調整欄位大小：每個填寫欄下方有一條小橫條，用滑鼠往上或往下拖曳，就能改變那個欄位的高度（圖 3 紅框處）。',
          after=2)
-    third = annotate(load('03_填寫欄位.png'), [(634, 306, 722, 326), (634, 485, 722, 505)],
-                     [(740, 303, '拖曳這條橫條，上下調整欄位高度')])
-    picture(doc, third, '圖 3　填寫欄位（可上下調整高度）', 14.5)
+    third = annotate(load('03_填寫欄位.png').crop((0, 0, 1105, 520)), [(626, 306, 714, 326), (626, 485, 714, 505)],
+                     [(222, 303, '拖曳這條橫條，上下調整欄位高度')])
+    picture(doc, third, '圖 3　填寫欄位（可上下調整高度）')
 
     heading(doc, '四、加入與整理照片')
     bullets(doc, [
@@ -128,17 +134,18 @@ def build(docx_path):
         '預覽區的按鈕可以「向左轉／向右轉 90°」與「裁切」，都不會改到原本的照片檔。',
         '要移除照片：選取後按 Delete，或按「移除所選照片」。報告裡的照片會依你排的順序，每 2 張一列。',
     ])
-    photo = annotate(load('04_照片.png'), [(40, 224, 700, 290), (968, 779, 1327, 815)],
-                     [(70, 560, '拖曳照片可調整順序，也可拖到上方其他小分頁'),
-                      (70, 610, '也可以從檔案總管把照片拖進視窗'),
-                      (770, 690, '裁切、旋轉：不會改到原本的照片檔')])
-    picture(doc, photo, '圖 4　服勤照片分頁', 15.5)
+    photo = annotate(load('04_照片.png'), [(32, 224, 692, 290), (960, 779, 1319, 815)],
+                     [(62, 560, '拖曳照片可調整順序，也可拖到上方其他小分頁'),
+                      (62, 610, '也可以從檔案總管把照片拖進視窗'),
+                      (742, 690, '裁切、旋轉：不會改到原本的照片檔')])
+    picture(doc, photo, '圖 4　服勤照片分頁')
 
     heading(doc, '五、儲存草稿與產生報告')
     bullets(doc, [
         '「儲存草稿（Ctrl+S）」可以把填到一半的內容存成檔案，之後用「載入草稿（Ctrl+L）」接著填。草稿只能載入同一種回報單。',
         '程式每 30 秒會自動存檔；如果當機或不小心關掉，下次開啟會詢問是否還原。',
         '填好後按「產生報告（Ctrl+G）」：若有欄位沒填會先提醒；選好存檔位置後，會同時產生 Word 檔與同名的 PDF，並自動開啟。',
+        '檔名是自動取的：報告是「日期_地點回報單」（不放人員姓名）；草稿是「日期_地點回報單草稿_全部人員姓名（以 _ 分隔）_儲存時間」，可以在存檔視窗修改。',
         '「清除所有資料」會清空目前的內容且無法復原，請先儲存草稿。畫面右下角可以切換外觀（柔和淺色、色弱友善、高對比）。',
     ])
 

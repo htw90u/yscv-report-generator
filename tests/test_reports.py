@@ -508,15 +508,16 @@ class TatakaGuiTest(FormGuiTest):
     def test_file_names(self):
         self.fill_all()
         data, _ = self.app.collect_data()
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
-        data['volunteer'] = '王小明 李小華,John Smith'                       # 多位：只取第一位加「等」
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明等')
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單')          # 報告檔名不放人員姓名
+        data['volunteer'] = '王小明 李小華,John Smith'
+        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單')
+        now = g.datetime(2026, 10, 15, 9, 30)
+        self.assertEqual(self.app.draft_name(data, now), '1151015_塔塔加保育宣導回報單草稿_王小明_李小華_John Smith_1015_0930')
         data['volunteer'] = 'John Smith'
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_John Smith')
+        self.assertEqual(self.app.draft_name(data, now), '1151015_塔塔加保育宣導回報單草稿_John Smith_1015_0930')
         data['volunteer'] = '王小明、'                                         # 只有一位（多餘的分隔符號不算）
-        self.assertEqual(self.app.output_name(data), '1151015_塔塔加保育宣導回報單_王小明')
-        name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王小:明'},
-                                   g.datetime(2026, 10, 15, 9, 30))
+        self.assertEqual(self.app.draft_name(data, now), '1151015_塔塔加保育宣導回報單草稿_王小明_1015_0930')
+        name = self.app.draft_name({'year': '115', 'month': '10', 'day': '15', 'volunteer': '王小:明'}, now)
         self.assertEqual(name, '1151015_塔塔加保育宣導回報單草稿_王小明_1015_0930')
         self.assertEqual(self.app.draft_name({}, g.datetime(2026, 10, 15, 9, 30)),
                          '塔塔加保育宣導回報單草稿_1015_0930')
@@ -526,7 +527,7 @@ class TatakaGuiTest(FormGuiTest):
         category, table, (a, b) = self.make_photos()
         self.app.photo_captions[category] = {a: '甲\n地點甲', b: '乙'}
         out, captured = self.generate()
-        self.assertEqual(captured['initialfile'], '1151015_塔塔加保育宣導回報單_王小明.docx')
+        self.assertEqual(captured['initialfile'], '1151015_塔塔加保育宣導回報單.docx')
         self.assertEqual(self.confirm_calls, [])                        # 都填了：不會問「有欄位未填」
         self.assertEqual(self.shown, [])
         self.assertEqual(self.pdf_calls, [(out, out[:-5] + '.pdf')])
@@ -666,14 +667,15 @@ class EcoToiletGuiTest(FormGuiTest):
         self.app._sync_end_date()                                            # 使用者沒動過起日，也不會蓋掉草稿裡的迄日
         self.assertEqual(self.end_date(), ('115', '10', '17'))
 
-    def test_file_names_carry_the_first_name_plus_deng(self):
+    def test_draft_names_carry_all_names_and_report_names_carry_none(self):
         data = dict(start_year='115', start_month='10', start_day='15', end_year='115', end_month='10', end_day='16',
                     location='玉山主峰線', personnel='王小明 李小華')
         now = g.datetime(2026, 10, 15, 9, 30)
-        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單_王小明等')
-        self.assertEqual(self.app.draft_name(data, now), '1151015-16_玉山主峰線生態廁所回報單草稿_王小明等_1015_0930')
+        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單')
+        self.assertEqual(self.app.draft_name(data, now), '1151015-16_玉山主峰線生態廁所回報單草稿_王小明_李小華_1015_0930')
         data['personnel'] = '王小明'
-        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單_王小明')
+        self.assertEqual(self.app.output_name(data), '1151015-16_玉山主峰線生態廁所回報單')
+        self.assertEqual(self.app.draft_name(data, now), '1151015-16_玉山主峰線生態廁所回報單草稿_王小明_1015_0930')
 
     def test_file_names_do_not_repeat_the_toilet_suffix(self):
         data = dict(start_year='115', start_month='10', start_day='15', end_year='115', end_month='10', end_day='16',
@@ -723,7 +725,7 @@ class EcoToiletGuiTest(FormGuiTest):
         category, table, (a, b, c) = self.make_photos(('a.jpg', 'b.jpg', 'c.jpg'))
         self.app.photo_captions[category] = {a: '甲', b: '乙', c: '丙'}
         out, captured = self.generate()
-        self.assertEqual(captured['initialfile'], '1151015-17_玉山主峰線生態廁所回報單_王小明.docx')
+        self.assertEqual(captured['initialfile'], '1151015-17_玉山主峰線生態廁所回報單.docx')
         self.assertEqual(self.confirm_calls, [])
         self.assertEqual(self.shown, [])
         doc = Document(out)
@@ -795,7 +797,7 @@ class DebugLogTest(unittest.TestCase):
         import sys
         copy = os.path.join(self.tmp.name, 'copy')
         os.makedirs(copy)
-        for name in ('yscv_report_generator.py',):
+        for name in ('yscv_report_generator.py', 'yscv_updates.py'):          # 主程式 import 了 yscv_updates
             with open(os.path.join(g.BASE_DIR, name), 'rb') as src, open(os.path.join(copy, name), 'wb') as dst:
                 dst.write(src.read())
         subprocess.run([sys.executable, '-c', 'import yscv_report_generator as g; g.logging.info("x"); g.logging.warning("w")'],

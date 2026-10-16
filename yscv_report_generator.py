@@ -976,13 +976,20 @@ def split_names(text):
     return names
 
 
+NAME_LABEL_MAX_CHARS = 120   # 草稿檔名裡姓名的總長度上限（Windows 檔名與路徑有長度限制）
+
+
 def name_label(text):
-    """檔名裡的人員姓名：只取第一位，有多位就加「等」（例如「王小明 李小華」→「王小明等」）。沒有姓名回傳空字串。"""
+    """草稿檔名裡的人員姓名：全部的人用 _ 連起來（例如「王小明 李小華」→「王小明_李小華」）。沒有姓名回傳空字串。
+    人很多時總長度超過 NAME_LABEL_MAX_CHARS 就只留放得下的前幾位（不會切到姓名中間）。"""
     names = [_INVALID_FILENAME_CHARS.sub('', name) for name in split_names(text)]
-    names = [name for name in names if name]
-    if not names:
-        return ''
-    return names[0] + ('等' if len(names) > 1 else '')
+    kept, length = [], 0
+    for name in (n for n in names if n):
+        length += len(name) + (1 if kept else 0)
+        if kept and length > NAME_LABEL_MAX_CHARS:
+            break
+        kept.append(name)
+    return '_'.join(kept)
 
 
 def roc_date_range(data):
@@ -1000,14 +1007,14 @@ def roc_date_range(data):
 
 
 def default_output_name(data):
-    """<協勤日期>_<協勤地點>協勤回報單（不含副檔名），日期放最前面方便依日期排序。"""
+    """<協勤日期>_<協勤地點>協勤回報單（不含副檔名），日期放最前面方便依日期排序；報告檔名不放人員姓名。"""
     location = _INVALID_FILENAME_CHARS.sub('', data.get('location', '')).strip()
-    parts = [roc_date_range(data), f"{location}協勤回報單", name_label(data.get('personnel', ''))]
+    parts = [roc_date_range(data), f"{location}協勤回報單"]
     return '_'.join(part for part in parts if part)
 
 
 def default_draft_name(data, now):
-    """草稿檔名（不含副檔名）：<協勤日期>_<協勤地點>協勤回報單草稿_<儲存時間>。欄位還沒填就略過那一段。"""
+    """草稿檔名（不含副檔名）：<協勤日期>_<協勤地點>協勤回報單草稿_<全部人員姓名，以 _ 分隔>_<儲存時間>。欄位還沒填就略過那一段。"""
     try:
         date_part = roc_date_range(data)
     except (KeyError, ValueError):

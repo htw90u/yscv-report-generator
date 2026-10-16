@@ -749,8 +749,8 @@ class TatakaReportGUI(_FormGUI):
         return date, g.name_label(fields.get('volunteer', ''))
 
     def output_name(self, data):
-        date, who = self._name_parts(data)
-        return '_'.join(part for part in (date, '塔塔加保育宣導回報單', who) if part)
+        date, _ = self._name_parts(data)
+        return '_'.join(part for part in (date, '塔塔加保育宣導回報單') if part)       # 報告檔名不放人員姓名
 
     def draft_name(self, fields, now):
         date, who = self._name_parts(fields)
@@ -899,7 +899,7 @@ class EcoToiletReportGUI(_FormGUI):
         return location[:-len('生態廁所')] if location.endswith('生態廁所') else location
 
     def output_name(self, data):
-        parts = [g.roc_date_range(data), f"{self._place_name(data)}生態廁所回報單", g.name_label(data.get('personnel', ''))]
+        parts = [g.roc_date_range(data), f"{self._place_name(data)}生態廁所回報單"]               # 報告檔名不放人員姓名
         return '_'.join(part for part in parts if part)
 
     def draft_name(self, fields, now):

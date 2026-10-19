@@ -740,6 +740,66 @@ class EcoToiletGuiTest(FormGuiTest):
         self.assertEqual(name, '1151015_玉山主峰線生態廁所回報單草稿_1015_0930')
 
 
+class StartupLayoutTest(unittest.TestCase):
+    """啟動時只量最高的那一頁：三種回報單、兩種字型都要確認「它真的最高」、量完每一頁都不用捲動、填寫框少的分頁有填滿。"""
+    FORMS = (('保育巡查', g.ReportGeneratorGUI), ('塔塔加', r.TatakaReportGUI), ('生態廁所', r.EcoToiletReportGUI))
+
+    def build(self, cls, font):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings = os.path.join(tmp.name, 's.json')
+        g.save_settings(settings, font=font)
+        root = tk.Tk()
+        self.addCleanup(lambda: (root.winfo_exists() and root.destroy()))
+        app = cls(root, autosave_path=os.path.join(tmp.name, 'a.json'), restore_on_start=False, settings_path=settings)
+        root.update()
+        return app
+
+    def heights(self, app):
+        found = {}
+        for title, (canvas, inner, _) in app._scroll_tabs.items():
+            app.notebook.select(app._tab_by_title(title))
+            app.root.update()
+            found[title] = (inner.winfo_reqheight(), canvas.winfo_height())
+        return found
+
+    def test_measured_tab_is_the_tallest_and_no_tab_needs_scrolling(self):
+        for font in ('芫荽', '微軟正黑體'):
+            for name, cls in self.FORMS:
+                with self.subTest(font=font, form=name):
+                    with mock.patch.object(cls, 'FILL_TEXT_TABS', ()):           # 加高填寫框之前（原本內容需要的高度）
+                        plain = self.heights(self.build(cls, font))
+                    tallest = max(need for need, _ in plain.values())
+                    self.assertEqual(max(plain[t][0] for t in cls.MEASURE_TABS), tallest,
+                                     f'MEASURE_TABS {cls.MEASURE_TABS} 不是最高的分頁：{plain}')
+                    app = self.build(cls, font)                                   # 正式啟動（含填滿）之後
+                    self.assertEqual(app._tabs_extra_height(all_tabs=True), 0, self.heights(app))   # 每一頁都不用捲動
+
+    def test_tabs_with_few_fields_are_filled_instead_of_leaving_a_blank_area(self):
+        for font in ('芫荽', '微軟正黑體'):
+            for name, cls in self.FORMS:
+                with self.subTest(font=font, form=name):
+                    app = self.build(cls, font)
+                    found = self.heights(app)
+                    self.assertTrue(cls.FILL_TEXT_TABS)
+                    for title in cls.FILL_TEXT_TABS:
+                        need, visible = found[title]
+                        self.assertLessEqual(need, visible)                 # 不超出
+                        self.assertLess(visible - need, 100, f'{title} 下面還有 {visible - need}px 空白')
+
+    def test_patrol_text_tabs_each_gain_at_least_two_lines_per_field(self):
+        original = {g.TAB_ROAD: 5, g.TAB_FACILITY: 5, g.TAB_NATURE: 6, g.TAB_FEEDBACK: 6}      # create_text_tab 原本給的行數
+        for font in ('芫荽', '微軟正黑體'):
+            app = self.build(g.ReportGeneratorGUI, font)
+            self.assertEqual(set(app.FILL_TEXT_TABS), {g.TAB_ROAD, g.TAB_NATURE, g.TAB_FEEDBACK})
+            for key, widget in app.text_fields.items():
+                tab = app.FIELD_TAB[key]
+                if tab in app.FILL_TEXT_TABS:
+                    self.assertGreaterEqual(int(widget.cget('height')), original[tab] + 2, (font, key))   # 每個填寫框至少多 2 行
+                else:
+                    self.assertEqual(int(widget.cget('height')), original[tab], (font, key))             # 「設施」是最高的一頁，不動
+
+
 class DebugLogTest(unittest.TestCase):
     """記錄檔只有在除錯模式（-d、-D、--debug）才會產生。"""
 
@@ -1300,6 +1360,78 @@ class LauncherTest(unittest.TestCase):
                 self.assertEqual(self.root._window_icons, [])
         finally:
             g._icon_cache.clear()
+
+    # ---- 字型：在入口選單選，選了立刻重畫；之後開的回報單畫面讀同一個設定
+    def settings_file(self):
+        return os.path.join(self.tmp.name, 's.json')
+
+    def test_font_dropdown_is_on_the_button_row_at_the_left(self):
+        launcher = self.launcher()
+        self.assertEqual(tuple(launcher.font_box.cget('values')), ('微軟正黑體', '芫荽'))
+        self.assertEqual(launcher.font_var.get(), g.DEFAULT_FONT_NAME)
+        self.assertEqual(str(launcher.font_box.cget('state')), 'readonly')
+        self.assertEqual(launcher.font_box.master.master, launcher.feedback_button.master)    # 字型選單和「意見反應」在同一排（左邊）
+        self.assertEqual(launcher.font_family, g.FALLBACK_FONT_FAMILY)
+
+    def test_choosing_a_font_redraws_the_menu_at_once_and_remembers_it(self):
+        import tkinter.font as tkfont
+        from tkinter import ttk
+        launcher = self.launcher()
+        self.root.geometry('+140+90')
+        self.root.update()
+        position = (self.root.winfo_x(), self.root.winfo_y())
+        old_frame = launcher.frame
+        launcher.font_var.set('芫荽')
+        launcher.font_box.event_generate('<<ComboboxSelected>>')
+        self.root.update()
+        self.assertEqual(g.load_settings(self.settings_file()).get('font'), '芫荽')
+        self.assertEqual(launcher.font_family, g.FONT_FAMILY)
+        self.assertFalse(old_frame.winfo_exists())                                    # 舊畫面整個換掉
+        self.assertEqual(tkfont.nametofont('TkDefaultFont', root=self.root).cget('family'), g.FONT_FAMILY)
+        self.assertIn(g.FONT_FAMILY, str(ttk.Style(self.root).lookup('Heading.TLabel', 'font')))
+        self.assertEqual((self.root.winfo_x(), self.root.winfo_y()), position)        # 視窗位置不動
+        self.assertEqual(launcher.font_var.get(), '芫荽')
+        self.assertEqual(list(launcher.buttons), ['patrol', 'tataka', 'ecotoilet'])
+        self.assertEqual(launcher.version_label_widget.cget('text'), g.version_label())
+
+    def test_switching_fonts_back_and_forth_does_not_grow_the_text(self):
+        import tkinter.font as tkfont
+        launcher = self.launcher()
+        sizes = []
+        for name in ('芫荽', '微軟正黑體', '芫荽', '微軟正黑體'):
+            launcher.choose_font(name)
+            self.root.update()
+            sizes.append(tkfont.nametofont('TkDefaultFont', root=self.root).cget('size'))
+        self.assertEqual(len(set(sizes)), 1, sizes)                                   # 字級每次都一樣，不會一直加大
+        launcher.choose_font('亂寫')                                                   # 不認得的名稱：維持原樣
+        self.assertEqual(launcher.font_name, '微軟正黑體')
+        self.assertEqual(launcher.font_var.get(), '微軟正黑體')
+
+    def test_menu_still_works_after_a_font_change(self):
+        launcher = self.launcher()
+        launcher.choose_font('芫荽')
+        self.root.update()
+        launcher.buttons['tataka'].invoke()
+        self.assertEqual(launcher.choice, 'tataka')
+
+    def test_update_banner_survives_a_font_change(self):
+        import yscv_updates as u
+        launcher = g.ReportLauncher(self.root, settings_path=self.settings_file(), update_repo=u.UPDATE_REPO)
+        release = u.ReleaseInfo('v9.9', (9, 9, 0, 0), 'v9.9', '', u.release_page_url(u.UPDATE_REPO, 'v9.9'), '')
+        launcher._show_update(release)
+        self.root.update()
+        self.assertTrue(launcher.update_banner.winfo_ismapped())
+        launcher.choose_font('芫荽')
+        self.root.update()
+        self.assertTrue(launcher.update_banner.winfo_ismapped())
+        self.assertIn('v9.9', launcher.update_label.cget('text'))
+        self.assertIsNotNone(launcher.check_button)
+
+    def test_saved_font_is_used_by_the_menu_and_the_forms(self):
+        g.save_settings(self.settings_file(), font='芫荽')
+        launcher = self.launcher()
+        self.assertEqual(launcher.font_family, g.FONT_FAMILY)
+        self.assertEqual(launcher.font_var.get(), '芫荽')
 
     def test_launcher_still_works_without_the_emoji_font(self):
         with mock.patch.object(g, 'EMOJI_FONT', os.path.join(self.tmp.name, 'missing.ttf')):

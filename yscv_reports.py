@@ -634,6 +634,8 @@ class TatakaReportGUI(_FormGUI):
     FIELD_NAMES = {'facility': '園區設施現況及改善意見', 'visitors': '遊客意見', 'reflection': '值勤心得',
                    'questions': '相關疑問與解答'}
     TAB_ORDER = [g.TAB_BASIC, TAB_SERVICE, TAB_OPINION, TAB_REFLECT, TAB_PHOTO]
+    MEASURE_TABS = (TAB_PHOTO,)                         # 最高的一頁是照片頁
+    FILL_TEXT_TABS = (TAB_OPINION, TAB_REFLECT)         # 這兩頁各只有兩個填寫框：加高到填滿分頁
 
     def build_tabs(self, notebook):
         self._basic_tab(notebook)
@@ -783,6 +785,8 @@ class EcoToiletReportGUI(_FormGUI):
     FIELD_NAMES = {'nature': '二、自然資源狀況', 'environment': '三、環境清理及遊客宣導情形',
                    'reflection': '四、協勤心得與建議'}
     TAB_ORDER = [g.TAB_BASIC] + [name for _, name in TOILETS] + [TAB_NATURE, TAB_REFLECT, TAB_PHOTO]
+    MEASURE_TABS = (TAB_PHOTO,)                         # 最高的一頁是照片頁
+    FILL_TEXT_TABS = (TAB_NATURE, TAB_REFLECT)          # 填寫框少、下面空白多的分頁：加高到填滿
 
     def build_tabs(self, notebook):
         self.create_basic_info_tab(notebook)

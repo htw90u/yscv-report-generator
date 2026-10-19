@@ -80,9 +80,9 @@ FONT_FILES = ('Iansui-Regular.ttf',)
 FONT_LICENSE = 'OFL-Iansui.txt'
 FONT_FAMILY = 'Iansui'
 FALLBACK_FONT_FAMILY = 'Microsoft JhengHei UI'
-# 使用者可以選的介面字型：顯示名稱 -> 字型家族名稱；選擇記在設定檔（鍵 font），下次開啟程式才生效
-FONT_CHOICES = {'芫荽': FONT_FAMILY, '微軟正黑體': FALLBACK_FONT_FAMILY}
-DEFAULT_FONT_NAME = '芫荽'
+# 使用者可以選的介面字型：顯示名稱 -> 字型家族名稱（預設的排最前面）；選擇在入口選單，記在設定檔（鍵 font）
+FONT_CHOICES = {'微軟正黑體': FALLBACK_FONT_FAMILY, '芫荽': FONT_FAMILY}
+DEFAULT_FONT_NAME = '微軟正黑體'
 LOG_FILE = os.path.join(DATA_DIR, 'yscv_report_generator.log')
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
@@ -189,6 +189,8 @@ MARK_DONE = '✓'      # 已填說明／已填完的記號
 MARK_CROPPED = '✂'    # 已裁切的照片，檔名前面的記號
 MARK_MISSING = '●'   # 還沒填的記號（實心圓點）（同時搭配淡橘底與文字，不單靠顏色）
 PHOTO_TAB_HINT = "（可從檔案總管把照片拖進視窗；點選預覽、拖曳調整順序；在預覽下方輸入說明，按 Enter 跳到下一張；在表格中按 N 跳到下一張未填說明；按 Delete 移除所選照片）"
+LOADING_MESSAGE = "正在準備畫面，請稍候…"
+FILL_MARGIN_PX = 10     # 填滿分頁時，下方預留的空間
 TEXT_MIN_LINES = 2      # 填寫框最少／最多幾行（可用下方的拉桿調整）
 TEXT_MAX_LINES = 40
 PHOTO_TABLE_ROWS = 10         # 照片表格預設顯示的列數（視窗夠高時會自動撐滿）
@@ -1629,8 +1631,9 @@ def pick_font_family(root, choice=None):
     """依選擇（FONT_CHOICES 的顯示名稱，沒給就用預設）挑字型家族；選的字型找不到就依序退回另一個字型、Arial。"""
     load_private_fonts()
     families = set(tkfont.families(root))
-    wanted = FONT_CHOICES.get(choice, FONT_FAMILY) if isinstance(choice, str) else FONT_FAMILY
-    for family in (wanted, FONT_FAMILY, FALLBACK_FONT_FAMILY):
+    default = FONT_CHOICES[DEFAULT_FONT_NAME]
+    wanted = FONT_CHOICES.get(choice, default) if isinstance(choice, str) else default
+    for family in (wanted, default, *FONT_CHOICES.values()):
         if family in families:
             return family
     return 'Arial'
@@ -1644,7 +1647,8 @@ def scale_gui_fonts(root, delta, family=None, weight=None):
             font = tkfont.nametofont(name, root=root)
         except tk.TclError:
             continue
-        size = font.cget('size')
+        base = root.__dict__.setdefault('_yscv_font_base', {})        # 第一次看到的原始字級；之後重複呼叫不會一直加大
+        size = base.setdefault(name, font.cget('size'))
         font.configure(size=size + delta if size > 0 else size - delta)  # 負值代表像素
         if family:
             font.configure(family=family)
@@ -1771,11 +1775,20 @@ class ReportGeneratorGUI:
     def window_title(self):
         return f'{APP_TITLE}－{self.REPORT_NAME}'
 
-    def _tabs_extra_height(self):
-        """所有可捲動分頁中，內容比可視區域高出最多的像素數（0 表示每一頁都放得下）。"""
+    # 啟動時只需要量「最高的那一頁」（其他頁一定比它矮；測試會檢查這件事）：保育巡查是「設施」，其他兩種是照片頁。
+    # 沒設定、或設定的分頁不存在就量全部。
+    MEASURE_TABS = (TAB_FACILITY,)
+    # 啟動時把這些分頁的填寫框平均加高到填滿分頁，下面不要留一大片空白（最高的那一頁已經滿了，不用處理）
+    FILL_TEXT_TABS = (TAB_ROAD, TAB_NATURE, TAB_FEEDBACK)
+
+    def _tabs_extra_height(self, all_tabs=False):
+        """要檢查的分頁（預設只有最高的那一頁，all_tabs=True 是全部）中，內容比可視區域高出最多的像素數（0 表示都放得下）。"""
         current = self.notebook.select()
         extra = 0
+        titles = [t for t in self.MEASURE_TABS if t in self._scroll_tabs] if not all_tabs else []
         for title, (canvas, inner, _) in self._scroll_tabs.items():
+            if titles and title not in titles:
+                continue
             self.notebook.select(self._tab_by_title(title))
             self.root.update()
             extra = max(extra, inner.winfo_reqheight() - canvas.winfo_height())
@@ -1795,18 +1808,75 @@ class ReportGeneratorGUI:
         return max(0, extra - grow)
 
     def _fit_window_height(self):
-        """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最多少 2 列）。
+        """讓每個分頁預設都不需要捲動：先把視窗加高；螢幕不夠高時，依序縮小照片清單（3 列）、文字區（最少 3 列）。
 
-        量測時會逐一顯示每個分頁；視窗保持可見，並在狀態列說明，讓使用者知道程式正在準備，不是當掉。
+        量測時會切換分頁；為了不讓使用者看到畫面閃動，量測期間蓋一層「正在準備畫面」的遮罩（含來回移動的進度條），
+        視窗本身保持可見、不透明，狀態列也同步說明。
         """
         status = getattr(self, 'status_label', None)
         if status is not None:
-            status.config(text="正在準備畫面，請稍候…")
+            status.config(text=LOADING_MESSAGE)
+        cover = self._show_loading_cover()
+        original = self.notebook.select()
         try:
             self._measure_and_fit()
+            self._fill_text_tabs()
         finally:
+            try:
+                self.notebook.select(original)
+            except tk.TclError:
+                pass
+            self._hide_loading_cover(cover)
             if status is not None:
                 status.config(text="準備就緒")
+
+    def _show_loading_cover(self):
+        """在整個視窗上蓋一層載入中的畫面：一行說明加來回移動的進度條。"""
+        p = self.palette
+        cover = tk.Frame(self.root, background=p['bg'])
+        cover.place(x=0, y=0, relwidth=1, relheight=1)
+        middle = tk.Frame(cover, background=p['bg'])
+        middle.place(relx=0.5, rely=0.45, anchor=tk.CENTER)
+        tk.Label(middle, text=LOADING_MESSAGE, font=(self.font_family, 14 + GUI_FONT_DELTA, 'bold'),
+                 foreground=p['heading_fg'], background=p['bg']).pack(pady=(0, 14))
+        bar = ttk.Progressbar(middle, mode='indeterminate', length=280)
+        bar.pack()
+        bar.start(12)
+        cover.lift()
+        self.loading_cover = cover
+        self.root.update()
+        return cover
+
+    def _hide_loading_cover(self, cover):
+        try:
+            cover.destroy()
+        except tk.TclError:
+            pass
+        self.loading_cover = None
+
+    def _fill_text_tabs(self):
+        """FILL_TEXT_TABS 裡的分頁：把填寫框平均加高，讓內容剛好填滿分頁（下面不要留一大片空白，也不用捲動）。"""
+        for title in self.FILL_TEXT_TABS:
+            if title not in self._scroll_tabs:
+                continue
+            canvas, inner, _ = self._scroll_tabs[title]
+            fields = [w for key, w in self.text_fields.items() if self.FIELD_TAB.get(key) == title]
+            if not fields:
+                continue
+            self.notebook.select(self._tab_by_title(title))
+            self.root.update()
+            line = tkfont.Font(root=self.root, font=fields[0].cget('font')).metrics('linespace')
+            add = (canvas.winfo_height() - inner.winfo_reqheight() - FILL_MARGIN_PX) // (line * len(fields))
+            if add <= 0:
+                continue
+            for widget in fields:
+                widget.configure(height=min(TEXT_MAX_LINES, int(widget.cget('height')) + add))
+            self.root.update()
+            while inner.winfo_reqheight() > canvas.winfo_height() and any(int(w.cget('height')) > TEXT_MIN_LINES for w in fields):
+                for widget in fields:                    # 保險：加高後超出可視範圍就一行一行減回來
+                    widget.configure(height=max(TEXT_MIN_LINES, int(widget.cget('height')) - 1))
+                self.root.update()
+        self._refit_scroll_tabs()
 
     def _measure_and_fit(self):
         self.root.update()
@@ -1864,16 +1934,6 @@ class ReportGeneratorGUI:
 
     def _save_theme_setting(self):
         save_settings(self.settings_path, theme=self.theme_name)
-
-    def choose_font(self, name):
-        """選擇介面字型：只記住選擇，下次開啟程式才生效（目前畫面的版面是依現在的字型量好的，不即時重排）。"""
-        if name not in FONT_CHOICES:
-            return
-        save_settings(self.settings_path, font=name)
-        if name == self.font_name:
-            self.status_label.config(text=f"字型維持「{name}」")
-        else:
-            self.status_label.config(text=f"字型已改成「{name}」，重新開啟程式後生效")
 
     def _setup_style(self):
         """依目前主題設定外觀：分頁是一個個分開的標籤（目前分頁較突出），按鈕採淺底深字。"""
@@ -1953,10 +2013,9 @@ class ReportGeneratorGUI:
         self.status_label.config(text=f"已套用外觀：{name}")
 
     def _center_theme_dropdown(self):
-        """外觀、字型下拉選單：選項文字置中（展開的清單也置中；Tk 8.6 的清單支援 -justify）。"""
-        for box in (self.theme_box, self.font_box):
-            popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {box}')
-            self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
+        """外觀下拉選單：選項文字置中（展開的清單也置中；Tk 8.6 的清單支援 -justify）。"""
+        popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {self.theme_box}')
+        self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
 
     def _recolor(self, widget):
         """ttk 元件會自動跟著樣式變色；原生 tk 的容器（Canvas/Frame/Label）要手動換底色。"""
@@ -2007,13 +2066,6 @@ class ReportGeneratorGUI:
         self.busy_bar = ttk.Progressbar(self.status_label, mode='indeterminate', length=160)
         theme_frame = ttk.Frame(main_frame)
         theme_frame.grid(row=row, column=2, sticky=tk.E, padx=(10, 0))
-        ttk.Label(theme_frame, text="字型：").pack(side=tk.LEFT)
-        self.font_var = tk.StringVar(master=self.root, value=self.font_name)
-        font_box = ttk.Combobox(theme_frame, textvariable=self.font_var, values=list(FONT_CHOICES),
-                                state='readonly', width=9, justify=tk.CENTER)
-        font_box.pack(side=tk.LEFT, padx=(0, 12))
-        font_box.bind('<<ComboboxSelected>>', lambda e: self.choose_font(self.font_var.get()))
-        self.font_box = font_box
         ttk.Label(theme_frame, text="外觀：").pack(side=tk.LEFT)
         self.theme_var = tk.StringVar(master=self.root, value=self.theme_name)
         theme_box = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=list(THEMES),
@@ -3949,7 +4001,17 @@ class ReportLauncher:
         self.update_release = None
         self._update_queue = queue.Queue()
         self._update_checking = False
-        family = pick_font_family(root, load_font_name(settings_path))
+        self.font_name = load_font_name(settings_path)
+        self._placed = False                  # 第一次要置中；之後（換字型重畫）維持視窗目前的位置
+        self._strip_left = None               # 「啟動時檢查更新」勾選框和按鈕對齊所需的左邊空間（排版後才量得到）
+        self._build()
+        if self.update_repo and auto_update_check:
+            self.root.after(300, self._auto_check_updates)
+
+    def _build(self):
+        """依目前的字型、外觀主題建立（或重建）選單畫面。換字型時會整個重畫一次。"""
+        root, settings_path = self.root, self.settings_path
+        family = pick_font_family(root, self.font_name)
         scale_gui_fonts(root, GUI_FONT_DELTA, family, GUI_FONT_WEIGHT)
         palette = THEMES[load_theme_name(settings_path)]
         style = ttk.Style(root)
@@ -3988,31 +4050,88 @@ class ReportLauncher:
         self._build_update_banner(frame, len(REPORT_CHOICES) + 2)
         footer = ttk.Frame(frame)
         footer.grid(row=len(REPORT_CHOICES) + 3, column=0, sticky=(tk.W, tk.E), pady=(12, 0))
-        footer.columnconfigure(1, weight=1)          # 中間留白：自動檢查在左邊，兩個按鈕在右邊
+        footer.columnconfigure(1, weight=1)          # 中間留白：字型選單在左邊，兩個按鈕在右邊
+        font_frame = ttk.Frame(footer)
+        font_frame.grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(font_frame, text="字型：").pack(side=tk.LEFT)
+        self.font_var = tk.StringVar(master=root, value=self.font_name)
+        self.font_box = ttk.Combobox(font_frame, textvariable=self.font_var, values=list(FONT_CHOICES), state='readonly',
+                                     width=9, justify=tk.CENTER)
+        self.font_box.pack(side=tk.LEFT)
+        self.font_box.bind('<<ComboboxSelected>>', lambda e: self.choose_font(self.font_var.get()))
         self.auto_check_var = tk.BooleanVar(master=root, value=bool(load_settings(settings_path).get('update_auto', True)))
         self.auto_check_button = self.check_button = None
         if self.update_repo:
-            self.auto_check_button = ttk.Checkbutton(footer, text="啟動時自動檢查更新", variable=self.auto_check_var,
-                                                     command=self._save_auto_check)
-            self.auto_check_button.grid(row=0, column=0, sticky=tk.W)
             self.check_button = ttk.Button(footer, text="檢查更新", command=lambda: self.check_updates(manual=True))
             self.check_button.grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         self.feedback_button = ttk.Button(footer, text="意見反應", command=self.open_feedback)
         self.feedback_button.grid(row=0, column=3, sticky=tk.E)      # 右下角
-        self.version_label_widget = ttk.Label(frame, text=version_label(), foreground=VERSION_COLOR,
+        strip = ttk.Frame(frame)                                    # 最下面一排：右下角是「啟動時檢查更新」與灰色的版本
+        strip.grid(row=len(REPORT_CHOICES) + 4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        strip.columnconfigure(2, weight=1)
+        if self.update_repo:
+            self.auto_check_button = ttk.Checkbutton(strip, text="啟動時檢查更新", variable=self.auto_check_var,
+                                                     command=self._save_auto_check)
+            self.auto_check_button.grid(row=0, column=1, sticky=tk.W)    # 左邊緣對齊上面的「檢查更新」按鈕（見下方）
+        self.version_label_widget = ttk.Label(strip, text=version_label(), foreground=VERSION_COLOR,
                                               font=(family, VERSION_FONT_PT))
-        self.version_label_widget.grid(row=len(REPORT_CHOICES) + 4, column=0, sticky=tk.E, pady=(10, 0))   # 右下角，灰色小字
+        self.version_label_widget.grid(row=0, column=2, sticky=tk.E, padx=(12, 0))   # 灰色小字，維持在最右下角
+        self._center_font_dropdown()
         messagebox.attach(self)
         root.bind('<Escape>', lambda e: root.destroy())
         root.update_idletasks()
         self.width = max(740, frame.winfo_reqwidth())
         height = frame.winfo_reqheight()
-        x = max(0, (root.winfo_screenwidth() - self.width) // 2)
-        y = max(0, (root.winfo_screenheight() - height) // 3)
+        if self._placed:                                  # 換字型重畫：視窗位置不動，只改大小
+            x, y = root.winfo_x(), root.winfo_y()
+        else:
+            x = max(0, (root.winfo_screenwidth() - self.width) // 2)
+            y = max(0, (root.winfo_screenheight() - height) // 3)
+            self._placed = True
         root.geometry(f"{self.width}x{height}+{x}+{y}")
+        self._strip = strip
+        if self.auto_check_button is not None:
+            if self._strip_left is None:
+                self.auto_check_button.grid_remove()          # 第一次還量不到對齊的位置：先藏起來，對齊後再顯示，不會閃一下
+            else:
+                strip.columnconfigure(0, minsize=self._strip_left)   # 換字型重畫：沿用上次的位置，一開始就在對的地方
+        for widget in (footer, self.check_button):                  # 按鈕實際排好版（或視窗改變大小）之後，把勾選框對齊按鈕
+            if widget is not None:
+                widget.bind('<Configure>', self._align_strip, add='+')
+        root.after(80, self._apply_strip_alignment)                  # 重畫（換字型）時不一定會再收到排版事件，主動排一次
         self.buttons[REPORT_CHOICES[0][0]].focus_set()   # Enter 直接進入第一個
-        if self.update_repo and auto_update_check:
-            self.root.after(300, self._auto_check_updates)
+
+    # ---- 字型（選了立刻重畫選單；之後開的回報單畫面也用同一個設定）
+    def choose_font(self, name):
+        if name not in FONT_CHOICES or name == self.font_name:
+            self.font_var.set(self.font_name)
+            return
+        self.font_name = name
+        save_settings(self.settings_path, font=name)
+        self.frame.destroy()
+        self._build()
+        if self.update_release is not None:                    # 已經查到新版：橫幅重畫後要再顯示
+            self._show_update(self.update_release)
+
+    def _align_strip(self, event=None):
+        """把「啟動時檢查更新」勾選框向右移，讓它的左邊緣和上面「檢查更新」按鈕切齊；版本仍在它右邊，不受影響。"""
+        if self.auto_check_button is None or self.check_button is None:
+            return
+        self.root.after_idle(self._apply_strip_alignment)      # 按鈕的新位置要等這一輪排版做完才準
+
+    def _apply_strip_alignment(self):
+        try:
+            left = max(0, self.check_button.winfo_rootx() - self._strip.winfo_rootx())
+        except tk.TclError:                                    # 視窗已經關了
+            return
+        if left != self._strip_left:
+            self._strip_left = left
+            self._strip.columnconfigure(0, minsize=left)
+        self.auto_check_button.grid()                          # 位置對好了，顯示勾選框
+
+    def _center_font_dropdown(self):
+        popdown = self.root.tk.eval(f'ttk::combobox::PopdownWindow {self.font_box}')
+        self.root.tk.call(f'{popdown}.f.l', 'configure', '-justify', 'center')
 
     # ---- 意見反應
     def open_feedback(self):

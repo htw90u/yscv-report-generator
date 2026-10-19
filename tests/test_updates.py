@@ -578,19 +578,64 @@ class LauncherUpdateTest(unittest.TestCase):
     def test_footer_row_is_not_crowded(self):
         launcher = self.launcher()
         self.root.update()
-        widgets = [launcher.auto_check_button, launcher.check_button, launcher.feedback_button]
+        widgets = [launcher.font_box, launcher.check_button, launcher.feedback_button]     # 左：字型選單；右：兩個按鈕
         boxes = [(w.winfo_rootx(), w.winfo_rootx() + w.winfo_width()) for w in widgets]
         for (_, right), (left, _) in zip(boxes, boxes[1:]):
             self.assertGreaterEqual(left - right, 8)                                        # 彼此至少隔 8 像素
         gap = boxes[1][0] - boxes[0][1]
-        self.assertGreaterEqual(gap, 150)                                                   # 左邊的勾選框與右邊的按鈕之間有明顯留白
+        self.assertGreaterEqual(gap, 150)                                                   # 左邊的字型選單與右邊的按鈕之間有明顯留白
 
     def test_footer_layout_keeps_feedback_at_the_right(self):
         launcher = self.launcher()
         self.root.update()
-        xs = [w.winfo_rootx() for w in (launcher.auto_check_button, launcher.check_button, launcher.feedback_button)]
-        self.assertEqual(xs, sorted(xs))                                                  # 左：自動檢查、右：檢查更新、意見反應
+        xs = [w.winfo_rootx() for w in (launcher.font_box, launcher.check_button, launcher.feedback_button)]
+        self.assertEqual(xs, sorted(xs))                                                  # 左：字型、右：檢查更新、意見反應
         self.assertGreater(launcher.feedback_button.winfo_rootx(), self.root.winfo_rootx() + self.root.winfo_width() // 2)
+
+    def test_auto_check_checkbox_sits_left_of_the_version_in_the_bottom_corner(self):
+        launcher = self.launcher()
+        self.root.update()
+        box, version = launcher.auto_check_button, launcher.version_label_widget
+        self.assertEqual(box.master, version.master)                                        # 同一排
+        self.assertLess(box.winfo_rootx() + box.winfo_width(), version.winfo_rootx())       # 勾選框在版本左邊
+        self.assertLess(version.winfo_rootx() - (box.winfo_rootx() + box.winfo_width()), 40)  # 緊鄰版本，不是離很遠
+        self.assertAlmostEqual(box.winfo_rootx(), launcher.check_button.winfo_rootx(), delta=2)   # 左邊緣和「檢查更新」按鈕切齊
+        self.assertGreaterEqual(version.winfo_rootx() - (box.winfo_rootx() + box.winfo_width()), 6)  # 沒有擠到版本
+        self.assertLessEqual(version.winfo_rootx() + version.winfo_width(),
+                             launcher.feedback_button.winfo_rootx() + launcher.feedback_button.winfo_width() + 2)  # 版本沒有超出按鈕右緣
+        self.assertGreater(box.winfo_rooty(), launcher.feedback_button.winfo_rooty())       # 在按鈕那排下面
+        self.assertGreater(box.winfo_rootx(), self.root.winfo_rootx() + self.root.winfo_width() // 2)   # 靠右
+        self.assertGreater(launcher.font_box.winfo_rooty() + launcher.font_box.winfo_height() // 2,
+                           launcher.check_button.winfo_rooty())                              # 字型選單和按鈕在同一排
+
+    def test_checkbox_stays_aligned_after_changing_the_font(self):
+        launcher = self.launcher()
+        for name in ('芫荽', '微軟正黑體', '芫荽'):
+            launcher.choose_font(name)
+            for _ in range(10):                                                              # 等排版與對齊都做完
+                self.root.update()
+                time.sleep(0.03)
+            box, version, button = launcher.auto_check_button, launcher.version_label_widget, launcher.check_button
+            self.assertAlmostEqual(box.winfo_rootx(), button.winfo_rootx(), delta=2, msg=name)   # 左邊緣仍和「檢查更新」切齊
+            gap = version.winfo_rootx() - (box.winfo_rootx() + box.winfo_width())
+            self.assertGreaterEqual(gap, 6, name)                                            # 沒有擠到版本
+            self.assertLess(gap, 40, name)                                                   # 版本仍緊鄰在勾選框右邊
+
+    def test_checkbox_is_in_place_right_after_a_font_change_and_nothing_is_clipped(self):
+        launcher = self.launcher()
+        for _ in range(10):
+            self.root.update()
+            time.sleep(0.03)
+        launcher.choose_font('芫荽')
+        self.root.update_idletasks()                                                         # 只排版、不處理排程的對齊：一開始就要在對的位置
+        self.assertAlmostEqual(launcher.auto_check_button.winfo_rootx(), launcher.check_button.winfo_rootx(), delta=2)
+        self.assertEqual(launcher.auto_check_button.cget('text'), '啟動時檢查更新')
+        for _ in range(10):
+            self.root.update()
+            time.sleep(0.03)
+        version, strip = launcher.version_label_widget, launcher._strip
+        self.assertGreaterEqual(version.winfo_width(), version.winfo_reqwidth())               # 版本字樣沒有被切到
+        self.assertLessEqual(version.winfo_rootx() + version.winfo_width(), strip.winfo_rootx() + strip.winfo_width())
 
     def test_command_line_option(self):
         self.assertTrue(g.parse_args(['--no-update-check']).no_update_check)

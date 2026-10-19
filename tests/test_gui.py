@@ -917,7 +917,7 @@ class GuiTest(unittest.TestCase):
                 self.assertEqual(str(w.cget('style')), 'List.TMenubutton')
                 menu_font = tkfont.Font(root=self.root, font=w.menu.cget('font'))
                 self.assertEqual(abs(menu_font.cget('size')), body + 1)
-                self.assertEqual(menu_font.cget('family'), g.FONT_FAMILY)
+                self.assertEqual(menu_font.cget('family'), self.app.font_family)
                 found = True
         self.assertTrue(found)
 
@@ -1064,6 +1064,53 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(all('準備' in text for _, _, text in seen), '量測期間狀態列要說明正在準備')
         self.assertEqual(self.app.status_label.cget('text'), '準備就緒')   # 量完恢復
         self.assertEqual(nb.index(nb.select()), original)                 # 回到原本的分頁
+
+    def test_startup_measures_only_the_tallest_tab(self):
+        nb = self.app.notebook
+        seen = []
+        real_select = nb.select
+
+        def spy(*args, **kwargs):
+            if args or kwargs:
+                seen.append(str(args[0]))
+            return real_select(*args, **kwargs)
+
+        with mock.patch.object(nb, 'select', spy):
+            self.app._tabs_extra_height()
+        designated = [str(self.app._tab_by_title(t)) for t in self.app.MEASURE_TABS]
+        self.assertEqual(seen[:-1], designated)                     # 只切到最高的那一頁，最後一次是回到原本的分頁
+        with mock.patch.object(nb, 'select', spy):
+            seen.clear()
+            self.app._tabs_extra_height(all_tabs=True)
+        self.assertGreater(len(seen) - 1, len(designated))           # 要求全部才會逐頁切換
+
+    def test_loading_cover_hides_the_measuring_and_is_removed_afterwards(self):
+        nb = self.app.notebook
+        snapshots = []
+        real_select = nb.select
+
+        def spy(*args, **kwargs):
+            if args or kwargs:
+                cover = self.app.loading_cover
+                texts = [w.cget('text') for w in self._all_widgets(cover) if w.winfo_class() == 'Label']
+                bars = [w for w in self._all_widgets(cover) if w.winfo_class() == 'TProgressbar']
+                snapshots.append((cover is not None and bool(cover.winfo_ismapped()), g.LOADING_MESSAGE in texts,
+                                  len(bars) == 1, float(self.root.attributes('-alpha')) == 1.0))
+            return real_select(*args, **kwargs)
+
+        with mock.patch.object(nb, 'select', spy):
+            self.app._fit_window_height()
+        self.assertTrue(snapshots)
+        self.assertTrue(all(all(flags) for flags in snapshots), snapshots)   # 量測期間遮罩蓋著、有說明與進度條、視窗不透明
+        self.assertIsNone(self.app.loading_cover)                            # 量完移除
+        self.assertEqual(self.app.status_label.cget('text'), '準備就緒')
+
+    def test_loading_cover_is_removed_even_if_measuring_fails(self):
+        with mock.patch.object(self.app, '_measure_and_fit', side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                self.app._fit_window_height()
+        self.assertIsNone(self.app.loading_cover)
+        self.assertFalse([w for w in self.root.winfo_children() if w.winfo_class() == 'Frame' and w.place_info()])
 
     def test_status_restored_even_if_measuring_fails(self):
         with mock.patch.object(self.app, '_measure_and_fit', side_effect=RuntimeError('boom')):
@@ -1594,7 +1641,7 @@ class GuiTest(unittest.TestCase):
         body = abs(__import__('tkinter.font', fromlist=['x']).nametofont('TkDefaultFont', root=self.root).cget('size'))
         self.assertGreaterEqual(seen['size'], body + 2)             # 比一般介面文字至少大 2 點
         self.assertGreaterEqual(seen['size'], 13)
-        self.assertEqual(seen['family'], g.FONT_FAMILY)
+        self.assertEqual(seen['family'], self.app.font_family)
         self.assertEqual(seen['message'], '載入草稿會覆蓋目前畫面上的內容，確定嗎？')
         self.assertGreaterEqual(abs(seen['button_font'].cget('size')), 13)  # 按鈕文字也一樣大
 
@@ -2478,11 +2525,11 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(self.app.missing_caption_count(dst), 3)
         self.assertEqual(self.app.build_draft()['photos'][dst], [x, y, a])
 
-    def test_font_is_iansui(self):
+    def test_bundled_font_is_iansui_and_default_is_jhenghei(self):
         self.assertEqual(g.FONT_FAMILY, 'Iansui')
         self.assertEqual(g.FONT_FILES, ('Iansui-Regular.ttf',))
         self.assertEqual(g.FONT_LICENSE, 'OFL-Iansui.txt')
-        self.assertEqual(self.app.font_family, 'Iansui')
+        self.assertEqual(self.app.font_family, 'Microsoft JhengHei UI')       # 預設字型是微軟正黑體；芫荽是另一個選項
         old = [n for n in os.listdir(g.FONT_DIR) if any(k in n for k in ('LXGW', 'Cactus', 'Chocolate', 'Chiron'))]
         self.assertEqual(old, [])  # 舊字型已移除
 
@@ -2828,11 +2875,20 @@ class GuiTest(unittest.TestCase):
         for name in g.FONT_FILES + (g.FONT_LICENSE,):
             self.assertTrue(os.path.exists(os.path.join(g.FONT_DIR, name)), name)
 
-    def test_gui_uses_bundled_font_family(self):
+    def test_gui_uses_the_default_font_and_the_bundled_one_when_chosen(self):
         import tkinter.font as tkfont
-        self.assertEqual(self.app.font_family, g.FONT_FAMILY)
+        self.assertEqual(g.DEFAULT_FONT_NAME, '微軟正黑體')
+        self.assertEqual(list(g.FONT_CHOICES), ['微軟正黑體', '芫荽'])                  # 預設的排最前面
+        self.assertEqual(self.app.font_family, g.FALLBACK_FONT_FAMILY)
         for name in ('TkDefaultFont', 'TkTextFont', 'TkFixedFont'):
-            self.assertEqual(tkfont.nametofont(name, root=self.root).cget('family'), g.FONT_FAMILY)
+            self.assertEqual(tkfont.nametofont(name, root=self.root).cget('family'), g.FALLBACK_FONT_FAMILY)
+        g.save_settings(self.settings, font='芫荽')
+        root2 = tk.Tk()
+        self.addCleanup(root2.destroy)
+        app2 = g.ReportGeneratorGUI(root2, autosave_path=self.autosave, restore_on_start=False,
+                                    settings_path=self.settings)
+        self.assertEqual(app2.font_family, g.FONT_FAMILY)                              # 選了芫荽就用隨程式附的字型
+        self.assertEqual(tkfont.nametofont('TkDefaultFont', root=root2).cget('family'), g.FONT_FAMILY)
 
     def test_font_family_falls_back_when_not_available(self):
         with mock.patch.object(g, 'load_private_fonts', lambda: False), \
@@ -2842,43 +2898,20 @@ class GuiTest(unittest.TestCase):
                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
             self.assertEqual(g.pick_font_family(self.root), g.FALLBACK_FONT_FAMILY)
 
-    # ---- 字型選擇：下次開啟才生效
-    def test_font_box_offers_both_fonts_and_defaults_to_the_bundled_one(self):
-        self.assertEqual(tuple(self.app.font_box.cget('values')), ('芫荽', '微軟正黑體'))
-        self.assertEqual(self.app.font_var.get(), g.DEFAULT_FONT_NAME)
-        self.assertEqual(str(self.app.font_box.cget('state')), 'readonly')
-        self.assertEqual(str(self.app.font_box.cget('justify')), 'center')
-        self.assertEqual(self.app.font_box.master, self.app.theme_box.master)      # 和「外觀」同一排
-
-    def test_choosing_a_font_is_saved_but_does_not_change_the_current_window(self):
-        before = self.app.font_family
-        self.app.font_var.set('微軟正黑體')
-        self.app.font_box.event_generate('<<ComboboxSelected>>')
-        self.root.update()
-        self.assertEqual(g.load_settings(self.settings).get('font'), '微軟正黑體')
-        self.assertEqual(self.app.font_family, before)                              # 這次的畫面不動
-        self.assertIn('重新開啟程式後生效', self.app.status_label.cget('text'))
-        self.app.font_var.set('芫荽')
-        self.app.font_box.event_generate('<<ComboboxSelected>>')
-        self.assertEqual(g.load_settings(self.settings).get('font'), '芫荽')
-        self.assertNotIn('重新開啟', self.app.status_label.cget('text'))             # 選回目前的字型就不用重開
-        self.app.choose_font('不存在的字型')                                         # 不認得的名稱忽略
-        self.assertEqual(g.load_settings(self.settings).get('font'), '芫荽')
-
-    def test_saved_font_choice_is_used_next_time(self):
-        g.save_settings(self.settings, font='微軟正黑體')
+    # ---- 字型選擇（在入口選單選，表單開啟時讀同一個設定）
+    def test_forms_have_no_font_dropdown_and_use_the_saved_font(self):
+        self.assertFalse(hasattr(self.app, 'font_box'))                             # 字型下拉選單在入口選單，表單裡沒有
+        labels = [w.cget('text') for w in self._all_widgets(self.root) if isinstance(w, ttk.Label)]
+        self.assertNotIn('字型：', labels)
+        self.assertEqual(self.app.font_name, g.DEFAULT_FONT_NAME)
+        g.save_settings(self.settings, font='芫荽')
         root2 = tk.Tk()
         self.addCleanup(root2.destroy)
         app2 = g.ReportGeneratorGUI(root2, autosave_path=self.autosave, restore_on_start=False,
                                     settings_path=self.settings)
-        self.assertEqual(app2.font_name, '微軟正黑體')
-        self.assertEqual(app2.font_var.get(), '微軟正黑體')
-        self.assertEqual(app2.font_family, g.FALLBACK_FONT_FAMILY)
-        self.assertEqual(g.load_font_name(self.settings), '微軟正黑體')
-        launcher_root = tk.Tk()
-        self.addCleanup(launcher_root.destroy)
-        launcher = g.ReportLauncher(launcher_root, settings_path=self.settings)       # 入口選單也用同一個字型
-        self.assertEqual(launcher.font_family, g.FALLBACK_FONT_FAMILY)
+        self.assertEqual(app2.font_name, '芫荽')
+        self.assertEqual(app2.font_family, g.FONT_FAMILY)
+        self.assertEqual(g.load_font_name(self.settings), '芫荽')
 
     def test_bad_font_setting_falls_back_to_the_default(self):
         for bad in ('Comic Sans', 5, None, ['芫荽'], ''):
@@ -2893,8 +2926,8 @@ class GuiTest(unittest.TestCase):
         with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: both):
             self.assertEqual(g.pick_font_family(self.root, '芫荽'), g.FONT_FAMILY)
             self.assertEqual(g.pick_font_family(self.root, '微軟正黑體'), g.FALLBACK_FONT_FAMILY)
-            self.assertEqual(g.pick_font_family(self.root, '亂寫'), g.FONT_FAMILY)
-            self.assertEqual(g.pick_font_family(self.root), g.FONT_FAMILY)
+            self.assertEqual(g.pick_font_family(self.root, '亂寫'), g.FALLBACK_FONT_FAMILY)       # 不認得：用預設（微軟正黑體）
+            self.assertEqual(g.pick_font_family(self.root), g.FALLBACK_FONT_FAMILY)
         with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FALLBACK_FONT_FAMILY]):
             self.assertEqual(g.pick_font_family(self.root, '芫荽'), g.FALLBACK_FONT_FAMILY)   # 選的字型找不到：退回另一個
         with mock.patch.object(g, 'load_private_fonts', lambda: False),                 mock.patch.object(g.tkfont, 'families', lambda root=None: ['Arial', g.FONT_FAMILY]):

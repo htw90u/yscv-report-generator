@@ -66,7 +66,7 @@ def para(doc, text, size=11, bold=False, color=None, after=4, style=None, align=
 
 def heading(doc, text):
     p = para(doc, text, size=15, bold=True, color='1F3A93', after=4)
-    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_before = Pt(9)
     p.paragraph_format.keep_with_next = True
 
 
@@ -96,7 +96,7 @@ def build(docx_path):
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(21), Cm(29.7)
     section.left_margin = section.right_margin = Cm(1.2)      # 邊界縮小，圖才放得夠大
-    section.top_margin = section.bottom_margin = Cm(1.5)
+    section.top_margin = section.bottom_margin = Cm(1.2)
 
     para(doc, '玉山保育志工回報單產生器', size=22, bold=True, color='1F3A93', after=0)
     para(doc, f'使用說明（適用 v{g.VERSION}）', size=13, color='555555', after=8)
@@ -109,21 +109,22 @@ def build(docx_path):
     ])
 
     heading(doc, '二、選擇回報單')
-    para(doc, '開啟後先選要填寫的回報單：用滑鼠點選，或按數字鍵 1～3；按 Esc 離開。右下角的「檢查更新」可以查看有沒有新版，'
-              '「意見反應」可以直接把問題或建議送給開發者，最右下角的灰色小字是目前的版本。')
-    picture(doc, load('01_入口選單.png'), '圖 1　入口選單', 14.5)
+    para(doc, '開啟後先選要填寫的回報單：用滑鼠點選，或按數字鍵 1～3；按 Esc 離開。右邊的「檢查更新」可以查看有沒有新版，'
+              '「意見反應」可以直接把問題或建議送給開發者；左下角可以選「字型」（預設微軟正黑體，也可以改選芫荽），'
+              '選了立刻生效；右下角的「啟動時檢查更新」可以取消勾選，旁邊的灰色小字是目前的版本。')
+    picture(doc, load('01_入口選單.png'), '圖 1　入口選單', 12.8)
 
     heading(doc, '三、填寫內容')
     bullets(doc, [
-        '依分頁由左到右填寫。分頁名稱後面的「●」表示這一頁還有欄位沒填，填完就會消失。',
+        '依分頁由左到右填寫。分頁名稱後面的「●」表示這一頁還有欄位沒填，填完就會消失；「服勤照片」頁的「●」是還沒加照片，或有照片沒填說明。',
         '日期會自動帶入今天，可以直接修改；志工姓名有多位時，用空白、頓號（、）或逗號隔開即可。',
     ])
     top = load('02_基本資料.png')
     picture(doc, top.crop((0, 0, 1105, 255)), '圖 2　基本資料分頁（只截上半部）')
     para(doc, '需要寫比較多字時，可以調整欄位大小：每個填寫欄下方有一條小橫條，用滑鼠往上或往下拖曳，就能改變那個欄位的高度（圖 3 紅框處）。',
          after=2)
-    third = annotate(load('03_填寫欄位.png').crop((0, 0, 1105, 520)), [(626, 296, 714, 316), (626, 468, 714, 488)],
-                     [(222, 293, '拖曳這條橫條，上下調整欄位高度')])
+    third = annotate(load('03_填寫欄位.png').crop((0, 0, 1105, 410)), [(626, 336, 714, 356)],
+                     [(222, 333, '拖曳這條橫條，上下調整欄位高度')])
     picture(doc, third, '圖 3　填寫欄位（可上下調整高度）')
 
     heading(doc, '四、加入與整理照片')
@@ -146,7 +147,7 @@ def build(docx_path):
         '程式每 30 秒會自動存檔；如果當機或不小心關掉，下次開啟會詢問是否還原。',
         '填好後按「產生報告（Ctrl+G）」：若有欄位沒填會先提醒；選好存檔位置後，會同時產生 Word 檔與同名的 PDF，並自動開啟 Word 檔。',
         '檔名是自動取的：報告是「日期_地點回報單」（不放人員姓名）；草稿是「日期_地點回報單草稿_全部人員姓名（以 _ 分隔）_儲存時間」，可以在存檔視窗修改。',
-        '「清除所有資料」會清空目前的內容且無法復原，請先儲存草稿。畫面右下角可以切換「外觀」（柔和淺色、色弱友善、高對比），也可以選「字型」（芫荽或微軟正黑體；字型要重新開啟程式才會換）。',
+        '「清除所有資料」會清空目前的內容且無法復原，請先儲存草稿。填表畫面右下角可以切換「外觀」（柔和淺色、色弱友善、高對比）；入口選單左下角可以選「字型」（微軟正黑體或芫荽），選了立刻生效，之後開啟的回報單也會用這個字型。',
     ])
 
     heading(doc, '六、其他')

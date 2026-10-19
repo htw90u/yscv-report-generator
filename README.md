@@ -20,7 +20,7 @@
 - 檔名自動取好：報告是 `<協勤日期>_<地點>回報單`（不放人員姓名）；草稿是 `<日期>_<地點>回報單草稿_<全部人員姓名，以 _ 分隔>_<月日_時分>`（姓名總長度上限 120 字元），存檔視窗裡可以修改
 - 版本與 git 編號用灰色小字顯示在視窗右下角（入口選單與三種回報單）：`<tag>.<tag 之後第幾個 commit>-<sha>`，剛好在 tag 上是 `v1.0-96aa62e`，之後第 12 個 commit 是 `v1.0.12-3c1f9ab`；打包成 .exe 時會把打包當下的版本烙進去
 - 產生前檢查未填欄位；產生後自動開啟檔案
-- 外觀主題（柔和淺色、色弱友善、高對比）；介面字型可以選「芫荽」或「微軟正黑體」（畫面右下角，字型下次開啟程式才生效）
+- 外觀主題（柔和淺色、色弱友善、高對比）；介面字型預設是「微軟正黑體」，也可以改選「芫荽」（入口選單左下角，選了立刻生效，之後開啟的回報單也用同一個字型）
 
 ## 下載使用（不需要安裝 Python）
 
@@ -83,7 +83,7 @@ python -m unittest discover -s tests
 
 ## 字型
 
-介面使用「芫荽 Iansui」（`fonts/Iansui-Regular.ttf`，SIL Open Font License，授權文字見 `fonts/OFL-Iansui.txt`），只在程式執行期間載入，不會安裝到系統。
+介面預設用系統的「微軟正黑體」；也可以在入口選單改選「芫荽 Iansui」（隨程式附上：`fonts/Iansui-Regular.ttf`，SIL Open Font License，授權文字見 `fonts/OFL-Iansui.txt`），只在程式執行期間載入，不會安裝到系統。
 
 ## 意見反應的設定
 
@@ -105,7 +105,7 @@ python -m unittest discover -s tests
 入口選單可以檢查 GitHub 上有沒有新版：啟動時自動檢查（最多每週一次）或按「檢查更新」。有新版只會在選單上方顯示提示，你可以「查看更新內容」「前往下載」（用瀏覽器開啟發行頁面）或「略過這個版本」；**程式不會自己下載或安裝任何東西**。
 
 - 只向 GitHub 的公開 API 發出一個查詢，不傳任何個人資料。
-- 不想自動檢查：取消選單左下角的「啟動時自動檢查更新」，或用 `--no-update-check`、環境變數 `YSCV_NO_UPDATE_CHECK=1`。
+- 不想自動檢查：取消選單右下角的「啟動時檢查更新」，或用 `--no-update-check`、環境變數 `YSCV_NO_UPDATE_CHECK=1`。
 - 更新來源是 `yscv_updates.py` 的 `UPDATE_REPO`（目前是 `htw90u/yscv-report-generator`）；設成空字串，整個更新功能就不啟用，也不會連網。
 - **repo 必須公開，使用者才查得到新版**：私人 repo 對沒登入的人是 404，選單會顯示「找不到已發行的版本」，不會誤報成「已是最新版」。
 - 發行新版：先把 `yscv_report_generator.py` 的 `VERSION` 改成新版號再打同名 tag（例如 `VERSION = '1.1'`、tag `v1.1`），執行 `python build_exe.py` 打包，再在 GitHub 建立 Release 並上傳 zip（說明裡附上 SHA-256）；測試會檢查 `VERSION` 沒有落後最新的 tag。

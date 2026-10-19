@@ -1198,7 +1198,7 @@ class GuiTest(unittest.TestCase):
     def test_empty_form_shows_warning_mark_on_every_tab(self):
         for title in self._all_main_titles():
             with self.subTest(tab=title):
-                self.assertEqual(self._tab_text(title), f'{title} ●')
+                self.assertEqual(self.app.tab_mark_state(title), 'missing')
 
     def test_tab_marks_never_show_counts(self):
         import re
@@ -1212,13 +1212,13 @@ class GuiTest(unittest.TestCase):
         for key in keys[:2]:
             self.app.text_fields[key].insert('1.0', '內容')
         self.app._refresh_tab_marks()
-        self.assertEqual(self._tab_text(g.TAB_ROAD), f'{g.TAB_ROAD} ●')  # 還有一個沒填
+        self.assertEqual(self.app.tab_mark_state(g.TAB_ROAD), 'missing')  # 還有一個沒填
         self.app.text_fields[keys[2]].insert('1.0', '內容')
         self.app._refresh_tab_marks()
-        self.assertEqual(self._tab_text(g.TAB_ROAD), g.TAB_ROAD)           # 全部填完：● 消失
+        self.assertEqual(self.app.tab_mark_state(g.TAB_ROAD), 'done')           # 全部填完：● 消失
         self.app.text_fields[keys[1]].delete('1.0', tk.END)
         self.app._refresh_tab_marks()
-        self.assertEqual(self._tab_text(g.TAB_ROAD), f'{g.TAB_ROAD} ●')    # 又清空一個：● 回來
+        self.assertEqual(self.app.tab_mark_state(g.TAB_ROAD), 'missing')    # 又清空一個：● 回來
 
     def test_tab_mark_updates_live_while_typing(self):
         nb = self.app.notebook
@@ -1231,63 +1231,114 @@ class GuiTest(unittest.TestCase):
             widget.insert('1.0', 'x')
             widget.event_generate('<KeyRelease>', keysym='x')
             self.root.update()
-        self.assertEqual(self._tab_text(g.TAB_ROAD), g.TAB_ROAD)
+        self.assertEqual(self.app.tab_mark_state(g.TAB_ROAD), 'done')
 
     def test_basic_tab_mark_needs_person_location_and_service_dates(self):
-        self.assertTrue(self._tab_text(g.TAB_BASIC).endswith('●'))
+        self.assertEqual(self.app.tab_mark_state(g.TAB_BASIC), 'missing')
         self.fill_dates()
         self.app.personnel.insert(0, '王小明')
         self.app._refresh_tab_marks()
-        self.assertTrue(self._tab_text(g.TAB_BASIC).endswith('●'))  # 還缺協勤地點
+        self.assertEqual(self.app.tab_mark_state(g.TAB_BASIC), 'missing')  # 還缺協勤地點
         self.app.location.insert(0, '排雲山莊')
         self.app._refresh_tab_marks()
-        self.assertEqual(self._tab_text(g.TAB_BASIC), g.TAB_BASIC)
+        self.assertEqual(self.app.tab_mark_state(g.TAB_BASIC), 'done')
 
     def test_photo_tab_mark_covers_empty_categories_and_missing_captions(self):
         self._fill_everything()
         self.app._refresh_tab_marks()
-        self.assertEqual(self._tab_text(g.TAB_PHOTOS), g.TAB_PHOTOS)  # 六個分類都有照片、都有說明
+        self.assertEqual(self.app.tab_mark_state(g.TAB_PHOTOS), 'done')  # 六個分類都有照片、都有說明
         cat = g.PHOTO_CATEGORIES[3]
         path = self.app.photo_files[cat][0]
         self.app.photo_captions[cat].pop(path)
         self.app._render_list(cat)
-        self.assertEqual(self._tab_text(g.TAB_PHOTOS), f'{g.TAB_PHOTOS} ●')  # 一張沒說明
+        self.assertEqual(self.app.tab_mark_state(g.TAB_PHOTOS), 'missing')  # 一張沒說明
         self.app.photo_captions[cat][path] = '補上'
         self.app._render_list(cat)
-        self.assertEqual(self._tab_text(g.TAB_PHOTOS), g.TAB_PHOTOS)
+        self.assertEqual(self.app.tab_mark_state(g.TAB_PHOTOS), 'done')
         self.app.clear_photos(g.PHOTO_CATEGORIES[5], self.app.listboxes[g.PHOTO_CATEGORIES[5]])
-        self.assertEqual(self._tab_text(g.TAB_PHOTOS), f'{g.TAB_PHOTOS} ●')  # 有分類沒加入照片
+        self.assertEqual(self.app.tab_mark_state(g.TAB_PHOTOS), 'missing')  # 有分類沒加入照片
 
     def test_marks_follow_clear_and_draft_load(self):
         self._fill_everything()
         self.app._refresh_tab_marks()
         draft = os.path.join(self.tmp.name, 'd.json')
         self._save_draft_to(draft)
-        self.assertTrue(all(self._tab_text(t) == t for t in self._all_main_titles()))
+        self.assertTrue(all(self.app.tab_mark_state(t) == 'done' for t in self._all_main_titles()))
         with mock.patch.object(messagebox, 'askyesno', lambda *a, **k: True):
             self.app.clear_all()
-        self.assertTrue(all(self._tab_text(t) == f'{t} ●' for t in self._all_main_titles()))
+        self.assertTrue(all(self.app.tab_mark_state(t) == 'missing' for t in self._all_main_titles()))
         self._load_draft_from(draft)
-        self.assertTrue(all(self._tab_text(t) == t for t in self._all_main_titles()))
+        self.assertTrue(all(self.app.tab_mark_state(t) == 'done' for t in self._all_main_titles()))
 
     def test_sub_tab_marks_and_category_headers(self):
         cat, other = g.PHOTO_CATEGORIES[0], g.PHOTO_CATEGORIES[1]
         short = g.PHOTO_SHORT_NAMES[cat]
-        sub = lambda c: self.app.photo_notebook.tab(self.app.photo_pages[c], 'text')
         self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（尚未加入照片）')
-        self.assertEqual(sub(cat), f'{short}  ●')
+        self.assertEqual(self.app.photo_tab_mark_state(cat), 'missing')
         _, table, (a, b, c) = self._photos()
         self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，3 張未填說明）')
         self.app.photo_captions[cat][a] = '一'
         self.app._render_list(cat)
         self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，2 張未填說明）')
-        self.assertEqual(sub(cat), f'{short}  ●')
+        self.assertEqual(self.app.photo_tab_mark_state(cat), 'missing')
         self.app.photo_captions[cat][b] = '二'
         self.app.photo_captions[cat][c] = '三'
         self.app._render_list(cat)
         self.assertEqual(self.app.category_labels[cat].cget('text'), f'{cat}（3 張，全部已填 ✓）')
-        self.assertEqual(sub(cat), f'{short}  ✓')
-        self.assertEqual(sub(other), f'{g.PHOTO_SHORT_NAMES[other]}  ●')  # 其他分類不受影響
+        self.assertEqual(self.app.photo_tab_mark_state(cat), 'done')
+        self.assertEqual(self.app.photo_tab_mark_state(other), 'missing')  # 其他分類不受影響
+        self.assertEqual(self.app.photo_notebook.tab(self.app.photo_pages[cat], 'text'), short)   # 小分頁文字只剩名稱，標記在圖上
+
+    def test_default_theme_marks_are_small_images_to_the_right_of_the_title(self):
+        nb = self.app.notebook
+        for title in self._all_main_titles():
+            tab = self.app._tab_by_title(title)
+            self.assertEqual(nb.tab(tab, 'text'), title)                                      # 文字沒有符號，標記在圖上
+            self.assertTrue(str(nb.tab(tab, 'image')), title)
+            self.assertEqual(str(nb.tab(tab, 'compound')), 'right', title)
+        missing, done = self.app._mark_images['missing'], self.app._mark_images['done']
+        self.assertNotEqual(str(missing), str(done))
+        self.assertIn(str(missing), str(self.app.notebook.tab(self.app._tab_by_title(g.TAB_BASIC), 'image')))
+        self._fill_everything()
+        self.app._refresh_tab_marks()
+        self.assertIn(str(done), str(self.app.notebook.tab(self.app._tab_by_title(g.TAB_BASIC), 'image')))   # 填完換成勾
+
+    def test_mark_colors_per_theme_include_a_colour_blind_safe_pair(self):
+        def rgb(color):
+            return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+        soft, cb, hc = g.THEMES['柔和淺色'], g.THEMES['色弱友善'], g.THEMES['高對比']
+        r_, g_, b_ = rgb(soft['mark_done'])
+        self.assertTrue(g_ > r_ and g_ > b_)                                                   # 柔和淺色：勾是綠色
+        r_, g_, b_ = rgb(soft['mark_missing'])
+        self.assertTrue(r_ > b_ and g_ > b_)                                                   # 圓點是橘黃色
+        r_, g_, b_ = rgb(cb['mark_done'])
+        self.assertTrue(b_ > r_ and b_ > g_)                                                   # 色弱友善：勾改成藍色（不用綠色）
+        r_, g_, b_ = rgb(cb['mark_missing'])
+        self.assertTrue(r_ > b_ and g_ > b_)                                                   # 圓點仍是橘色
+        self.assertNotEqual(cb['mark_done'], soft['mark_done'])
+        self.assertIsNone(hc['mark_missing'])                                                   # 高對比不用彩色圖
+        self.assertIsNone(hc['mark_done'])
+
+    def test_high_contrast_theme_uses_text_symbols_that_follow_the_tab_colour(self):
+        self.app.apply_theme('高對比')
+        self.root.update()
+        self.assertEqual(self.app._mark_images, {})
+        for title in self._all_main_titles():
+            tab = self.app._tab_by_title(title)
+            text = self.app.notebook.tab(tab, 'text')
+            self.assertEqual(text, f'{title} {g.MARK_MISSING}', title)                         # 空白表單：每頁都是 ●
+            self.assertEqual(str(self.app.notebook.tab(tab, 'image')), '')
+        self._fill_everything()
+        self.app._refresh_tab_marks()
+        self.assertEqual(self.app.notebook.tab(self.app._tab_by_title(g.TAB_BASIC), 'text'), f'{g.TAB_BASIC} {g.MARK_DONE}')
+        cat = g.PHOTO_CATEGORIES[0]
+        self.assertEqual(self.app.photo_notebook.tab(self.app.photo_pages[cat], 'text'),
+                         f'{g.PHOTO_SHORT_NAMES[cat]} {g.MARK_DONE}')
+        self.app.apply_theme('色弱友善')                                                        # 換回彩色主題：又變成圖
+        self.root.update()
+        self.assertTrue(self.app._mark_images)
+        self.assertEqual(self.app.notebook.tab(self.app._tab_by_title(g.TAB_BASIC), 'text'), g.TAB_BASIC)
+        self.assertTrue(str(self.app.notebook.tab(self.app._tab_by_title(g.TAB_BASIC), 'image')))
 
     def test_table_rows_show_markers_missing_style_and_captions(self):
         cat, table, (a, b) = self._photos(names=('a.jpg', 'b.jpg'))
@@ -2216,7 +2267,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(g.PHOTO_SHORT_NAMES['環境清理情形'], '環境清理')
         self.assertEqual(g.PHOTO_SHORT_NAMES['遊客宣導與違法情形'], '遊客')
         tabs = [self.app.photo_notebook.tab(t, 'text') for t in self.app.photo_notebook.tabs()]
-        self.assertTrue(any(x.startswith('遊客 ') for x in tabs))
+        self.assertIn('遊客', tabs)                                          # 小分頁文字就是名稱，標記在圖上
         self.assertFalse(any('遊客違法' in x for x in tabs))
         [a, b] = self._make_images(['x.jpg', 'y.jpg'])
         draft = self.app.build_draft()

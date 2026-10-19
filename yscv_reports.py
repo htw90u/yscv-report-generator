@@ -850,9 +850,9 @@ class EcoToiletReportGUI(_FormGUI):
             icon = g.emoji_image(g.REPORT_ICONS['ecotoilet'], pixels)
             if icon is None:
                 continue
-            photo = g.ImageTk.PhotoImage(icon, master=self.root)
-            self._tab_icons.append(photo)
-            notebook.tab(self._tab_frames[name], image=photo, compound=tk.LEFT)
+            self._tab_icons.append(icon)
+            self._tab_leading[name] = icon         # 圖示與標記由 _refresh_tab_marks 併成一張圖設定（分頁只能放一張圖）
+        self._refresh_tab_marks()
 
     def _toilet_tab(self, notebook, prefix, name):
         inner = self.make_scrollable_tab(notebook, name)

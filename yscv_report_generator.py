@@ -31,12 +31,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 import yscv_updates
 
 APP_TITLE = '玉山保育志工回報單產生器'
-VERSION = '1.0'
+VERSION = '1.1'
 ROC_YEAR_OFFSET = 1911  # 民國年 + 1911 = 西元年
 FROZEN = bool(getattr(sys, 'frozen', False))     # 打包成 .exe（PyInstaller）執行時是 True
 # 唯讀資源（範本、字型、圖示）的位置：打包後在 PyInstaller 的內部資料夾（執行時才解開或唯讀），不能寫入
@@ -114,6 +114,7 @@ ENTRY_FIELDS = ['year', 'month', 'day', 'personnel',
 # 主要與危險按鈕都是「淺底深字」，文字與底色的對比度都達到 WCAG AA（4.5:1 以上）。
 THEMES = {
     '柔和淺色': dict(
+        mark_missing='#e8a33d', mark_done='#3f9b6a',          # 分頁上的標記：未填＝橘色小圓點、填完＝綠色勾
         bg='#f6f8fb', border='#b5c0d0', heading_fg='#1e3a8a', field_fg='#111827', text='#0b0f19', muted='#374151',
         tab_idle='#e6ecf4', tab_idle_fg='#475569', tab_hover='#d9e3f1',
         tab_active='#cfe0fb', tab_active_fg='#1e3a8a',
@@ -122,6 +123,7 @@ THEMES = {
         danger='#fde2e2', danger_fg='#991b1b', danger_active='#fbc9c9', danger_border='#e89a9a'),
     # 色弱友善：避開紅綠搭配，改用藍色（主要）與橘色（危險），取自 Okabe-Ito 色盲友善色盤
     '色弱友善': dict(
+        mark_missing='#E69F00', mark_done='#0072B2',          # 色弱友善：橘色圓點、藍色勾（不用綠色，Okabe-Ito 色盤）
         bg='#f7f7f5', border='#a8a29e', heading_fg='#003a5c', field_fg='#0c0a09', text='#0c0a09', muted='#44403c',
         tab_idle='#ececea', tab_idle_fg='#44403c', tab_hover='#e0e0dd',
         tab_active='#cfe6f5', tab_active_fg='#003a5c',
@@ -129,6 +131,7 @@ THEMES = {
         primary='#b8dcf2', primary_fg='#00314d', primary_active='#9fd0ee', primary_border='#0072B2',
         danger='#fbdcc0', danger_fg='#6b2d00', danger_active='#f6c79d', danger_border='#D55E00'),
     '高對比': dict(
+        mark_missing=None, mark_done=None,                    # 高對比：不用彩色圖，改用跟著分頁文字黑／白走的 ● ✓ 符號
         bg='#ffffff', border='#000000', heading_fg='#000000', field_fg='#000000', text='#000000', muted='#000000',
         tab_idle='#ffffff', tab_idle_fg='#000000', tab_hover='#e5e5e5',
         tab_active='#000000', tab_active_fg='#ffffff',
@@ -1627,6 +1630,25 @@ def load_font_name(settings_path):
     return name if isinstance(name, str) and name in FONT_CHOICES else DEFAULT_FONT_NAME     # 設定檔可能被亂改成清單等
 
 
+TAB_MARK_PX = 14        # 分頁上標記圖的大小（96 dpi 時的像素）
+
+
+def make_mark_image(state, color, pixels):
+    """分頁標記圖：missing＝橘色（依主題）小圓點、done＝打勾。用 4 倍大小畫再縮小，邊緣才平滑。"""
+    scale = 4
+    size = pixels * scale
+    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    if state == 'missing':
+        radius = size * 0.26
+        draw.ellipse((size / 2 - radius, size / 2 - radius, size / 2 + radius, size / 2 + radius), fill=color)
+    else:
+        width = int(size * 0.15)
+        draw.line((size * .18, size * .55, size * .42, size * .78), fill=color, width=width)
+        draw.line((size * .42, size * .78, size * .82, size * .25), fill=color, width=width)
+    return image.resize((pixels, pixels), Image.Resampling.LANCZOS)
+
+
 def pick_font_family(root, choice=None):
     """依選擇（FONT_CHOICES 的顯示名稱，沒給就用預設）挑字型家族；選的字型找不到就依序退回另一個字型、Arial。"""
     load_private_fonts()
@@ -1723,6 +1745,10 @@ class ReportGeneratorGUI:
         scale_gui_fonts(root, GUI_FONT_DELTA, self.font_family, GUI_FONT_WEIGHT)
         self.theme_name = self._load_theme_setting()
         self.palette = THEMES[self.theme_name]
+        self._tab_leading = {}         # 分頁標題 -> 標籤前面本來就有的圖示（PIL 圖，例如生態廁所的廁所圖示）
+        self._tab_states = {}
+        self._photo_tab_states = {}
+        self._build_mark_images()
         self._setup_style()
         self._style_dialog_default_button()
         self.autosave_path = autosave_path or self.DEFAULT_AUTOSAVE_PATH
@@ -2001,6 +2027,7 @@ class ReportGeneratorGUI:
             return
         self.theme_name = name
         self.palette = THEMES[name]
+        self._build_mark_images()
         self._setup_style()
         self._style_dialog_default_button()
         self._recolor(self.root)
@@ -2488,7 +2515,7 @@ class ReportGeneratorGUI:
             refit()
 
     def _update_marks(self):
-        """分類標題帶張數、小分頁與「服勤照片」分頁標 ● 或 ✓、跳到下一張的按鈕帶剩餘數量。"""
+        """分類標題帶張數、小分頁與「服勤照片」分頁標橘色小圓點或勾、跳到下一張的按鈕帶剩餘數量。"""
         for category, label in self.category_labels.items():
             total = len(self.photo_files[category])
             missing = self.missing_caption_count(category)
@@ -2503,8 +2530,10 @@ class ReportGeneratorGUI:
                 button.config(text=f"跳到下一張未填說明（{missing}）(N)", state=tk.NORMAL)
             else:
                 button.config(text=f"全部都已填寫 {MARK_DONE}" if total else "尚無照片", state=tk.DISABLED)
-            mark = MARK_MISSING if self._category_needs_attention(category) else MARK_DONE
-            self.photo_notebook.tab(self.photo_pages[category], text=f"{self.PHOTO_SHORT_NAMES[category]}  {mark}")
+            state = 'missing' if self._category_needs_attention(category) else 'done'
+            self._photo_tab_states[category] = state
+            self.photo_notebook.tab(self.photo_pages[category],
+                                    **self._tab_mark_options(self.PHOTO_SHORT_NAMES[category], state))
         self._refresh_tab_marks()
         self._refit_scroll_tabs()
 
@@ -2520,13 +2549,57 @@ class ReportGeneratorGUI:
             blank.add(self.PHOTOS_TAB)
         return blank
 
+    def _build_mark_images(self):
+        """依目前主題準備分頁上的標記圖；高對比主題沒有指定顏色，就不用圖（改用跟著文字顏色走的 ● ✓ 符號）。"""
+        palette = self.palette
+        self._mark_pil, self._mark_images, self._mark_photo_cache = {}, {}, {}
+        if not palette.get('mark_missing'):
+            return
+        pixels = round(self.root.winfo_fpixels('1i') / 96 * TAB_MARK_PX)
+        for state, key in (('missing', 'mark_missing'), ('done', 'mark_done')):
+            self._mark_pil[state] = make_mark_image(state, palette[key], pixels)
+            self._mark_images[state] = ImageTk.PhotoImage(self._mark_pil[state], master=self.root)
+
+    def _tab_mark_options(self, title, state, leading=None):
+        """分頁（含照片的小分頁）要設定的文字與圖片：state 是 'missing'（還有沒填）或 'done'（填完了）。
+        有彩色標記圖的主題：文字右邊放橘色小圓點或勾；標籤前面本來就有圖示（leading，PIL 圖）時，
+        因為分頁只能放一張圖，就把圖示與標記併成一張放在文字左邊。高對比主題改用 ● ✓ 文字符號。"""
+        if self._mark_images:
+            if leading is None:
+                return {'text': title, 'image': self._mark_images[state], 'compound': tk.RIGHT}
+            key = (id(leading), state)
+            if key not in self._mark_photo_cache:
+                mark, gap = self._mark_pil[state], max(2, round(leading.width * 0.15))
+                combined = Image.new('RGBA', (leading.width + gap + mark.width, max(leading.height, mark.height)), (0, 0, 0, 0))
+                combined.alpha_composite(leading.convert('RGBA'), (0, (combined.height - leading.height) // 2))
+                combined.alpha_composite(mark, (leading.width + gap, (combined.height - mark.height) // 2))
+                self._mark_photo_cache[key] = ImageTk.PhotoImage(combined, master=self.root)
+            return {'text': title, 'image': self._mark_photo_cache[key], 'compound': tk.LEFT}
+        symbol = MARK_DONE if state == 'done' else MARK_MISSING
+        options = {'text': f"{title} {symbol}", 'image': '', 'compound': tk.LEFT}
+        if leading is not None:
+            key = (id(leading), None)
+            if key not in self._mark_photo_cache:
+                self._mark_photo_cache[key] = ImageTk.PhotoImage(leading, master=self.root)
+            options['image'] = self._mark_photo_cache[key]
+        return options
+
+    def tab_mark_state(self, title):
+        """分頁目前的標記：'missing'（還有欄位沒填）或 'done'（填完了）。"""
+        return self._tab_states.get(title)
+
+    def photo_tab_mark_state(self, category):
+        return self._photo_tab_states.get(category)
+
     def _refresh_tab_marks(self):
-        """有沒填的欄位，分頁名稱後面就加 ●（不顯示數量）；填完就恢復原本名稱。"""
+        """有沒填的欄位的分頁標橘色小圓點，填完的分頁打勾（顏色依主題；高對比用 ● ✓ 符號）。"""
         if not hasattr(self, 'notebook'):
             return
         blank = self._tabs_with_blanks()
         for title, frame in self._tab_frames.items():
-            self.notebook.tab(frame, text=f"{title} {MARK_MISSING}" if title in blank else title)
+            state = 'missing' if title in blank else 'done'
+            self._tab_states[title] = state
+            self.notebook.tab(frame, **self._tab_mark_options(title, state, self._tab_leading.get(title)))
 
     def _watch(self, widget):
         """欄位內容一改變就更新分頁上的 ●。"""
